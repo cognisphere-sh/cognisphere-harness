@@ -1,0 +1,10 @@
+# Python dependencies for this agent. The runner auto-activates
+# `<agentDir>/.venv` at spawn time, so anything pip-installed here is on PATH
+# for the agent's bash invocations.
+#
+# Add more deps as needed; the agent itself can edit this file (e.g. via
+# the `edit` tool) and re-run `bash bootstrap/bootstrap.sh` to pick them up.
+
+# File-to-markdown converter referenced by the harness preamble (pdf, docx,
+# pptx, xlsx, audio, etc.). The [all] extra pulls in optional backends.
+markitdown[all]==0.1.5

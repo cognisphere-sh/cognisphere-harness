@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# scheduler-cli — read/write plugins/scheduler/state/schedules.json
+#
+# Subcommands: add, list, remove, pause, resume
+#
+# State writes are atomic (jq | mv). The plugin watches the file and reloads
+# within a second.
+set -euo pipefail
+
+state="plugins/scheduler/state/schedules.json"
+[ -f "$state" ] || echo '{"schedules":[]}' > "$state"
+
+cmd="${1:-}"; shift || true
+
+write() {
+  local body="$1"
+  local tmp
+  tmp="$(mktemp "${state}.XXXXXX")"
+  printf '%s' "$body" > "$tmp"
+  mv -f "$tmp" "$state"
+}
+
+case "$cmd" in
+  add)
+    name=""; cron=""; text=""; tid=""; chan=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --cron) cron="$2"; shift 2 ;;
+        --text) text="$2"; shift 2 ;;
+        --thread-id) tid="$2"; shift 2 ;;
+        --channel) chan="$2"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$name" ] && [ -n "$cron" ] && [ -n "$text" ] && [ -n "$tid" ] || {
+      echo "usage: scheduler-cli add --name N --cron C --text T --thread-id ID [--channel CH]" >&2
+      exit 2
+    }
+    new="$(jq -nc --arg n "$name" --arg c "$cron" --arg t "$text" --arg tid "$tid" --arg ch "$chan" \
+      '{name:$n,cron:$c,text:$t,threadId:$tid} + (if $ch=="" then {} else {channelId:$ch} end)')"
+    body="$(jq -c --argjson new "$new" \
+      '.schedules |= ((map(select(.name != $new.name))) + [$new])' "$state")"
+    write "$body"
+    printf '%s\n' "$new"
+    ;;
+  list)
+    jq . "$state"
+    ;;
+  remove)
+    name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$name" ] || { echo "usage: scheduler-cli remove --name N" >&2; exit 2; }
+    body="$(jq -c --arg n "$name" '.schedules |= map(select(.name != $n))' "$state")"
+    write "$body"
+    echo "{\"removed\":\"$name\"}"
+    ;;
+  pause|resume)
+    name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$name" ] || { echo "usage: scheduler-cli $cmd --name N" >&2; exit 2; }
+    paused="true"
+    [ "$cmd" = "resume" ] && paused="false"
+    body="$(jq -c --arg n "$name" --argjson p "$paused" \
+      '.schedules |= map(if .name == $n then .paused = $p else . end)' "$state")"
+    write "$body"
+    echo "{\"$cmd\":\"$name\"}"
+    ;;
+  *)
+    echo "usage: scheduler-cli {add|list|remove|pause|resume} ..." >&2
+    exit 2
+    ;;
+esac
