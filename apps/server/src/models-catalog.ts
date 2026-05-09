@@ -384,7 +384,7 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     credentials: [
       {
         key: "serviceAccountKey",
-        // Special-cased in agent-manager.resolveProviderEnv: written
+        // Special-cased in agent-manager.resolveAndValidateProvider: written
         // to <agentDir>/.vertex-sa.json (0600), then GOOGLE_APPLICATION_CREDENTIALS
         // is set to that path on the spawned pi child.
         envVar: "GOOGLE_APPLICATION_CREDENTIALS",

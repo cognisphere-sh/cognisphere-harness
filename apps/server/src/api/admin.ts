@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { AgentManager } from "../agent-manager.js";
+import { getAdminPlugin, type AgentManager } from "../agent-manager.js";
 
 /**
  * /admin/<agentId>/{send,abort}
@@ -26,13 +26,13 @@ export function adminRouter(am: AgentManager): Hono {
     if (typeof body.text !== "string" || !body.text) {
       return c.json({ error: "missing text" }, 400);
     }
-    const admin = inst.adminPlugin;
+    const admin = getAdminPlugin(inst);
     if (!admin) {
-      const reason = inst.installedPluginIds.includes("admin")
+      const installed = inst.plugins.has("admin");
+      const reason = installed
         ? `admin plugin not running (agent state=${inst.state})`
         : "admin plugin not installed on this agent";
-      const status = inst.installedPluginIds.includes("admin") ? 503 : 500;
-      return c.json({ error: reason }, status);
+      return c.json({ error: reason }, installed ? 503 : 500);
     }
     admin.deliver({
       text: body.text,

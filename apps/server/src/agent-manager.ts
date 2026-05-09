@@ -21,7 +21,6 @@ import type {
 } from "./types.js";
 
 export interface PluginEntry {
-  pluginId: string;
   state: PluginState;
   /** Live instance — non-null only when state === "running". */
   instance: Plugin | null;
@@ -45,14 +44,10 @@ export interface AgentInstance {
   state: AgentState;
   error: string | null;
   changedAt: number;
-  /** One entry per plugin id present under `<agentDir>/plugins/`. State on
-   *  the entry tells whether it's actually running. */
+  /** One entry per plugin dir found under `<agentDir>/plugins/` at the last
+   *  (re)start. Refreshed on every start so newly-added or removed dirs are
+   *  picked up. State on the entry tells whether it's actually running. */
   plugins: Map<string, PluginEntry>;
-  /** Every plugin directory found under `<agentDir>/plugins/`. Refreshed on
-   *  each (re)start so newly-added or removed dirs are picked up. */
-  installedPluginIds: string[];
-  /** Convenience reference to the admin plugin's `deliver()` if running. */
-  adminPlugin: import("../plugins/admin/index.js").default | null;
 }
 
 export type LifecycleErrorCode = "not_found" | "conflict";
@@ -137,20 +132,15 @@ export class AgentManager {
 
   list(): AgentSummary[] {
     return [...this.agents.values()].map((a) => {
-      const runningPlugins: string[] = [];
-      const failedPlugins: string[] = [];
-      for (const e of a.plugins.values()) {
-        if (e.state === "running") runningPlugins.push(e.pluginId);
-        else if (e.state === "failed") failedPlugins.push(e.pluginId);
-      }
+      const { running, failed } = partitionPluginsByState(a.plugins);
       return {
         id: a.id,
         name: a.agentJson?.name ?? a.id,
-        installedPlugins: a.installedPluginIds,
+        installedPlugins: [...a.plugins.keys()],
         state: a.state,
         error: a.error,
-        runningPlugins,
-        failedPlugins,
+        runningPlugins: running,
+        failedPlugins: failed,
       };
     });
   }
@@ -226,7 +216,7 @@ export class AgentManager {
    * start fails), and run startAgent. Always inserts into `this.agents`
    * — failed agents stay listed so the UI can show their error.
    */
-  private async loadAgent(id: string): Promise<AgentInstance> {
+  private async loadAgent(id: string): Promise<void> {
     const inst: AgentInstance = {
       id,
       agentJson: null,
@@ -236,8 +226,6 @@ export class AgentManager {
       error: null,
       changedAt: Date.now(),
       plugins: new Map(),
-      installedPluginIds: [],
-      adminPlugin: null,
     };
     this.agents.set(id, inst);
     try {
@@ -247,19 +235,18 @@ export class AgentManager {
       // but a transition-in-progress race could surface here. Log and move on.
       this.log.error({ err, id }, "loadAgent failed");
     }
-    return inst;
   }
 
   // ── start / stop core ──────────────────────────────────────────────
 
   private async startAgent(inst: AgentInstance): Promise<AgentInstance> {
     const dir = agentDir(this.cfg, inst.id);
-    inst.installedPluginIds = scanPluginDirs(dir);
+    const installedPluginIds = scanPluginDirs(dir);
     inst.plugins.clear();
-    inst.adminPlugin = null;
 
-    // 1. Parse agent.json + agent-secret validation + model gating.
+    // 1. Parse agent.json + agent-secret validation + provider gating.
     let agentJson: AgentJson;
+    let providerEnv: Record<string, string> = {};
     try {
       const raw = readFileSync(join(dir, "agent.json"), "utf8");
       agentJson = JSON.parse(raw) as AgentJson;
@@ -272,12 +259,17 @@ export class AgentManager {
           `agent ${inst.id}`,
         );
       }
-      checkModelEnabled(this.models, agentJson, inst.id);
+      providerEnv = resolveAndValidateProvider(
+        this.models,
+        agentJson,
+        dir,
+        inst.id,
+        this.log,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, agent: inst.id }, "agent spec parse/validate failed");
       inst.agentJson = null;
-      inst.runner = null;
       inst.state = "failed";
       inst.error = message;
       inst.changedAt = Date.now();
@@ -295,7 +287,7 @@ export class AgentManager {
     //    Per-agent secrets win over the global provider key on collision —
     //    matches the broader secrets.json > models.json precedence.
     const envSecrets: Record<string, string> = {
-      ...resolveProviderEnv(this.models, agentJson, dir, this.log),
+      ...providerEnv,
       ...this.secrets.resolveAll(inst.id),
     };
     inst.runner = new AgentRunner({
@@ -311,7 +303,7 @@ export class AgentManager {
     });
 
     // 4. Start each installed plugin; per-plugin failures don't sink the agent.
-    for (const pid of inst.installedPluginIds) {
+    for (const pid of installedPluginIds) {
       try {
         await this.startPluginInstance(inst, pid);
       } catch (err) {
@@ -321,7 +313,6 @@ export class AgentManager {
           "failed to start plugin",
         );
         inst.plugins.set(pid, {
-          pluginId: pid,
           state: "failed",
           instance: null,
           config: null,
@@ -338,12 +329,7 @@ export class AgentManager {
     inst.error = null;
     inst.changedAt = Date.now();
 
-    const running: string[] = [];
-    const failed: string[] = [];
-    for (const e of inst.plugins.values()) {
-      if (e.state === "running") running.push(e.pluginId);
-      else if (e.state === "failed") failed.push(e.pluginId);
-    }
+    const { running, failed } = partitionPluginsByState(inst.plugins);
     this.log.info(
       { agentId: inst.id, runningPlugins: running, failedPlugins: failed },
       "agent started",
@@ -352,7 +338,7 @@ export class AgentManager {
   }
 
   private async stopAgent(inst: AgentInstance): Promise<AgentInstance> {
-    for (const entry of inst.plugins.values()) {
+    for (const [pid, entry] of inst.plugins) {
       if (entry.state !== "running" || !entry.instance) continue;
       const instance = entry.instance;
       try {
@@ -367,7 +353,7 @@ export class AgentManager {
         ]);
       } catch (err) {
         this.log.warn(
-          { err, agent: inst.id, plugin: entry.pluginId },
+          { err, agent: inst.id, plugin: pid },
           "plugin stop failed",
         );
       }
@@ -388,7 +374,6 @@ export class AgentManager {
 
     cleanupProviderArtifacts(agentDir(this.cfg, inst.id), this.log);
 
-    inst.adminPlugin = null;
     inst.state = "stopped";
     inst.error = null;
     inst.changedAt = Date.now();
@@ -426,7 +411,7 @@ export class AgentManager {
       ? (JSON.parse(readFileSync(notifPath, "utf8")) as { enabled: string[] })
       : { enabled: entry.manifest.notifications.map((n) => n.name) };
 
-    const secretKeys = manifestSecretKeys(entry.manifest);
+    const secretKeys = Object.keys(entry.manifest.secretsSchema.properties ?? {});
     const resolvedSecrets = this.secrets.resolve(inst.id, pluginId, secretKeys);
     checkRequiredSecrets(
       entry.manifest.secretsSchema,
@@ -443,7 +428,6 @@ export class AgentManager {
     mkdirSync(inboxDir, { recursive: true });
 
     const pluginEntry: PluginEntry = {
-      pluginId,
       state: "running",
       instance: pluginInstance,
       config,
@@ -480,11 +464,6 @@ export class AgentManager {
 
     await pluginInstance.start(ctx);
     inst.plugins.set(pluginId, pluginEntry);
-
-    if (pluginId === "admin") {
-      inst.adminPlugin =
-        pluginInstance as import("../plugins/admin/index.js").default;
-    }
   }
 
   // ── helpers ────────────────────────────────────────────────────────
@@ -520,30 +499,30 @@ function scanPluginDirs(dir: string): string[] {
     .map((d) => d.name);
 }
 
-function manifestSecretKeys(m: {
-  secretsSchema: { properties?: object };
-}): string[] {
-  return Object.keys(m.secretsSchema.properties ?? {});
-}
-
 /** Filename under <agentDir> where Vertex's service-account JSON is materialized. */
 const VERTEX_SA_FILE = ".vertex-sa.json";
 
 /**
- * Walk the catalog entry's credentials[] for the agent's provider and
- * return env vars pi should see. Special case: google-vertex's
- * `serviceAccountKey` field is paste-blob JSON — we write it to
- * <agentDir>/.vertex-sa.json (0600) and point GOOGLE_APPLICATION_CREDENTIALS
- * at the path. Cleaned up by `cleanupProviderArtifacts()` on agent stop.
+ * Validate the agent's chosen provider/model against operator settings and
+ * return the env vars pi should see. Throws if the provider isn't configured,
+ * the model isn't enabled, or required credentials are missing — but only
+ * when a model id is specified; an agent.json with provider but no model
+ * passes through silently (preserves the pre-merge permissive behavior).
+ *
+ * Special case: google-vertex's `serviceAccountKey` field is paste-blob
+ * JSON — we write it to <agentDir>/.vertex-sa.json (0600) and point
+ * GOOGLE_APPLICATION_CREDENTIALS at the path. Cleaned up by
+ * `cleanupProviderArtifacts()` on agent stop.
  *
  * Empty map if the provider has no catalog entry — pi falls back to
  * ambient env in that case (the operator can still set vars on the
  * server host for out-of-catalog setups).
  */
-function resolveProviderEnv(
+function resolveAndValidateProvider(
   models: ModelsStore,
   agentJson: AgentJson,
   agentDir: string,
+  agentId: string,
   log: Logger,
 ): Record<string, string> {
   const providerId = agentJson.model?.provider;
@@ -551,6 +530,33 @@ function resolveProviderEnv(
   const entry = findProviderInCatalog(providerId);
   if (!entry) return {};
   const cfg = models.getProvider(providerId);
+  const modelId = agentJson.model?.id;
+
+  if (modelId) {
+    if (!cfg) {
+      throw new Error(
+        `agent ${agentId}: provider ${providerId} is not configured in Models settings`,
+      );
+    }
+    if (cfg.enabledModels.length === 0 || !cfg.enabledModels.includes(modelId)) {
+      throw new Error(
+        `agent ${agentId}: model ${providerId}/${modelId} is not enabled in Models settings`,
+      );
+    }
+    const missing = entry.credentials
+      .filter((f) => f.required)
+      .filter((f) => {
+        const v = cfg.credentials[f.key];
+        return typeof v !== "string" || v.length === 0;
+      })
+      .map((f) => f.label);
+    if (missing.length > 0) {
+      throw new Error(
+        `agent ${agentId}: provider ${providerId} is missing required credentials: ${missing.join(", ")} (set them in Models settings)`,
+      );
+    }
+  }
+
   if (!cfg) return {};
 
   const env: Record<string, string> = {};
@@ -588,46 +594,25 @@ function cleanupProviderArtifacts(agentDir: string, log: Logger): void {
   }
 }
 
-/**
- * Enforce the operator-curated allowlist: an agent may only use a model
- * that's been enabled in the Models settings page, and every required
- * credential field for the chosen provider must be populated.
- *
- * Skipped silently if the provider has no catalog entry — that lets
- * out-of-catalog providers keep working via host env vars.
- */
-function checkModelEnabled(
-  models: ModelsStore,
-  agentJson: AgentJson,
-  agentId: string,
-): void {
-  const providerId = agentJson.model?.provider;
-  const modelId = agentJson.model?.id;
-  if (!providerId || !modelId) return;
-  const entry = findProviderInCatalog(providerId);
-  if (!entry) return;
-  const cfg = models.getProvider(providerId);
+function partitionPluginsByState(plugins: Map<string, PluginEntry>): {
+  running: string[];
+  failed: string[];
+} {
+  const running: string[] = [];
+  const failed: string[] = [];
+  for (const [pid, e] of plugins) {
+    if (e.state === "running") running.push(pid);
+    else if (e.state === "failed") failed.push(pid);
+  }
+  return { running, failed };
+}
 
-  if (!cfg) {
-    throw new Error(
-      `agent ${agentId}: provider ${providerId} is not configured in Models settings`,
-    );
-  }
-  if (cfg.enabledModels.length === 0 || !cfg.enabledModels.includes(modelId)) {
-    throw new Error(
-      `agent ${agentId}: model ${providerId}/${modelId} is not enabled in Models settings`,
-    );
-  }
-  const missing = entry.credentials
-    .filter((f) => f.required)
-    .filter((f) => {
-      const v = cfg.credentials[f.key];
-      return typeof v !== "string" || v.length === 0;
-    })
-    .map((f) => f.label);
-  if (missing.length > 0) {
-    throw new Error(
-      `agent ${agentId}: provider ${providerId} is missing required credentials: ${missing.join(", ")} (set them in Models settings)`,
-    );
-  }
+/** Typed lookup for the admin plugin's `deliver()`. Null unless the plugin
+ *  is installed and currently running. */
+export function getAdminPlugin(
+  inst: AgentInstance,
+): import("../plugins/admin/index.js").default | null {
+  const e = inst.plugins.get("admin");
+  if (e?.state !== "running" || !e.instance) return null;
+  return e.instance as import("../plugins/admin/index.js").default;
 }

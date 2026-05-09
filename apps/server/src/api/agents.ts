@@ -44,7 +44,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       id: inst.id,
       name: inst.agentJson?.name ?? inst.id,
       agentJson: inst.agentJson,
-      installedPlugins: inst.installedPluginIds,
+      installedPlugins: [...inst.plugins.keys()],
       state: inst.state,
       error: inst.error,
       changedAt: inst.changedAt,
@@ -57,7 +57,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     if (!inst) return c.json({ error: "unknown agent" }, 404);
     // Iterate every installed plugin dir so the Settings UI can surface
     // configuration for plugins that failed to start due to missing secrets.
-    const out = inst.installedPluginIds.map((pid) => {
+    const out = [...inst.plugins.keys()].map((pid) => {
       const entry = inst.plugins.get(pid);
       const manifest = am.getPluginManifest(pid) ?? null;
       const config =
@@ -146,7 +146,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     const pid = c.req.param("pluginId");
     const inst = am.get(id);
     if (!inst) return c.json({ error: "unknown agent" }, 404);
-    if (!inst.installedPluginIds.includes(pid)) {
+    if (!inst.plugins.has(pid)) {
       return c.json({ error: "plugin not installed" }, 404);
     }
     const body = (await c.req.json().catch(() => null)) as {
@@ -174,7 +174,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     const pid = c.req.param("pluginId");
     const inst = am.get(id);
     if (!inst) return c.json({ error: "unknown agent" }, 404);
-    if (!inst.installedPluginIds.includes(pid)) {
+    if (!inst.plugins.has(pid)) {
       return c.json({ error: "plugin not installed" }, 404);
     }
     const body = (await c.req.json().catch(() => null)) as {

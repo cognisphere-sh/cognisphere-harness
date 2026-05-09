@@ -145,11 +145,11 @@ export interface BatchMessage {
  *
  * `key` is the storage/form key. `secret: true` masks the value in API
  * responses and uses a password-style input. `required: true` makes
- * `checkModelEnabled()` refuse to start the agent if the field is
- * empty. `multiline: true` is for paste-blobs like Vertex's service
+ * `resolveAndValidateProvider()` refuse to start the agent if the field
+ * is empty. `multiline: true` is for paste-blobs like Vertex's service
  * account JSON (rendered as a textarea); the field is still injected
  * via env, except Vertex's service-account-file path which the runtime
- * materializes to disk — see `agent-manager.ts:resolveProviderEnv`.
+ * materializes to disk — see `agent-manager.ts:resolveAndValidateProvider`.
  */
 export interface CredField {
   key: string;

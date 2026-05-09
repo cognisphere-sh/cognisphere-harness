@@ -62,11 +62,10 @@ export function secretsRouter(am: AgentManager, cfg: ServerConfig, log: Logger):
     }
 
     // Schemas: one map of the same shape. Agent-level under AGENT_BUCKET,
-    // plugin-level under the plugin id. We iterate `installedPluginIds`
-    // (every plugin dir found at load time) rather than `inst.plugins`
-    // (only successfully-started ones) so a plugin that failed validation
-    // due to missing secrets still surfaces its schema — otherwise the
-    // operator has nothing to fill in to fix it.
+    // plugin-level under the plugin id. `inst.plugins` includes both
+    // successfully-started and failed-validation entries, so plugins that
+    // failed due to missing secrets still surface their schema — otherwise
+    // the operator would have nothing to fill in to fix it.
     const schemas: Record<string, Record<string, unknown>> = {};
     for (const a of am.list()) {
       const inst = am.get(a.id);
@@ -75,7 +74,7 @@ export function secretsRouter(am: AgentManager, cfg: ServerConfig, log: Logger):
       if (inst.agentJson?.secretsSchema) {
         perBucket[AGENT_BUCKET] = inst.agentJson.secretsSchema;
       }
-      for (const pid of inst.installedPluginIds) {
+      for (const pid of inst.plugins.keys()) {
         const manifest = am.getPluginManifest(pid);
         if (manifest) perBucket[pid] = manifest.secretsSchema;
       }

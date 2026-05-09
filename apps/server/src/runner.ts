@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDb } from "./queue.js";
 import { PiRpcClient } from "./rpc.js";
@@ -86,7 +86,6 @@ interface ActiveBatch {
   phase: "spawning" | "streaming" | "completing" | "exited";
   cancelled: boolean;
   rpc: PiRpcClient | null;
-  child: ChildProcess | null;
 }
 
 export interface RunnerOpts {
@@ -189,12 +188,12 @@ export class AgentRunner extends EventEmitter {
     });
 
     const active = this.active.get(threadId);
-    const canSteer =
-      active !== undefined &&
+    if (
+      active &&
       active.phase === "streaming" &&
       !payload.doNotSteer &&
-      active.rpc !== null;
-    if (canSteer && active) {
+      active.rpc
+    ) {
       const msg: BatchMessage = {
         id,
         enqueuedAt: Date.now(),
@@ -208,7 +207,7 @@ export class AgentRunner extends EventEmitter {
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
       active.steerIds.add(id);
       try {
-        active.rpc!.sendSteer(steerText);
+        active.rpc.sendSteer(steerText);
         this.opts.log.debug(
           { threadId, id, plugin: payload.pluginId },
           "steer dispatched",
@@ -253,7 +252,6 @@ export class AgentRunner extends EventEmitter {
         phase: "spawning",
         cancelled: false,
         rpc: null,
-        child: null,
       };
       this.active.set(threadId, active);
       try {
@@ -296,10 +294,8 @@ export class AgentRunner extends EventEmitter {
 
     let rpc: PiRpcClient | null = null;
     try {
-      const { child, rpc: client } = this.spawnPi(threadId, sessionDir, log);
-      rpc = client;
-      active.rpc = client;
-      active.child = child;
+      rpc = this.spawnPi(threadId, sessionDir, log);
+      active.rpc = rpc;
 
       const promptText = batch
         .map((m) => `${buildHarnessMetadata(m, this.opts.timezone)}\n${m.text}`)
@@ -358,7 +354,16 @@ export class AgentRunner extends EventEmitter {
       } else {
         const stderr = rpc?.stderrSnapshot()?.slice(-512);
         const errFull = stderr ? `${msg}\n--stderr--\n${stderr}` : msg;
-        const r = this.opts.db.markBatchFailed(active.ids, errFull, this.maxAttempts);
+        // Steers that were delivered live to this pi process count as a
+        // failed attempt too — otherwise a row that's been steered into N
+        // consecutive failing batches never accrues attempts and never
+        // reaches the DLQ. Setting in_flight=0 is a no-op for them (they
+        // were never marked in_flight=1), but attempts++ matters.
+        const r = this.opts.db.markBatchFailed(
+          [...active.ids, ...active.steerIds],
+          errFull,
+          this.maxAttempts,
+        );
         this.opts.db.appendEvent({
           event: "batch_end",
           status: "failed",
@@ -376,7 +381,7 @@ export class AgentRunner extends EventEmitter {
     threadId: string,
     sessionDir: string,
     log: Logger,
-  ): { child: ChildProcess; rpc: PiRpcClient } {
+  ): PiRpcClient {
     const agentDir = join(
       this.opts.rootDir,
       this.opts.harnessId,
@@ -473,8 +478,7 @@ export class AgentRunner extends EventEmitter {
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const rpc = new PiRpcClient(child, log.child({ rpc: threadId }));
-    return { child, rpc };
+    return new PiRpcClient(child, log.child({ rpc: threadId }));
   }
 
   private computeThreadId(p: NotifyPayload & { pluginId: string }): string {
@@ -529,8 +533,7 @@ function assembleSystemPrompt(agentDir: string, threadId: string): string {
 
 function existsDir(p: string): boolean {
   try {
-    const s = readdirSync(p, { withFileTypes: true });
-    return s.length >= 0;
+    return statSync(p).isDirectory();
   } catch {
     return false;
   }
