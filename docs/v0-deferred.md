@@ -136,21 +136,51 @@ if [ -d "$SEED" ]; then
 fi
 ```
 
-Set secrets by editing `<rootDir>/<harnessId>/secrets.json` (auto-created on
-first boot with a placeholder). Format:
+Set secrets by editing `<rootDir>/<harnessId>/secrets.json` (auto-created
+on first boot with a placeholder). Under each agent, every entry is a
+**bucket**: the reserved bucket id `agent` holds agent-level secrets
+(declared in `agent.json.secretsSchema`), other ids are plugin ids whose
+keys are declared in each plugin's manifest:
 
 ```json
 {
   "dr-renu": {
+    "agent":    { "ELEVENLABS_API_KEY": "sk-...", "ELEVENLABS_VOICE_ID": "v-..." },
     "telegram": { "TELEGRAM_BOT_TOKEN": "123:ABC..." },
     "gmail":    { "GMAIL_OAUTH_TOKEN": "ya29...." }
   }
 }
 ```
 
-Top-level keys starting with `_` are ignored — used for inline docs in the
-auto-created placeholder. Plaintext on disk for v0 (encryption deferred).
-Restart the server after editing for changes to take effect.
+Every bucket flattens into the agent's pi-runtime env on every spawn
+(bare keys, last-writer-wins on collision), so plugin scripts and agent
+CLIs read the same `$ELEVENLABS_API_KEY` / `$TELEGRAM_BOT_TOKEN` from
+env. Top-level keys starting with `_` are ignored — used for inline docs
+in the auto-created placeholder. Plaintext on disk for v0 (encryption
+deferred). Restart the server after editing for changes to take effect.
+
+To declare agent-level secrets, add a `secretsSchema` to `agent.json`:
+
+```json
+{
+  "name": "Dr Renu",
+  "model": { ... },
+  "threadIdStrategy": { ... },
+  "secretsSchema": {
+    "type": "object",
+    "properties": {
+      "ELEVENLABS_API_KEY":   { "type": "string", "description": "TTS/STT key" },
+      "ELEVENLABS_VOICE_ID":  { "type": "string" }
+    }
+  }
+}
+```
+
+Missing secrets in any bucket — `agent` or a plugin id — flow through
+the same `checkRequiredSecrets` boundary: they log an error and the
+affected scope is degraded (the plugin doesn't start; the agent's pi
+child runs with those env vars unset), but the agent itself still loads
+so the operator can fix them via Settings.
 
 **Runtime env exposure.** Each agent's resolved secrets are flattened (bare
 keys, last-writer-wins on collision) and exported into the pi child's env

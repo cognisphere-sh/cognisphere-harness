@@ -5,8 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch apps/server/src/main.ts",
+    "dev:web": "npm --prefix apps/web run dev",
     "start": "tsx apps/server/src/main.ts",
-    "typecheck": "tsc --noEmit"
+    "build:web": "npm --prefix apps/web run build",
+    "install:web": "npm --prefix apps/web install",
+    "typecheck": "tsc --noEmit",
+    "typecheck:web": "npm --prefix apps/web run typecheck"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

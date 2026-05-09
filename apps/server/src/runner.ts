@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDb } from "./queue.js";
 import { PiRpcClient } from "./rpc.js";
@@ -193,7 +193,6 @@ export class AgentRunner extends EventEmitter {
       active !== undefined &&
       active.phase === "streaming" &&
       !payload.doNotSteer &&
-      !payload.isSilent &&
       active.rpc !== null;
     if (canSteer && active) {
       const msg: BatchMessage = {
@@ -204,7 +203,7 @@ export class AgentRunner extends EventEmitter {
         threadId,
         text: payload.text,
         metadata: payload.metadata ?? null,
-        isSilent: false,
+        isSilent: payload.isSilent === true,
       };
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
       active.steerIds.add(id);
@@ -411,17 +410,25 @@ export class AgentRunner extends EventEmitter {
     // `loadExtension`, which expects an entry point at the path itself
     // (`index.ts`/`index.js`/`package.json` for a dir, or a `.ts`/`.js` file).
     // No recursion — so we pass each first-level child of `extensions/` as its
-    // own `--extension`. No coupling to plugin ids — driven by the dir.
+    // own `--extension`. We verify the entry point exists before passing the
+    // path to pi; otherwise pi crashes the whole run on a missing module.
     const extensionsRoot = join(agentDir, "extensions");
     if (existsDir(extensionsRoot)) {
       for (const entry of readdirSync(extensionsRoot, { withFileTypes: true })) {
         if (entry.name.startsWith(".")) continue;
-        const isDir = entry.isDirectory();
-        const isJsTs =
-          entry.isFile() &&
-          (entry.name.endsWith(".ts") || entry.name.endsWith(".js"));
-        if (!isDir && !isJsTs) continue;
-        args.push("--extension", join(extensionsRoot, entry.name));
+        const path = join(extensionsRoot, entry.name);
+        if (entry.isDirectory()) {
+          const hasEntry =
+            existsSync(join(path, "index.ts")) ||
+            existsSync(join(path, "index.js")) ||
+            existsSync(join(path, "package.json"));
+          if (!hasEntry) continue;
+        } else if (entry.isFile()) {
+          if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".js")) continue;
+        } else {
+          continue;
+        }
+        args.push("--extension", path);
       }
     }
 

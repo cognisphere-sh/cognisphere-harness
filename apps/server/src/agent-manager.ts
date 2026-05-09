@@ -7,30 +7,60 @@ import { childLogger } from "./logger.js";
 import type { PluginRegistry } from "./plugin-registry.js";
 import { AgentDb } from "./queue.js";
 import { AgentRunner } from "./runner.js";
-import { SecretsStore } from "./secrets.js";
+import { findProviderInCatalog } from "./models-catalog.js";
+import { ModelsStore } from "./models-store.js";
+import { AGENT_BUCKET, SecretsStore } from "./secrets.js";
 import { checkRequiredSecrets, validateAndDefault } from "./validation.js";
 import type {
   AgentJson,
+  AgentState,
   AgentSummary,
   Plugin,
   PluginInstanceContext,
+  PluginState,
 } from "./types.js";
 
 export interface PluginEntry {
   pluginId: string;
-  instance: Plugin;
-  config: unknown;
+  state: PluginState;
+  /** Live instance — non-null only when state === "running". */
+  instance: Plugin | null;
+  /** Last validated config; preserved across stop so the UI can still show it. */
+  config: unknown | null;
   notifications: { enabled: string[] };
+  /** Last startup error message; non-null when state === "failed". */
+  error: string | null;
+  changedAt: number;
 }
 
 export interface AgentInstance {
   id: string;
-  agentJson: AgentJson;
-  runner: AgentRunner;
-  db: AgentDb;
+  /** Parsed agent.json, or null if the file is missing/invalid (state="failed"). */
+  agentJson: AgentJson | null;
+  /** Constructed only when state === "running"; null otherwise. */
+  runner: AgentRunner | null;
+  /** Opened lazily and kept open across stop/start; closed only on shutdown
+   *  (queue rows must persist across restarts). */
+  db: AgentDb | null;
+  state: AgentState;
+  error: string | null;
+  changedAt: number;
+  /** One entry per plugin id present under `<agentDir>/plugins/`. State on
+   *  the entry tells whether it's actually running. */
   plugins: Map<string, PluginEntry>;
-  /** Convenience reference to the admin plugin's `deliver()` if installed. */
+  /** Every plugin directory found under `<agentDir>/plugins/`. Refreshed on
+   *  each (re)start so newly-added or removed dirs are picked up. */
+  installedPluginIds: string[];
+  /** Convenience reference to the admin plugin's `deliver()` if running. */
   adminPlugin: import("../plugins/admin/index.js").default | null;
+}
+
+export type LifecycleErrorCode = "not_found" | "conflict";
+
+export class LifecycleError extends Error {
+  constructor(message: string, public code: LifecycleErrorCode) {
+    super(message);
+  }
 }
 
 /**
@@ -38,10 +68,19 @@ export interface AgentInstance {
  * agents, installing plugins, editing configs) is deferred to a later phase
  * — see `docs/v0-deferred.md`. v0: agents are created manually on disk; the
  * server picks them up at boot.
+ *
+ * Lifecycle:
+ *   - boot()              → load every agent dir; failed agents stay listed.
+ *   - manualStart(id)     → from "stopped" / "failed" → "running" / "failed".
+ *   - manualStop(id)      → from "running" → "stopped".
+ *   - restartAgent(id)    → stop (if running) → re-read disk → start.
+ *   - shutdown()          → stop everything and close dbs.
  */
 export class AgentManager {
   private agents = new Map<string, AgentInstance>();
+  private transitions = new Map<string, "starting" | "stopping">();
   private readonly secrets: SecretsStore;
+  private readonly models: ModelsStore;
   private readonly log: Logger;
 
   constructor(
@@ -51,6 +90,7 @@ export class AgentManager {
   ) {
     this.log = log ?? childLogger("agent-manager");
     this.secrets = new SecretsStore(join(harnessRoot(cfg), "secrets.json"));
+    this.models = new ModelsStore(join(harnessRoot(cfg), "models.json"));
   }
 
   /**
@@ -71,7 +111,7 @@ export class AgentManager {
     }
     for (const id of ids) {
       try {
-        await this.load(id);
+        await this.loadAgent(id);
       } catch (err) {
         this.log.error({ err, id }, "failed to load agent");
       }
@@ -80,15 +120,13 @@ export class AgentManager {
 
   async shutdown(): Promise<void> {
     for (const inst of this.agents.values()) {
-      for (const e of inst.plugins.values()) {
-        try {
-          await e.instance.stop();
-        } catch (err) {
-          this.log.warn({ err, agent: inst.id, plugin: e.pluginId }, "stop failed");
-        }
+      if (inst.state === "running") {
+        await this.stopAgent(inst).catch((err) =>
+          this.log.warn({ err, agent: inst.id }, "shutdown stop failed"),
+        );
       }
-      await inst.runner.stop();
-      inst.db.close();
+      inst.db?.close();
+      inst.db = null;
     }
     this.agents.clear();
   }
@@ -98,67 +136,270 @@ export class AgentManager {
   }
 
   list(): AgentSummary[] {
-    return [...this.agents.values()].map((a) => ({
-      id: a.id,
-      name: a.agentJson.name,
-      installedPlugins: [...a.plugins.keys()],
-    }));
+    return [...this.agents.values()].map((a) => {
+      const runningPlugins: string[] = [];
+      const failedPlugins: string[] = [];
+      for (const e of a.plugins.values()) {
+        if (e.state === "running") runningPlugins.push(e.pluginId);
+        else if (e.state === "failed") failedPlugins.push(e.pluginId);
+      }
+      return {
+        id: a.id,
+        name: a.agentJson?.name ?? a.id,
+        installedPlugins: a.installedPluginIds,
+        state: a.state,
+        error: a.error,
+        runningPlugins,
+        failedPlugins,
+      };
+    });
   }
 
-  // ── load one agent ─────────────────────────────────────────────────
+  /**
+   * Look up the manifest for an installed plugin id from the registry.
+   * Independent of whether the plugin actually started — used by the
+   * secrets and plugins APIs to surface schemas for plugins that failed
+   * validation so the operator can fix them.
+   */
+  getPluginManifest(
+    pluginId: string,
+  ): import("./types.js").PluginManifest | undefined {
+    return this.registry.get(pluginId)?.manifest;
+  }
 
-  private async load(id: string): Promise<AgentInstance> {
-    const dir = agentDir(this.cfg, id);
-    const agentJson = JSON.parse(
-      readFileSync(join(dir, "agent.json"), "utf8"),
-    ) as AgentJson;
+  // ── public lifecycle ───────────────────────────────────────────────
 
-    mkdirSync(join(dir, "sessions"), { recursive: true });
-    const db = new AgentDb(join(dir, "sessions", ".queue.db"), id);
+  async manualStart(id: string): Promise<AgentInstance> {
+    const inst = this.requireAgent(id);
+    if (inst.state === "running") {
+      throw new LifecycleError("already running", "conflict");
+    }
+    return this.withTransition(id, "starting", () => this.startAgent(inst));
+  }
 
+  async manualStop(id: string): Promise<AgentInstance> {
+    const inst = this.requireAgent(id);
+    if (inst.state !== "running") {
+      throw new LifecycleError(`not running (state=${inst.state})`, "conflict");
+    }
+    return this.withTransition(id, "stopping", () => this.stopAgent(inst));
+  }
+
+  async restartAgent(id: string): Promise<AgentInstance> {
+    const inst = this.requireAgent(id);
+    return this.withTransition(id, "starting", async () => {
+      if (inst.runner || inst.state === "running") {
+        await this.stopAgent(inst);
+      }
+      return this.startAgent(inst);
+    });
+  }
+
+  /**
+   * Apply an out-of-band config/secrets/models edit. Always invalidates
+   * the secrets cache (so the next start re-reads the file). If the
+   * agent is currently running, restart it so the new values reach the
+   * pi runtime immediately. Stopped/failed agents stay as-is — the next
+   * manual start will pick up the changes naturally.
+   *
+   * Restart errors are caught and logged; the agent stays listed with
+   * its updated state/error so the UI can surface the failure. Returns
+   * `null` if the id is unknown (no throw — callers iterate freely).
+   */
+  async reloadAgent(id: string): Promise<AgentInstance | null> {
+    const inst = this.agents.get(id);
+    if (!inst) return null;
+    this.secrets.invalidate();
+    if (inst.state !== "running" && !inst.runner) return inst;
+    try {
+      return await this.restartAgent(id);
+    } catch (err) {
+      this.log.warn({ err, agent: id }, "auto-reload failed");
+      return this.agents.get(id) ?? null;
+    }
+  }
+
+  // ── boot/load helper ───────────────────────────────────────────────
+
+  /**
+   * Build the AgentInstance shell, register it (so it's visible even if
+   * start fails), and run startAgent. Always inserts into `this.agents`
+   * — failed agents stay listed so the UI can show their error.
+   */
+  private async loadAgent(id: string): Promise<AgentInstance> {
     const inst: AgentInstance = {
       id,
-      agentJson,
-      runner: undefined as unknown as AgentRunner,
-      db,
+      agentJson: null,
+      runner: null,
+      db: null,
+      state: "stopped",
+      error: null,
+      changedAt: Date.now(),
       plugins: new Map(),
+      installedPluginIds: [],
       adminPlugin: null,
     };
+    this.agents.set(id, inst);
+    try {
+      await this.withTransition(id, "starting", () => this.startAgent(inst));
+    } catch (err) {
+      // startAgent itself shouldn't throw — it captures errors onto inst —
+      // but a transition-in-progress race could surface here. Log and move on.
+      this.log.error({ err, id }, "loadAgent failed");
+    }
+    return inst;
+  }
 
+  // ── start / stop core ──────────────────────────────────────────────
+
+  private async startAgent(inst: AgentInstance): Promise<AgentInstance> {
+    const dir = agentDir(this.cfg, inst.id);
+    inst.installedPluginIds = scanPluginDirs(dir);
+    inst.plugins.clear();
+    inst.adminPlugin = null;
+
+    // 1. Parse agent.json + agent-secret validation + model gating.
+    let agentJson: AgentJson;
+    try {
+      const raw = readFileSync(join(dir, "agent.json"), "utf8");
+      agentJson = JSON.parse(raw) as AgentJson;
+      if (agentJson.secretsSchema) {
+        const declared = Object.keys(agentJson.secretsSchema.properties ?? {});
+        const resolved = this.secrets.resolve(inst.id, AGENT_BUCKET, declared);
+        checkRequiredSecrets(
+          agentJson.secretsSchema,
+          resolved,
+          `agent ${inst.id}`,
+        );
+      }
+      checkModelEnabled(this.models, agentJson, inst.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ err, agent: inst.id }, "agent spec parse/validate failed");
+      inst.agentJson = null;
+      inst.runner = null;
+      inst.state = "failed";
+      inst.error = message;
+      inst.changedAt = Date.now();
+      return inst;
+    }
+    inst.agentJson = agentJson;
+
+    // 2. Open the queue db lazily, reuse across restarts.
+    mkdirSync(join(dir, "sessions"), { recursive: true });
+    if (!inst.db) {
+      inst.db = new AgentDb(join(dir, "sessions", ".queue.db"), inst.id);
+    }
+
+    // 3. Construct a fresh runner with the latest secret snapshot.
+    //    Per-agent secrets win over the global provider key on collision —
+    //    matches the broader secrets.json > models.json precedence.
+    const envSecrets: Record<string, string> = {
+      ...resolveProviderEnv(this.models, agentJson),
+      ...this.secrets.resolveAll(inst.id),
+    };
     inst.runner = new AgentRunner({
       rootDir: this.cfg.rootDir,
       harnessId: this.cfg.harnessId,
-      agentId: id,
+      agentId: inst.id,
       agentJson,
-      db,
+      db: inst.db,
       serverBaseUrl: this.cfg.serverBaseUrl,
       timezone: this.cfg.timezone,
-      envSecrets: this.secrets.resolveAll(id),
-      log: childLogger(`agent:${id}`),
+      envSecrets,
+      log: childLogger(`agent:${inst.id}`),
     });
 
-    const pluginsDir = join(dir, "plugins");
-    if (existsSync(pluginsDir)) {
-      const ids = readdirSync(pluginsDir, { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
-        .map((d) => d.name);
-      for (const pid of ids) {
-        try {
-          await this.startPluginInstance(inst, pid);
-        } catch (err) {
-          this.log.error({ err, agent: id, plugin: pid }, "failed to start plugin");
-        }
+    // 4. Start each installed plugin; per-plugin failures don't sink the agent.
+    for (const pid of inst.installedPluginIds) {
+      try {
+        await this.startPluginInstance(inst, pid);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log.error(
+          { err, agent: inst.id, plugin: pid },
+          "failed to start plugin",
+        );
+        inst.plugins.set(pid, {
+          pluginId: pid,
+          state: "failed",
+          instance: null,
+          config: null,
+          notifications: { enabled: [] },
+          error: message,
+          changedAt: Date.now(),
+        });
       }
     }
 
+    // 5. Start the runner.
     inst.runner.start();
-    this.agents.set(id, inst);
-    this.log.info({ agentId: id, plugins: [...inst.plugins.keys()] }, "agent loaded");
+    inst.state = "running";
+    inst.error = null;
+    inst.changedAt = Date.now();
+
+    const running: string[] = [];
+    const failed: string[] = [];
+    for (const e of inst.plugins.values()) {
+      if (e.state === "running") running.push(e.pluginId);
+      else if (e.state === "failed") failed.push(e.pluginId);
+    }
+    this.log.info(
+      { agentId: inst.id, runningPlugins: running, failedPlugins: failed },
+      "agent started",
+    );
+    return inst;
+  }
+
+  private async stopAgent(inst: AgentInstance): Promise<AgentInstance> {
+    for (const entry of inst.plugins.values()) {
+      if (entry.state !== "running" || !entry.instance) continue;
+      const instance = entry.instance;
+      try {
+        await Promise.race([
+          instance.stop(),
+          new Promise<void>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("plugin stop timed out after 5s")),
+              5000,
+            ),
+          ),
+        ]);
+      } catch (err) {
+        this.log.warn(
+          { err, agent: inst.id, plugin: entry.pluginId },
+          "plugin stop failed",
+        );
+      }
+      entry.state = "stopped";
+      entry.instance = null;
+      entry.error = null;
+      entry.changedAt = Date.now();
+    }
+
+    if (inst.runner) {
+      try {
+        await inst.runner.stop();
+      } catch (err) {
+        this.log.warn({ err, agent: inst.id }, "runner stop failed");
+      }
+      inst.runner = null;
+    }
+
+    inst.adminPlugin = null;
+    inst.state = "stopped";
+    inst.error = null;
+    inst.changedAt = Date.now();
+    this.log.info({ agentId: inst.id }, "agent stopped");
     return inst;
   }
 
   // ── plugin start helper ───────────────────────────────────────────
 
+  /**
+   * Throws on any failure (caller in `startAgent` records a failed
+   * `PluginEntry`). On success, sets a running entry.
+   */
   private async startPluginInstance(
     inst: AgentInstance,
     pluginId: string,
@@ -185,10 +426,11 @@ export class AgentManager {
 
     const secretKeys = manifestSecretKeys(entry.manifest);
     const resolvedSecrets = this.secrets.resolve(inst.id, pluginId, secretKeys);
-    checkRequiredSecrets(entry.manifest, resolvedSecrets, {
-      agentId: inst.id,
-      pluginId,
-    });
+    checkRequiredSecrets(
+      entry.manifest.secretsSchema,
+      resolvedSecrets,
+      `plugin ${pluginId} on ${inst.id}`,
+    );
 
     const log = childLogger(`plugin:${inst.id}:${pluginId}`);
     const pluginInstance = new entry.ctor();
@@ -200,9 +442,12 @@ export class AgentManager {
 
     const pluginEntry: PluginEntry = {
       pluginId,
+      state: "running",
       instance: pluginInstance,
       config,
       notifications,
+      error: null,
+      changedAt: Date.now(),
     };
 
     const ctx: PluginInstanceContext = {
@@ -220,7 +465,7 @@ export class AgentManager {
         if (!pluginEntry.notifications.enabled.includes(name)) return;
         const meta = { ...(payload.metadata ?? {}), _notification: name };
         try {
-          inst.runner.notify({
+          inst.runner?.notify({
             ...payload,
             metadata: meta,
             pluginId,
@@ -235,11 +480,92 @@ export class AgentManager {
     inst.plugins.set(pluginId, pluginEntry);
 
     if (pluginId === "admin") {
-      inst.adminPlugin = pluginInstance as import("../plugins/admin/index.js").default;
+      inst.adminPlugin =
+        pluginInstance as import("../plugins/admin/index.js").default;
+    }
+  }
+
+  // ── helpers ────────────────────────────────────────────────────────
+
+  private requireAgent(id: string): AgentInstance {
+    const inst = this.agents.get(id);
+    if (!inst) throw new LifecycleError(`unknown agent: ${id}`, "not_found");
+    return inst;
+  }
+
+  private async withTransition<T>(
+    id: string,
+    kind: "starting" | "stopping",
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    if (this.transitions.has(id)) {
+      throw new LifecycleError("transition in progress", "conflict");
+    }
+    this.transitions.set(id, kind);
+    try {
+      return await fn();
+    } finally {
+      this.transitions.delete(id);
     }
   }
 }
 
-function manifestSecretKeys(m: { secretsSchema: { properties?: object } }): string[] {
+function scanPluginDirs(dir: string): string[] {
+  const pluginsDir = join(dir, "plugins");
+  if (!existsSync(pluginsDir)) return [];
+  return readdirSync(pluginsDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+    .map((d) => d.name);
+}
+
+function manifestSecretKeys(m: {
+  secretsSchema: { properties?: object };
+}): string[] {
   return Object.keys(m.secretsSchema.properties ?? {});
+}
+
+/**
+ * Look up the agent's chosen provider in the global Models config and
+ * return the env var pi expects for that provider, populated with the
+ * configured API key. Empty map if the provider has no API key set or
+ * isn't a known catalog entry — pi falls back to ambient env / OAuth /
+ * agent-level secrets in that case.
+ */
+function resolveProviderEnv(
+  models: ModelsStore,
+  agentJson: AgentJson,
+): Record<string, string> {
+  const providerId = agentJson.model?.provider;
+  if (!providerId) return {};
+  const entry = findProviderInCatalog(providerId);
+  if (!entry) return {};
+  const cfg = models.getProvider(providerId);
+  if (!cfg?.apiKey) return {};
+  return { [entry.envVar]: cfg.apiKey };
+}
+
+/**
+ * Enforce the operator-curated allowlist: an agent may only use a model
+ * that's been enabled in the Models settings page. Skipped silently if
+ * the provider has no entry yet — that lets newly-created agents still
+ * boot before the operator's first pass at the Models page, and lets
+ * out-of-catalog providers (Bedrock, Vertex, ...) keep working.
+ */
+function checkModelEnabled(
+  models: ModelsStore,
+  agentJson: AgentJson,
+  agentId: string,
+): void {
+  const providerId = agentJson.model?.provider;
+  const modelId = agentJson.model?.id;
+  if (!providerId || !modelId) return;
+  if (!findProviderInCatalog(providerId)) return;
+  const cfg = models.getProvider(providerId);
+  if (!cfg) return;
+  if (cfg.enabledModels.length === 0) return;
+  if (!cfg.enabledModels.includes(modelId)) {
+    throw new Error(
+      `agent ${agentId}: model ${providerId}/${modelId} is not enabled in Models settings`,
+    );
+  }
 }

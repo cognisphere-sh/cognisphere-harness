@@ -1,5 +1,5 @@
 import { Ajv, type ErrorObject } from "ajv";
-import type { JsonSchema, PluginManifest } from "./types.js";
+import type { JsonSchema } from "./types.js";
 
 const ajv = new Ajv({
   useDefaults: true,
@@ -34,21 +34,24 @@ export function validateAndDefault(
 }
 
 /**
- * Enforce that every secret declared in `secretsSchema.properties` is
- * populated. v0 contract: all declared secrets are mandatory — there are
- * no optional secrets. The `required` field on `secretsSchema` is ignored
- * (treat every declared key as required).
+ * Enforce that every secret declared in `schema.properties` is populated.
+ * v0 contract: all declared secrets are mandatory — there are no optional
+ * secrets. The `required` field on the schema is ignored (treat every
+ * declared key as required).
+ *
+ * `label` is rendered in the error message — pass `"plugin <pluginId> on
+ * <agentId>"` for plugin secrets or `"agent <agentId>"` for agent-level
+ * secrets.
  */
 export function checkRequiredSecrets(
-  manifest: PluginManifest,
+  schema: JsonSchema | undefined,
   resolved: Record<string, string>,
-  ctx: { agentId: string; pluginId: string },
+  label: string,
 ): void {
-  const declared = Object.keys(manifest.secretsSchema.properties ?? {});
+  if (!schema) return;
+  const declared = Object.keys(schema.properties ?? {});
   const missing = declared.filter((k) => !(k in resolved));
   if (missing.length > 0) {
-    throw new Error(
-      `plugin ${ctx.pluginId} on ${ctx.agentId}: missing secrets: ${missing.join(", ")}`,
-    );
+    throw new Error(`${label}: missing secrets: ${missing.join(", ")}`);
   }
 }

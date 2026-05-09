@@ -28,7 +28,11 @@ export function adminRouter(am: AgentManager): Hono {
     }
     const admin = inst.adminPlugin;
     if (!admin) {
-      return c.json({ error: "admin plugin not installed on this agent" }, 500);
+      const reason = inst.installedPluginIds.includes("admin")
+        ? `admin plugin not running (agent state=${inst.state})`
+        : "admin plugin not installed on this agent";
+      const status = inst.installedPluginIds.includes("admin") ? 503 : 500;
+      return c.json({ error: reason }, status);
     }
     admin.deliver({
       text: body.text,
@@ -44,6 +48,9 @@ export function adminRouter(am: AgentManager): Hono {
     if (!inst) return c.json({ error: `unknown agent: ${agentId}` }, 404);
     const body = (await c.req.json().catch(() => ({}))) as { threadId?: string };
     if (!body.threadId) return c.json({ error: "missing threadId" }, 400);
+    if (!inst.runner) {
+      return c.json({ error: "agent not running" }, 503);
+    }
     const ok = inst.runner.abort(body.threadId);
     return c.json({ ok });
   });

@@ -40,7 +40,12 @@ export async function maybeHandleWebhook(
     return true;
   }
   const plugin = inst.plugins.get(pluginId);
-  if (!plugin || !plugin.instance.handleHttpRequest) {
+  if (
+    !plugin ||
+    plugin.state !== "running" ||
+    !plugin.instance ||
+    !plugin.instance.handleHttpRequest
+  ) {
     res.writeHead(404).end(`unknown plugin or no http handler: ${pluginId}`);
     return true;
   }

@@ -78,6 +78,21 @@ export interface EnqueueArgs {
   isSilent: boolean;
 }
 
+export interface DeadLetterRow {
+  id: number;
+  enqueued_at: number;
+  plugin_id: string;
+  channel_id: string;
+  thread_id: string;
+  text: string;
+  metadata: string | null;
+  priority: number;
+  is_silent: number;
+  attempts: number;
+  last_error: string | null;
+  dead_at: number;
+}
+
 export interface EventRow {
   id: number;
   ts: number;
@@ -283,6 +298,59 @@ export class AgentDb {
       )
       .get();
     return r?.n ?? 0;
+  }
+
+  listPending(limit = 200): QueuedRow[] {
+    return this.db
+      .prepare<unknown[], QueuedRow>(
+        `SELECT * FROM messages ORDER BY priority DESC, id ASC LIMIT ?`,
+      )
+      .all(limit);
+  }
+
+  listDeadLetter(limit = 200): DeadLetterRow[] {
+    return this.db
+      .prepare<unknown[], DeadLetterRow>(
+        `SELECT * FROM dead_letter ORDER BY dead_at DESC, id DESC LIMIT ?`,
+      )
+      .all(limit);
+  }
+
+  /** Move a DLQ row back to messages and reset attempts. Returns the new id. */
+  requeueDeadLetter(id: number): number | null {
+    const txn = this.db.transaction((): number | null => {
+      const row = this.db
+        .prepare<unknown[], DeadLetterRow>(
+          `SELECT * FROM dead_letter WHERE id = ?`,
+        )
+        .get(id);
+      if (!row) return null;
+      const info = this.db
+        .prepare(
+          `INSERT INTO messages
+             (enqueued_at, plugin_id, channel_id, thread_id, text, metadata,
+              priority, is_silent, in_flight, attempts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+        )
+        .run(
+          Date.now(),
+          row.plugin_id,
+          row.channel_id,
+          row.thread_id,
+          row.text,
+          row.metadata,
+          row.priority,
+          row.is_silent,
+        );
+      this.db.prepare(`DELETE FROM dead_letter WHERE id = ?`).run(id);
+      return info.lastInsertRowid as number;
+    });
+    return txn();
+  }
+
+  removeDeadLetter(id: number): boolean {
+    const info = this.db.prepare(`DELETE FROM dead_letter WHERE id = ?`).run(id);
+    return info.changes > 0;
   }
 
   // ── events ────────────────────────────────────────────────
