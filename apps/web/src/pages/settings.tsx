@@ -25,8 +25,8 @@ import { Button } from "@/components/ui/button";
 
 /**
  * Global / app-level settings page. Per-agent + per-plugin configuration
- * (config files, secrets, notifications) live on each agent's own
- * Settings tab — see `<AgentSettingsPane>`.
+ * (config files, secrets) lives on each agent's own Settings tab — see
+ * `<AgentSettingsPane>`.
  */
 export function SettingsPage() {
   const { user } = useAuth();
@@ -167,8 +167,7 @@ export function SettingsPage() {
                 </div>
                 <CardDescription>
                   Configure each agent's <code>agent.json</code>, plugin
-                  configs, notification subscriptions, and secrets in its
-                  own Settings tab.
+                  configs, and secrets in its own Settings tab.
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-2 sm:grid-cols-2">

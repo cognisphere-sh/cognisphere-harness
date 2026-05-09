@@ -107,10 +107,6 @@ export default class TelegramPlugin implements Plugin {
     displayName: "Telegram",
     description:
       "Telegram messaging via long-poll. Sends through scripts/telegram/telegram-cli (env-driven).",
-    notifications: [
-      { name: "message_received", description: "User sent a message in chat." },
-      { name: "edited", description: "User edited a previous message." },
-    ],
     configSchema: {
       type: "object",
       properties: {

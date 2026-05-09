@@ -138,7 +138,6 @@ export interface AgentDetail {
 export interface PluginManifest {
   displayName: string;
   description?: string;
-  notifications: { name: string; description: string }[];
   configSchema: unknown;
   secretsSchema: unknown;
 }
@@ -147,7 +146,6 @@ export interface PluginSummary {
   pluginId: string;
   manifest: PluginManifest | null;
   config: unknown;
-  notifications: { enabled: string[] };
   state: PluginState;
   error: string | null;
   changedAt: number;
@@ -364,11 +362,6 @@ export const endpoints = {
     api.put<{ ok: true; restartRequired: boolean }>(
       `/api/agents/${id}/plugins/${pluginId}/config`,
       { config },
-    ),
-  putPluginNotifications: (id: string, pluginId: string, enabled: string[]) =>
-    api.put<{ ok: true; restartRequired: boolean; enabled: string[] }>(
-      `/api/agents/${id}/plugins/${pluginId}/notifications`,
-      { enabled },
     ),
 };
 

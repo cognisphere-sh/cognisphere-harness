@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bell,
   Bot,
   ChevronDown,
   Eye,
@@ -102,9 +101,9 @@ interface Props {
 
 /**
  * Per-agent settings pane: edit agent.json, agent-level secrets, and for
- * each installed plugin its config.json, notification subscriptions, and
- * plugin-level secrets. Each block has its own dirty state + Save button
- * since they hit independent endpoints; the user saves piecemeal.
+ * each installed plugin its config.json and plugin-level secrets. Each
+ * block has its own dirty state + Save button since they hit independent
+ * endpoints; the user saves piecemeal.
  */
 export function AgentSettingsPane({ agentId }: Props) {
   const { data: agent } = useQuery({
@@ -270,7 +269,6 @@ function PluginCard({
     null) as JsonSchema | null;
   const pluginBucketValues =
     secrets.secrets?.[agentId]?.[plugin.pluginId] ?? {};
-  const declaredNotifications = plugin.manifest?.notifications ?? [];
   const configSchema =
     (plugin.manifest?.configSchema as JsonSchema | undefined) ?? {
       type: "object",
@@ -314,18 +312,6 @@ function PluginCard({
           onSave={(v) => saveConfig.mutate(v)}
           saving={saveConfig.isPending}
         />
-
-        {declaredNotifications.length > 0 && (
-          <>
-            <Separator />
-            <NotificationsBlock
-              agentId={agentId}
-              pluginId={plugin.pluginId}
-              declared={declaredNotifications}
-              enabledInitial={plugin.notifications.enabled}
-            />
-          </>
-        )}
 
         {pluginSchema?.properties &&
           Object.keys(pluginSchema.properties).length > 0 && (
@@ -697,115 +683,6 @@ function ConfigBlock({
         </div>
       </div>
       <SchemaForm schema={schema} value={draft} onChange={setDraft} />
-    </div>
-  );
-}
-
-// ── Notifications block ──────────────────────────────────────────────
-
-function NotificationsBlock({
-  agentId,
-  pluginId,
-  declared,
-  enabledInitial,
-}: {
-  agentId: string;
-  pluginId: string;
-  declared: { name: string; description: string }[];
-  enabledInitial: string[];
-}) {
-  const qc = useQueryClient();
-  const initialSet = useMemo(
-    () => new Set(enabledInitial),
-    [enabledInitial],
-  );
-  const [enabled, setEnabled] = useState<Set<string>>(
-    () => new Set(enabledInitial),
-  );
-
-  useEffect(() => setEnabled(new Set(enabledInitial)), [enabledInitial]);
-
-  const dirty =
-    enabled.size !== initialSet.size ||
-    [...enabled].some((n) => !initialSet.has(n));
-
-  const save = useMutation({
-    mutationFn: () =>
-      endpoints.putPluginNotifications(agentId, pluginId, [...enabled]),
-    onSuccess: () => {
-      toast.success("saved · agent reloaded");
-      qc.invalidateQueries({ queryKey: ["plugins", agentId] });
-      qc.invalidateQueries({ queryKey: ["agent", agentId] });
-    },
-    onError: (e: Error) => toast.error(`save failed: ${e.message}`),
-  });
-
-  const toggle = (name: string) => {
-    setEnabled((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  };
-
-  return (
-    <div>
-      <div className="mb-2 flex items-center gap-2">
-        <Bell className="size-3.5 text-primary/60" />
-        <h3 className="text-sm font-medium">Notifications</h3>
-        <span className="text-[11px] text-muted-foreground">
-          which plugin events reach the agent
-        </span>
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setEnabled(new Set(enabledInitial))}
-            disabled={!dirty || save.isPending}
-          >
-            <RotateCcw className="size-3.5" /> Reset
-          </Button>
-          <Button
-            size="sm"
-            disabled={!dirty || save.isPending}
-            onClick={() => save.mutate()}
-          >
-            {save.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Save className="size-4" />
-            )}
-            Save
-          </Button>
-        </div>
-      </div>
-      <div className="grid gap-2">
-        {declared.map((n) => {
-          const on = enabled.has(n.name);
-          return (
-            <label
-              key={n.name}
-              className="flex cursor-pointer items-start gap-2 rounded-md border p-2 transition-colors hover:bg-accent/40"
-            >
-              <input
-                type="checkbox"
-                checked={on}
-                onChange={() => toggle(n.name)}
-                className="mt-0.5 size-4 accent-primary"
-              />
-              <div className="min-w-0">
-                <div className="font-mono text-xs">{n.name}</div>
-                {n.description && (
-                  <div className="text-[11px] text-muted-foreground">
-                    {n.description}
-                  </div>
-                )}
-              </div>
-            </label>
-          );
-        })}
-      </div>
     </div>
   );
 }

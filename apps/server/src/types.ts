@@ -71,7 +71,6 @@ export interface JsonSchema {
 export interface PluginManifest {
   displayName: string;
   description?: string;
-  notifications: { name: string; description: string }[];
   configSchema: JsonSchema;
   secretsSchema: JsonSchema;
 }

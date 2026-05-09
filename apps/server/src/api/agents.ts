@@ -57,27 +57,19 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     if (!inst) return c.json({ error: "unknown agent" }, 404);
     // Iterate every installed plugin dir so the Settings UI can surface
     // configuration for plugins that failed to start due to missing secrets.
-    const out = [...inst.plugins.keys()].map((pid) => {
-      const entry = inst.plugins.get(pid);
+    const out = [...inst.plugins.entries()].map(([pid, entry]) => {
       const manifest = am.getPluginManifest(pid) ?? null;
       const config =
-        entry?.config !== undefined && entry?.config !== null
+        entry.config != null
           ? entry.config
           : readJsonFile(pluginPath(cfg, id, pid, "config.json"));
-      const notifications =
-        entry?.notifications ??
-        (readJsonFile(pluginPath(cfg, id, pid, "notifications.json")) as {
-          enabled?: string[];
-        } | null) ??
-        { enabled: [] as string[] };
       return {
         pluginId: pid,
         manifest,
         config,
-        notifications,
-        state: entry?.state ?? "stopped",
-        error: entry?.error ?? null,
-        changedAt: entry?.changedAt ?? 0,
+        state: entry.state,
+        error: entry.error,
+        changedAt: entry.changedAt,
       };
     });
     return c.json({ plugins: out });
@@ -115,8 +107,8 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     }
   });
 
-  // ── mutating: agent config + plugin config + notification subscriptions ──
-  // All three require a server restart for the runner to pick them up.
+  // ── mutating: agent config + plugin config ────────────────────────
+  // Both auto-reload the agent so the runner picks up the new values.
 
   r.put("/:id/config", async (c) => {
     const id = c.req.param("id");
@@ -166,38 +158,6 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       restartRequired: false,
       state: inst2?.state,
       error: inst2?.error ?? null,
-    });
-  });
-
-  r.put("/:id/plugins/:pluginId/notifications", async (c) => {
-    const id = c.req.param("id");
-    const pid = c.req.param("pluginId");
-    const inst = am.get(id);
-    if (!inst) return c.json({ error: "unknown agent" }, 404);
-    if (!inst.plugins.has(pid)) {
-      return c.json({ error: "plugin not installed" }, 404);
-    }
-    const body = (await c.req.json().catch(() => null)) as {
-      enabled?: unknown;
-    } | null;
-    if (!body || !Array.isArray(body.enabled)) {
-      return c.json({ error: "expected { enabled: string[] }" }, 400);
-    }
-    const declared = new Set(
-      (am.getPluginManifest(pid)?.notifications ?? []).map((n) => n.name),
-    );
-    const enabled = body.enabled.filter(
-      (x): x is string => typeof x === "string" && declared.has(x),
-    );
-    const path = pluginPath(cfg, id, pid, "notifications.json");
-    writeFileSync(path, JSON.stringify({ enabled }, null, 2) + "\n");
-    const inst3 = await am.reloadAgent(id);
-    return c.json({
-      ok: true,
-      restartRequired: false,
-      enabled,
-      state: inst3?.state,
-      error: inst3?.error ?? null,
     });
   });
 

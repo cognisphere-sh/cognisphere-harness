@@ -16,9 +16,6 @@ export default class GmailPlugin implements Plugin {
   manifest: PluginManifest = {
     displayName: "Gmail (stub)",
     description: "Gmail polling — stub. See index.ts for what to finish.",
-    notifications: [
-      { name: "email_received", description: "A new email landed." },
-    ],
     configSchema: {
       type: "object",
       properties: {

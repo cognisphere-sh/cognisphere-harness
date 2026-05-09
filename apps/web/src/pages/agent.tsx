@@ -20,7 +20,6 @@ import {
 import { toast } from "sonner";
 import { endpoints } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FileTree } from "@/components/file-tree";
@@ -177,15 +176,6 @@ function PluginsPane({ agentId }: { agentId: string }) {
               <pre className="mt-2 overflow-x-auto rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
                 {p.error}
               </pre>
-            )}
-            {p.notifications.enabled.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {p.notifications.enabled.map((n) => (
-                  <Badge key={n} variant="secondary">
-                    {n}
-                  </Badge>
-                ))}
-              </div>
             )}
           </CardHeader>
         </Card>

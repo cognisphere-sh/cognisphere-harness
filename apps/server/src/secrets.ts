@@ -81,16 +81,25 @@ export class SecretsStore {
    * Flatten every bucket under `<agentId>` into a single bare-key map for
    * export into the agent's pi-runtime env. Plugin authors should
    * namespace their key names (e.g. `TELEGRAM_BOT_TOKEN`,
-   * `GMAIL_OAUTH_TOKEN`) to avoid collisions across buckets; on
-   * collision, last-writer-wins by iteration order.
+   * `GMAIL_OAUTH_TOKEN`) to avoid collisions across buckets. Throws on
+   * collision so the operator sees the conflict instead of silently
+   * losing one bucket's value.
    */
   resolveAll(agentId: string): Record<string, string> {
     const data = this.load();
     const buckets = data[agentId] ?? {};
     const out: Record<string, string> = {};
-    for (const bucket of Object.values(buckets)) {
+    const owner: Record<string, string> = {};
+    for (const [bucketId, bucket] of Object.entries(buckets)) {
       for (const [k, v] of Object.entries(bucket)) {
-        if (typeof v === "string" && v.length > 0) out[k] = v;
+        if (typeof v !== "string" || v.length === 0) continue;
+        if (k in out) {
+          throw new Error(
+            `secrets collision for agent ${agentId}: key "${k}" appears in buckets "${owner[k]}" and "${bucketId}" — keys must be unique across buckets`,
+          );
+        }
+        out[k] = v;
+        owner[k] = bucketId;
       }
     }
     return out;

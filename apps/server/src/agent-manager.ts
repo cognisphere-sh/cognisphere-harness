@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Ajv, type ErrorObject } from "ajv";
 import type { ServerConfig } from "./config.js";
 import { agentDir, agentsRoot, harnessRoot } from "./config.js";
 import type { Logger } from "./logger.js";
@@ -10,15 +11,22 @@ import { AgentRunner } from "./runner.js";
 import { findProviderInCatalog } from "./models-catalog.js";
 import { ModelsStore } from "./models-store.js";
 import { AGENT_BUCKET, SecretsStore } from "./secrets.js";
-import { checkRequiredSecrets, validateAndDefault } from "./validation.js";
 import type {
   AgentJson,
   AgentState,
   AgentSummary,
+  JsonSchema,
   Plugin,
   PluginInstanceContext,
   PluginState,
 } from "./types.js";
+
+const ajv = new Ajv({
+  useDefaults: true,
+  coerceTypes: false,
+  allErrors: true,
+  strict: false,
+});
 
 export interface PluginEntry {
   state: PluginState;
@@ -26,7 +34,6 @@ export interface PluginEntry {
   instance: Plugin | null;
   /** Last validated config; preserved across stop so the UI can still show it. */
   config: unknown | null;
-  notifications: { enabled: string[] };
   /** Last startup error message; non-null when state === "failed". */
   error: string | null;
   changedAt: number;
@@ -44,9 +51,10 @@ export interface AgentInstance {
   state: AgentState;
   error: string | null;
   changedAt: number;
-  /** One entry per plugin dir found under `<agentDir>/plugins/` at the last
-   *  (re)start. Refreshed on every start so newly-added or removed dirs are
-   *  picked up. State on the entry tells whether it's actually running. */
+  /** One entry per plugin dir under `<agentDir>/plugins/`. Cleared and
+   *  repopulated on every start (so added/removed dirs are picked up).
+   *  `stopAgent` leaves entries with state="stopped" so the UI can still
+   *  render them. */
   plugins: Map<string, PluginEntry>;
 }
 
@@ -244,28 +252,38 @@ export class AgentManager {
     const installedPluginIds = scanPluginDirs(dir);
     inst.plugins.clear();
 
-    // 1. Parse agent.json + agent-secret validation + provider gating.
+    // 1. Parse agent.json + agent-secret validation + provider gating +
+    //    env-secret resolution. All sources (provider catalog env, agent
+    //    bucket, plugin buckets) must use disjoint keys — collisions
+    //    throw so the operator sees the conflict instead of one source
+    //    silently overriding another.
     let agentJson: AgentJson;
-    let providerEnv: Record<string, string> = {};
+    let envSecrets: Record<string, string> = {};
     try {
       const raw = readFileSync(join(dir, "agent.json"), "utf8");
       agentJson = JSON.parse(raw) as AgentJson;
       if (agentJson.secretsSchema) {
         const declared = Object.keys(agentJson.secretsSchema.properties ?? {});
         const resolved = this.secrets.resolve(inst.id, AGENT_BUCKET, declared);
-        checkRequiredSecrets(
-          agentJson.secretsSchema,
-          resolved,
-          `agent ${inst.id}`,
-        );
+        checkRequiredSecrets(declared, resolved, `agent ${inst.id}`);
       }
-      providerEnv = resolveAndValidateProvider(
+      const providerEnv = resolveAndValidateProvider(
         this.models,
         agentJson,
         dir,
         inst.id,
         this.log,
       );
+      const resolvedSecrets = this.secrets.resolveAll(inst.id);
+      const collisions = Object.keys(resolvedSecrets).filter(
+        (k) => k in providerEnv,
+      );
+      if (collisions.length > 0) {
+        throw new Error(
+          `agent ${inst.id}: secret keys collide with provider env: ${collisions.join(", ")}`,
+        );
+      }
+      envSecrets = { ...providerEnv, ...resolvedSecrets };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, agent: inst.id }, "agent spec parse/validate failed");
@@ -283,13 +301,7 @@ export class AgentManager {
       inst.db = new AgentDb(join(dir, "sessions", ".queue.db"), inst.id);
     }
 
-    // 3. Construct a fresh runner with the latest secret snapshot.
-    //    Per-agent secrets win over the global provider key on collision —
-    //    matches the broader secrets.json > models.json precedence.
-    const envSecrets: Record<string, string> = {
-      ...providerEnv,
-      ...this.secrets.resolveAll(inst.id),
-    };
+    // 3. Construct a fresh runner with the resolved env snapshot.
     inst.runner = new AgentRunner({
       rootDir: this.cfg.rootDir,
       harnessId: this.cfg.harnessId,
@@ -316,7 +328,6 @@ export class AgentManager {
           state: "failed",
           instance: null,
           config: null,
-          notifications: { enabled: [] },
           error: message,
           changedAt: Date.now(),
         });
@@ -397,7 +408,6 @@ export class AgentManager {
     const dir = agentDir(this.cfg, inst.id);
     const pdir = join(dir, "plugins", pluginId);
     const cfgPath = join(pdir, "config.json");
-    const notifPath = join(pdir, "notifications.json");
 
     const rawConfig = existsSync(cfgPath)
       ? (JSON.parse(readFileSync(cfgPath, "utf8")) as unknown)
@@ -407,14 +417,11 @@ export class AgentManager {
       rawConfig,
       { agentId: inst.id, pluginId },
     );
-    const notifications = existsSync(notifPath)
-      ? (JSON.parse(readFileSync(notifPath, "utf8")) as { enabled: string[] })
-      : { enabled: entry.manifest.notifications.map((n) => n.name) };
 
     const secretKeys = Object.keys(entry.manifest.secretsSchema.properties ?? {});
     const resolvedSecrets = this.secrets.resolve(inst.id, pluginId, secretKeys);
     checkRequiredSecrets(
-      entry.manifest.secretsSchema,
+      secretKeys,
       resolvedSecrets,
       `plugin ${pluginId} on ${inst.id}`,
     );
@@ -431,7 +438,6 @@ export class AgentManager {
       state: "running",
       instance: pluginInstance,
       config,
-      notifications,
       error: null,
       changedAt: Date.now(),
     };
@@ -448,7 +454,6 @@ export class AgentManager {
         ? `${this.cfg.serverBaseUrl}/webhook/${inst.id}/${pluginId}`
         : undefined,
       notify: (name, payload) => {
-        if (!pluginEntry.notifications.enabled.includes(name)) return;
         const meta = { ...(payload.metadata ?? {}), _notification: name };
         try {
           inst.runner?.notify({
@@ -532,12 +537,16 @@ function resolveAndValidateProvider(
   const cfg = models.getProvider(providerId);
   const modelId = agentJson.model?.id;
 
-  if (modelId) {
-    if (!cfg) {
+  if (!cfg) {
+    if (modelId) {
       throw new Error(
         `agent ${agentId}: provider ${providerId} is not configured in Models settings`,
       );
     }
+    return {};
+  }
+
+  if (modelId) {
     if (cfg.enabledModels.length === 0 || !cfg.enabledModels.includes(modelId)) {
       throw new Error(
         `agent ${agentId}: model ${providerId}/${modelId} is not enabled in Models settings`,
@@ -556,8 +565,6 @@ function resolveAndValidateProvider(
       );
     }
   }
-
-  if (!cfg) return {};
 
   const env: Record<string, string> = {};
   for (const field of entry.credentials) {
@@ -605,6 +612,50 @@ function partitionPluginsByState(plugins: Map<string, PluginEntry>): {
     else if (e.state === "failed") failed.push(pid);
   }
   return { running, failed };
+}
+
+/**
+ * Validate (and default-fill) a plugin config against its manifest's
+ * configSchema. Returns the (possibly mutated) config; throws on validation
+ * failure. The input object is mutated in place by ajv's `useDefaults`.
+ */
+function validateAndDefault(
+  schema: JsonSchema,
+  config: unknown,
+  ctx: { agentId: string; pluginId: string },
+): unknown {
+  const data = (config ?? {}) as Record<string, unknown>;
+  const validate = ajv.compile(schema);
+  const ok = validate(data);
+  if (!ok) {
+    const msgs =
+      validate.errors
+        ?.map((e: ErrorObject) => `${e.instancePath || "/"} ${e.message ?? ""}`.trim())
+        .join("; ") ?? "unknown";
+    throw new Error(
+      `config invalid for ${ctx.pluginId} on ${ctx.agentId}: ${msgs}`,
+    );
+  }
+  return data;
+}
+
+/**
+ * Enforce that every declared secret is populated. v0 contract: all
+ * declared secrets are mandatory — there are no optional secrets.
+ *
+ * `label` is rendered in the error message — pass `"plugin <pluginId> on
+ * <agentId>"` for plugin secrets or `"agent <agentId>"` for agent-level
+ * secrets.
+ */
+function checkRequiredSecrets(
+  declared: string[],
+  resolved: Record<string, string>,
+  label: string,
+): void {
+  const missing = declared.filter((k) => !(k in resolved));
+  if (missing.length > 0) {
+    throw new Error(`${label}: missing secrets: ${missing.join(", ")}`);
+  }
 }
 
 /** Typed lookup for the admin plugin's `deliver()`. Null unless the plugin

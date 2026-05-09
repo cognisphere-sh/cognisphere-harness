@@ -30,12 +30,6 @@ export default class SchedulerPlugin implements Plugin {
   manifest: PluginManifest = {
     displayName: "Scheduler",
     description: "Cron-style timers. Schedules persisted to state/schedules.json.",
-    notifications: [
-      {
-        name: "schedule_fire",
-        description: "A scheduled time arrived; the agent should act on it.",
-      },
-    ],
     configSchema: {
       type: "object",
       properties: {
