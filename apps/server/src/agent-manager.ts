@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServerConfig } from "./config.js";
 import { agentDir, agentsRoot, harnessRoot } from "./config.js";
@@ -295,7 +295,7 @@ export class AgentManager {
     //    Per-agent secrets win over the global provider key on collision —
     //    matches the broader secrets.json > models.json precedence.
     const envSecrets: Record<string, string> = {
-      ...resolveProviderEnv(this.models, agentJson),
+      ...resolveProviderEnv(this.models, agentJson, dir, this.log),
       ...this.secrets.resolveAll(inst.id),
     };
     inst.runner = new AgentRunner({
@@ -385,6 +385,8 @@ export class AgentManager {
       }
       inst.runner = null;
     }
+
+    cleanupProviderArtifacts(agentDir(this.cfg, inst.id), this.log);
 
     inst.adminPlugin = null;
     inst.state = "stopped";
@@ -524,32 +526,75 @@ function manifestSecretKeys(m: {
   return Object.keys(m.secretsSchema.properties ?? {});
 }
 
+/** Filename under <agentDir> where Vertex's service-account JSON is materialized. */
+const VERTEX_SA_FILE = ".vertex-sa.json";
+
 /**
- * Look up the agent's chosen provider in the global Models config and
- * return the env var pi expects for that provider, populated with the
- * configured API key. Empty map if the provider has no API key set or
- * isn't a known catalog entry — pi falls back to ambient env / OAuth /
- * agent-level secrets in that case.
+ * Walk the catalog entry's credentials[] for the agent's provider and
+ * return env vars pi should see. Special case: google-vertex's
+ * `serviceAccountKey` field is paste-blob JSON — we write it to
+ * <agentDir>/.vertex-sa.json (0600) and point GOOGLE_APPLICATION_CREDENTIALS
+ * at the path. Cleaned up by `cleanupProviderArtifacts()` on agent stop.
+ *
+ * Empty map if the provider has no catalog entry — pi falls back to
+ * ambient env in that case (the operator can still set vars on the
+ * server host for out-of-catalog setups).
  */
 function resolveProviderEnv(
   models: ModelsStore,
   agentJson: AgentJson,
+  agentDir: string,
+  log: Logger,
 ): Record<string, string> {
   const providerId = agentJson.model?.provider;
   if (!providerId) return {};
   const entry = findProviderInCatalog(providerId);
   if (!entry) return {};
   const cfg = models.getProvider(providerId);
-  if (!cfg?.apiKey) return {};
-  return { [entry.envVar]: cfg.apiKey };
+  if (!cfg) return {};
+
+  const env: Record<string, string> = {};
+  for (const field of entry.credentials) {
+    const value = cfg.credentials[field.key];
+    if (typeof value !== "string" || value.length === 0) continue;
+
+    if (providerId === "google-vertex" && field.key === "serviceAccountKey") {
+      const path = join(agentDir, VERTEX_SA_FILE);
+      try {
+        writeFileSync(path, value, { mode: 0o600 });
+        env[field.envVar] = path;
+      } catch (err) {
+        log.error(
+          { err, agentDir, providerId },
+          "failed to materialize vertex service account file",
+        );
+      }
+      continue;
+    }
+
+    env[field.envVar] = value;
+  }
+  return env;
+}
+
+/** Best-effort cleanup of provider-injected files (currently just Vertex's SA JSON). */
+function cleanupProviderArtifacts(agentDir: string, log: Logger): void {
+  const path = join(agentDir, VERTEX_SA_FILE);
+  if (!existsSync(path)) return;
+  try {
+    unlinkSync(path);
+  } catch (err) {
+    log.warn({ err, path }, "failed to remove vertex service account file");
+  }
 }
 
 /**
  * Enforce the operator-curated allowlist: an agent may only use a model
- * that's been enabled in the Models settings page. Skipped silently if
- * the provider has no entry yet — that lets newly-created agents still
- * boot before the operator's first pass at the Models page, and lets
- * out-of-catalog providers (Bedrock, Vertex, ...) keep working.
+ * that's been enabled in the Models settings page, and every required
+ * credential field for the chosen provider must be populated.
+ *
+ * Skipped silently if the provider has no catalog entry — that lets
+ * out-of-catalog providers keep working via host env vars.
  */
 function checkModelEnabled(
   models: ModelsStore,
@@ -559,13 +604,30 @@ function checkModelEnabled(
   const providerId = agentJson.model?.provider;
   const modelId = agentJson.model?.id;
   if (!providerId || !modelId) return;
-  if (!findProviderInCatalog(providerId)) return;
+  const entry = findProviderInCatalog(providerId);
+  if (!entry) return;
   const cfg = models.getProvider(providerId);
-  if (!cfg) return;
-  if (cfg.enabledModels.length === 0) return;
-  if (!cfg.enabledModels.includes(modelId)) {
+
+  if (!cfg) {
+    throw new Error(
+      `agent ${agentId}: provider ${providerId} is not configured in Models settings`,
+    );
+  }
+  if (cfg.enabledModels.length === 0 || !cfg.enabledModels.includes(modelId)) {
     throw new Error(
       `agent ${agentId}: model ${providerId}/${modelId} is not enabled in Models settings`,
+    );
+  }
+  const missing = entry.credentials
+    .filter((f) => f.required)
+    .filter((f) => {
+      const v = cfg.credentials[f.key];
+      return typeof v !== "string" || v.length === 0;
+    })
+    .map((f) => f.label);
+  if (missing.length > 0) {
+    throw new Error(
+      `agent ${agentId}: provider ${providerId} is missing required credentials: ${missing.join(", ")} (set them in Models settings)`,
     );
   }
 }

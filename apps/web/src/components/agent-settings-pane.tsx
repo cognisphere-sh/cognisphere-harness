@@ -461,14 +461,14 @@ function ModelPicker({
   value: AgentModel;
   onChange: (next: AgentModel) => void;
 }) {
-  // Providers offered in the dropdown: those with both an API key and at
-  // least one enabled model. The currently-selected provider is always
-  // included even if it doesn't qualify, so the operator can see what
-  // they have and fix it.
+  // Providers offered in the dropdown: those that are fully configured
+  // (all required credentials set) and have at least one enabled model.
+  // The currently-selected provider is always included even if it
+  // doesn't qualify, so the operator can see what they have and fix it.
   const eligible = useMemo(
     () =>
       (models?.providers ?? []).filter(
-        (p) => p.apiKeyConfigured && p.enabledModels.length > 0,
+        (p) => p.configured && p.enabledModels.length > 0,
       ),
     [models],
   );
@@ -481,7 +481,7 @@ function ModelPicker({
   const selected = value.provider ? providerById.get(value.provider) : undefined;
   const selectedEnabled = !!(
     selected &&
-    selected.apiKeyConfigured &&
+    selected.configured &&
     selected.enabledModels.length > 0
   );
   const providerOptions = [...eligible];
@@ -528,7 +528,7 @@ function ModelPicker({
                 value: p.id,
                 label: p.displayName,
                 hint:
-                  p.apiKeyConfigured && p.enabledModels.length > 0
+                  p.configured && p.enabledModels.length > 0
                     ? p.id
                     : `${p.id} · not configured`,
               }))}

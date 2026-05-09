@@ -6,21 +6,27 @@ import { harnessRoot } from "../config.js";
 import type { Logger } from "../logger.js";
 import { PROVIDER_CATALOG } from "../models-catalog.js";
 import { ModelsStore } from "../models-store.js";
-import type { ProviderConfig } from "../types.js";
+import type { CredField, ProviderConfig } from "../types.js";
 
 /**
  * /api/models — global (cross-agent) provider + model configuration.
  *
  *   GET  /  → { providers: ProviderInfo[], path, mask }
- *   PUT  /  → write models.json (sentinel `null` clears apiKey, MASK leaves it)
+ *   PUT  /  → write models.json
  *
- * The catalog (provider IDs, env var names, default model lists) is
- * fixed in code; the persisted config only stores per-provider apiKey
- * and enabledModels (which may include custom IDs not in the catalog).
+ * The catalog (provider IDs, credential schemas, default model lists)
+ * is fixed in code; the persisted config only stores per-provider
+ * `credentials` (a Record<string,string>) and `enabledModels` (which
+ * may include custom IDs not in the catalog).
  *
- * v0: api keys are plaintext on disk. The runner injects each
- * configured provider's `envVar` into the spawned pi child if the
+ * v0: credentials are plaintext on disk. The runner injects each
+ * configured provider's env vars into the spawned pi child if the
  * agent's `model.provider` matches.
+ *
+ * PUT semantics for `credentials[key]`:
+ *   - `null`            → delete this field
+ *   - `MASK` (string)   → leave existing value untouched
+ *   - any other string  → set this value
  */
 
 const MASK = "********";
@@ -28,17 +34,23 @@ const MASK = "********";
 export interface ProviderInfo {
   id: string;
   displayName: string;
-  envVar: string;
+  credentials: CredField[];
+  /** Per-field current value: secrets shown as MASK if set / "" if unset; non-secrets shown plain. */
+  credentialValues: Record<string, string>;
+  /** All required fields populated. */
+  configured: boolean;
   catalogModels: string[];
   enabledModels: string[];
-  apiKey: string;
-  apiKeyConfigured: boolean;
+  notes?: string;
 }
 
 type PutBody = {
   providers?: Record<
     string,
-    { apiKey?: string | null; enabledModels?: string[] }
+    {
+      credentials?: Record<string, string | null>;
+      enabledModels?: string[];
+    }
   >;
 };
 
@@ -55,15 +67,33 @@ export function modelsRouter(
     const data = store.load();
     const providers: ProviderInfo[] = PROVIDER_CATALOG.map((entry) => {
       const cfgEntry = data.providers[entry.id];
-      const has = !!cfgEntry?.apiKey;
+      const stored = cfgEntry?.credentials ?? {};
+      const values: Record<string, string> = {};
+      for (const field of entry.credentials) {
+        const v = stored[field.key];
+        if (typeof v !== "string" || v.length === 0) {
+          values[field.key] = "";
+        } else if (field.secret) {
+          values[field.key] = MASK;
+        } else {
+          values[field.key] = v;
+        }
+      }
+      const configured = entry.credentials
+        .filter((f) => f.required)
+        .every((f) => {
+          const v = stored[f.key];
+          return typeof v === "string" && v.length > 0;
+        });
       return {
         id: entry.id,
         displayName: entry.displayName,
-        envVar: entry.envVar,
+        credentials: entry.credentials,
+        credentialValues: values,
+        configured,
         catalogModels: entry.models,
         enabledModels: cfgEntry?.enabledModels ?? [],
-        apiKey: has ? MASK : "",
-        apiKeyConfigured: has,
+        notes: entry.notes,
       };
     });
     return c.json({ providers, path, mask: MASK });
@@ -75,30 +105,44 @@ export function modelsRouter(
       return c.json(
         {
           error:
-            'expected { providers: { <providerId>: { apiKey?: string | null, enabledModels?: string[] } } }',
+            'expected { providers: { <providerId>: { credentials?: Record<string,string|null>, enabledModels?: string[] } } }',
         },
         400,
       );
     }
-    const known = new Set(PROVIDER_CATALOG.map((p) => p.id));
+    const catalogById = new Map<string, (typeof PROVIDER_CATALOG)[number]>(
+      PROVIDER_CATALOG.map((p) => [p.id, p]),
+    );
     const existing = store.load();
     const merged: Record<string, ProviderConfig> = { ...existing.providers };
 
     for (const [pid, payload] of Object.entries(body.providers)) {
-      if (!known.has(pid)) continue;
+      const entry = catalogById.get(pid);
+      if (!entry) continue;
       if (!payload || typeof payload !== "object") continue;
+
       const target: ProviderConfig = merged[pid] ?? {
-        apiKey: "",
+        credentials: {},
         enabledModels: [],
       };
-      if ("apiKey" in payload) {
-        if (payload.apiKey === null) target.apiKey = "";
-        else if (payload.apiKey === MASK) {
-          // unchanged — leave existing apiKey intact
-        } else if (typeof payload.apiKey === "string") {
-          target.apiKey = payload.apiKey;
+      const nextCreds = { ...target.credentials };
+
+      if (payload.credentials && typeof payload.credentials === "object") {
+        const validKeys = new Set(entry.credentials.map((f) => f.key));
+        for (const [k, v] of Object.entries(payload.credentials)) {
+          if (!validKeys.has(k)) continue;
+          if (v === null) {
+            delete nextCreds[k];
+          } else if (v === MASK) {
+            // unchanged — leave existing value intact
+          } else if (typeof v === "string") {
+            if (v.length === 0) delete nextCreds[k];
+            else nextCreds[k] = v;
+          }
         }
       }
+      target.credentials = nextCreds;
+
       if (Array.isArray(payload.enabledModels)) {
         target.enabledModels = payload.enabledModels.filter(
           (m): m is string => typeof m === "string" && m.length > 0,
@@ -110,11 +154,10 @@ export function modelsRouter(
     store.save({ providers: merged });
 
     // Restart every running agent whose model.provider matches one we
-    // just touched, so the new key/allowlist reaches the pi runtime
-    // without a server bounce. Agents using providers outside this PUT
-    // are left alone.
+    // just touched, so the new credentials/allowlist reach the pi
+    // runtime without a server bounce.
     const changedProviders = new Set(
-      Object.keys(body.providers).filter((p) => known.has(p)),
+      Object.keys(body.providers).filter((p) => catalogById.has(p)),
     );
     const restarted: string[] = [];
     for (const a of am.list()) {

@@ -243,14 +243,28 @@ export interface PutSecretsBody {
   secrets: Record<string, Record<string, PutSecretsBucket>>;
 }
 
+export interface CredField {
+  key: string;
+  envVar: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  placeholder?: string;
+  helpText?: string;
+  multiline?: boolean;
+}
+
 export interface ProviderInfo {
   id: string;
   displayName: string;
-  envVar: string;
+  credentials: CredField[];
+  /** Per-field current value: secrets shown as MASK if set / "" if unset; non-secrets shown plain. */
+  credentialValues: Record<string, string>;
+  /** All required fields populated. */
+  configured: boolean;
   catalogModels: string[];
   enabledModels: string[];
-  apiKey: string;
-  apiKeyConfigured: boolean;
+  notes?: string;
 }
 
 export interface ModelsView {
@@ -260,7 +274,8 @@ export interface ModelsView {
 }
 
 export interface PutModelsProvider {
-  apiKey?: string | null;
+  /** null = delete field; MASK string = leave unchanged; "" or absent = no change; any other string = set. */
+  credentials?: Record<string, string | null>;
   enabledModels?: string[];
 }
 export interface PutModelsBody {

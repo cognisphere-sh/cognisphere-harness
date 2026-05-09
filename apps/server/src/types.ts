@@ -137,34 +137,59 @@ export interface BatchMessage {
 }
 
 /**
- * Static catalog entry for a model provider. Mirrors the API-key-based
- * providers from pi's `providers.md` doc — subscription-only providers
- * (Codex via ChatGPT, Copilot, Claude Pro/Max) and cloud providers that
- * need OAuth/AWS auth (Bedrock, Vertex) are out of scope for the v0
- * Models settings page; operators wire those up via env vars on the
- * server host instead.
+ * One credential field a provider needs. Renders to a single form input
+ * in the Models settings page; on agent start each populated field is
+ * injected as `env[envVar]` on the spawned pi child. Cloud providers
+ * (Bedrock, Vertex, Azure, Cloudflare) declare multiple fields here;
+ * plain API-key providers declare exactly one.
  *
- * `envVar` is the env var pi expects for this provider's API key — set
- * by the runner on the spawned child when an agent uses this provider.
- * `models` is the curated default list shown in the UI; the operator
- * may enable any subset and append custom model IDs that aren't here.
+ * `key` is the storage/form key. `secret: true` masks the value in API
+ * responses and uses a password-style input. `required: true` makes
+ * `checkModelEnabled()` refuse to start the agent if the field is
+ * empty. `multiline: true` is for paste-blobs like Vertex's service
+ * account JSON (rendered as a textarea); the field is still injected
+ * via env, except Vertex's service-account-file path which the runtime
+ * materializes to disk — see `agent-manager.ts:resolveProviderEnv`.
+ */
+export interface CredField {
+  key: string;
+  envVar: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  placeholder?: string;
+  helpText?: string;
+  multiline?: boolean;
+}
+
+/**
+ * Static catalog entry for a model provider. Mirrors pi-coding-agent's
+ * provider surface (`packages/coding-agent/docs/providers.md`). OAuth
+ * subscription providers (Claude Pro/Max, ChatGPT Codex, GitHub Copilot)
+ * are out of scope for v0.
+ *
+ * `credentials` is 1+ fields the operator must supply. `models` is the
+ * curated default list shown in the UI; operators may enable any subset
+ * and append custom model IDs not in this list. `notes` shows under
+ * the card for provider-specific guidance (e.g. Bedrock alt auth modes).
  */
 export interface ProviderCatalogEntry {
   id: string;
   displayName: string;
-  envVar: string;
+  credentials: CredField[];
   models: string[];
+  notes?: string;
 }
 
 /**
  * Per-provider configuration as written to `<harnessRoot>/models.json`.
- * `apiKey` is plaintext in v0 (HLD §15); empty string === unset.
- * `enabledModels` is the full set of model IDs the operator has
- * authorized — agents may only select from this list. May contain
- * model IDs not in the catalog (custom-added).
+ * `credentials` keys mirror the catalog entry's `CredField.key`s.
+ * Plaintext on disk in v0 (HLD §15); empty/missing values === unset.
+ * `enabledModels` is the operator-curated allowlist — agents may only
+ * select from this list. May contain model IDs not in the catalog.
  */
 export interface ProviderConfig {
-  apiKey?: string;
+  credentials: Record<string, string>;
   enabledModels: string[];
 }
 

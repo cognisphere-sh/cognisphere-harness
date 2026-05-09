@@ -16,6 +16,7 @@ import {
 import { toast } from "sonner";
 import {
   endpoints,
+  type CredField,
   type ProviderInfo,
   type PutModelsBody,
 } from "@/lib/api";
@@ -25,19 +26,20 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 
 const CLEAR_SENTINEL = "__CLEAR__";
 
-interface DraftKeys {
-  /** undefined = unchanged; "" = pending clear; non-empty = pending new value. */
-  apiKey?: string;
+interface DraftState {
+  /** Per-field: undefined = unchanged; CLEAR_SENTINEL = pending clear; non-empty string = pending new value. */
+  credentials: Record<string, string | undefined>;
   enabledModels: Set<string>;
 }
 
 /**
- * Global Models settings — provider API keys + which models agents may
- * select. Backed by `<harnessRoot>/models.json`. Only models enabled
- * here appear in the per-agent provider/model dropdowns.
+ * Global Models settings — provider credentials + the model allowlist
+ * agents may select. Backed by `<harnessRoot>/models.json`. Saving here
+ * automatically reloads any running agent that uses a changed provider.
  */
 export function ModelsPage() {
   const { data, isLoading } = useQuery({
@@ -61,9 +63,9 @@ export function ModelsPage() {
         </div>
         <h1 className="text-lg font-semibold">Models</h1>
         <p className="text-xs text-muted-foreground">
-          API keys and the model allowlist that agents can choose from.
-          Saving here automatically reloads any running agent that uses
-          a changed provider — no server restart needed.
+          Provider credentials and the model allowlist agents can choose
+          from. Saving here automatically reloads any running agent that
+          uses a changed provider — no server restart needed.
         </p>
       </header>
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
@@ -75,17 +77,13 @@ export function ModelsPage() {
               <CardHeader>
                 <CardTitle className="text-sm">Plaintext storage</CardTitle>
                 <CardDescription className="mt-1">
-                  Provider API keys are stored unencrypted at{" "}
+                  Provider credentials are stored unencrypted at{" "}
                   <code>{data.path}</code>. v1 will encrypt at rest.
                 </CardDescription>
               </CardHeader>
             </Card>
             {data.providers.map((p) => (
-              <ProviderCard
-                key={p.id}
-                provider={p}
-                mask={data.mask}
-              />
+              <ProviderCard key={p.id} provider={p} mask={data.mask} />
             ))}
           </div>
         )}
@@ -102,17 +100,20 @@ function ProviderCard({
   mask: string;
 }) {
   const qc = useQueryClient();
-  const [draft, setDraft] = useState<DraftKeys>({
+  const [draft, setDraft] = useState<DraftState>({
+    credentials: {},
     enabledModels: new Set(provider.enabledModels),
   });
-  const [reveal, setReveal] = useState(false);
   const [customDraft, setCustomDraft] = useState("");
 
   // Re-sync from server after save.
   useEffect(() => {
-    setDraft({ enabledModels: new Set(provider.enabledModels) });
+    setDraft({
+      credentials: {},
+      enabledModels: new Set(provider.enabledModels),
+    });
     setCustomDraft("");
-  }, [provider.enabledModels, provider.apiKeyConfigured]);
+  }, [provider.enabledModels, provider.credentialValues]);
 
   const allModels = useMemo(() => {
     const set = new Set<string>(provider.catalogModels);
@@ -126,13 +127,30 @@ function ProviderCard({
   );
 
   const dirty = useMemo(() => {
-    if (draft.apiKey !== undefined) return true;
+    if (Object.keys(draft.credentials).length > 0) return true;
     if (draft.enabledModels.size !== initialEnabled.size) return true;
     for (const m of draft.enabledModels) {
       if (!initialEnabled.has(m)) return true;
     }
     return false;
   }, [draft, initialEnabled]);
+
+  // Effective values after applying draft, used for the configured-after-save check.
+  const requiredOk = useMemo(() => {
+    for (const f of provider.credentials) {
+      if (!f.required) continue;
+      const drafted = draft.credentials[f.key];
+      if (drafted === CLEAR_SENTINEL) return false;
+      if (drafted !== undefined) {
+        if (drafted.length === 0) return false;
+        continue;
+      }
+      // unchanged → falls back to server value
+      const current = provider.credentialValues[f.key] ?? "";
+      if (current.length === 0) return false;
+    }
+    return true;
+  }, [provider.credentials, provider.credentialValues, draft.credentials]);
 
   const save = useMutation({
     mutationFn: (body: PutModelsBody) => endpoints.putModels(body),
@@ -144,6 +162,15 @@ function ProviderCard({
     },
     onError: (e: Error) => toast.error(`save failed: ${e.message}`),
   });
+
+  const setField = (key: string, value: string | undefined) => {
+    setDraft((d) => {
+      const next = { ...d.credentials };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return { ...d, credentials: next };
+    });
+  };
 
   const toggleModel = (m: string) => {
     setDraft((d) => {
@@ -174,16 +201,24 @@ function ProviderCard({
   };
 
   const reset = () => {
-    setDraft({ enabledModels: new Set(provider.enabledModels) });
+    setDraft({
+      credentials: {},
+      enabledModels: new Set(provider.enabledModels),
+    });
     setCustomDraft("");
   };
 
   const onSave = () => {
+    const credentials: Record<string, string | null> = {};
+    for (const [k, v] of Object.entries(draft.credentials)) {
+      if (v === undefined) continue;
+      credentials[k] = v === CLEAR_SENTINEL ? null : v;
+    }
     const payload: PutModelsBody["providers"][string] = {
       enabledModels: [...draft.enabledModels],
     };
-    if (draft.apiKey !== undefined) {
-      payload.apiKey = draft.apiKey === CLEAR_SENTINEL ? null : draft.apiKey;
+    if (Object.keys(credentials).length > 0) {
+      payload.credentials = credentials;
     }
     save.mutate({ providers: { [provider.id]: payload } });
   };
@@ -201,10 +236,10 @@ function ProviderCard({
           <Badge variant="outline" className="font-mono">
             {provider.id}
           </Badge>
-          {provider.apiKeyConfigured ? (
-            <Badge variant="secondary">key set</Badge>
+          {provider.configured ? (
+            <Badge variant="secondary">configured</Badge>
           ) : (
-            <Badge variant="outline">no key</Badge>
+            <Badge variant="outline">incomplete</Badge>
           )}
           <div className="ml-auto flex items-center gap-2">
             <Button
@@ -229,61 +264,36 @@ function ProviderCard({
             </Button>
           </div>
         </div>
-        <CardDescription className="mt-1 font-mono text-[11px]">
-          env: {provider.envVar}
-        </CardDescription>
+        {provider.notes && (
+          <CardDescription className="mt-1 text-[11px]">
+            {provider.notes}
+          </CardDescription>
+        )}
       </CardHeader>
       <Separator />
       <div className="grid gap-5 p-4">
         <div>
           <div className="mb-2 flex items-center gap-2">
             <KeyRound className="size-3.5 text-primary/60" />
-            <h3 className="text-sm font-medium">API key</h3>
-          </div>
-          <div className="flex items-center gap-1">
-            <Input
-              type={reveal ? "text" : "password"}
-              placeholder={
-                provider.apiKeyConfigured ? mask : "(not set)"
-              }
-              value={
-                draft.apiKey === CLEAR_SENTINEL ? "" : (draft.apiKey ?? "")
-              }
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, apiKey: e.target.value }))
-              }
-              className="font-mono text-xs"
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setReveal((r) => !r)}
-              aria-label={reveal ? "hide" : "reveal"}
-            >
-              {reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-            </Button>
-            {provider.apiKeyConfigured && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-[11px] text-destructive hover:text-destructive"
-                onClick={() =>
-                  setDraft((d) => ({ ...d, apiKey: CLEAR_SENTINEL }))
-                }
-                disabled={draft.apiKey === CLEAR_SENTINEL}
-              >
-                Clear
-              </Button>
+            <h3 className="text-sm font-medium">Credentials</h3>
+            {!requiredOk && (
+              <span className="text-[11px] text-warning">
+                required field(s) missing
+              </span>
             )}
           </div>
-          {draft.apiKey !== undefined && draft.apiKey !== CLEAR_SENTINEL && (
-            <span className="text-[10px] text-warning">● new value</span>
-          )}
-          {draft.apiKey === CLEAR_SENTINEL && (
-            <span className="text-[10px] text-destructive">● will be cleared</span>
-          )}
+          <div className="grid gap-3">
+            {provider.credentials.map((field) => (
+              <CredentialField
+                key={field.key}
+                field={field}
+                serverValue={provider.credentialValues[field.key] ?? ""}
+                draftValue={draft.credentials[field.key]}
+                mask={mask}
+                onChange={(v) => setField(field.key, v)}
+              />
+            ))}
+          </div>
         </div>
 
         <Separator />
@@ -376,5 +386,108 @@ function ProviderCard({
         </div>
       </div>
     </Card>
+  );
+}
+
+function CredentialField({
+  field,
+  serverValue,
+  draftValue,
+  mask,
+  onChange,
+}: {
+  field: CredField;
+  serverValue: string;
+  draftValue: string | undefined;
+  mask: string;
+  onChange: (v: string | undefined) => void;
+}) {
+  const [reveal, setReveal] = useState(false);
+  const isSet = serverValue.length > 0;
+  const isCleared = draftValue === CLEAR_SENTINEL;
+  const hasNew =
+    draftValue !== undefined &&
+    draftValue !== CLEAR_SENTINEL &&
+    draftValue.length > 0;
+
+  // Display value in the input.
+  const inputValue =
+    draftValue === undefined
+      ? field.secret
+        ? "" // never echo the masked value into the input — placeholder shows "(set)"
+        : serverValue
+      : draftValue === CLEAR_SENTINEL
+        ? ""
+        : draftValue;
+
+  const placeholder = field.secret
+    ? isSet
+      ? mask
+      : field.placeholder ?? "(not set)"
+    : field.placeholder ?? "(not set)";
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2">
+        <Label className="text-xs">
+          {field.label}
+          {field.required && <span className="ml-1 text-destructive">*</span>}
+        </Label>
+        <code className="text-[10px] text-muted-foreground">{field.envVar}</code>
+        {hasNew && <span className="text-[10px] text-warning">● new value</span>}
+        {isCleared && (
+          <span className="text-[10px] text-destructive">● will clear</span>
+        )}
+      </div>
+      <div className="flex items-start gap-1">
+        {field.multiline ? (
+          <Textarea
+            value={inputValue}
+            placeholder={placeholder}
+            rows={6}
+            className="font-mono text-xs"
+            onChange={(e) =>
+              onChange(e.target.value.length === 0 ? undefined : e.target.value)
+            }
+          />
+        ) : (
+          <Input
+            type={field.secret && !reveal ? "password" : "text"}
+            value={inputValue}
+            placeholder={placeholder}
+            className="font-mono text-xs"
+            onChange={(e) =>
+              onChange(e.target.value.length === 0 ? undefined : e.target.value)
+            }
+          />
+        )}
+        {field.secret && !field.multiline && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => setReveal((r) => !r)}
+            aria-label={reveal ? "hide" : "reveal"}
+          >
+            {reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+          </Button>
+        )}
+        {isSet && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-[11px] text-destructive hover:text-destructive"
+            onClick={() => onChange(CLEAR_SENTINEL)}
+            disabled={isCleared}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+      {field.helpText && (
+        <p className="mt-1 text-[11px] text-muted-foreground">{field.helpText}</p>
+      )}
+    </div>
   );
 }

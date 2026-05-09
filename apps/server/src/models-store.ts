@@ -5,7 +5,7 @@
  *   {
  *     "providers": {
  *       "<providerId>": {
- *         "apiKey": "<plaintext>",
+ *         "credentials": { "<key>": "<plaintext>", ... },
  *         "enabledModels": ["<modelId>", ...]
  *       }
  *     }
@@ -75,12 +75,17 @@ function normalize(input: unknown): ModelsConfig {
   const out: Record<string, ProviderConfig> = {};
   for (const [pid, val] of Object.entries(raw.providers as Record<string, unknown>)) {
     if (!val || typeof val !== "object" || Array.isArray(val)) continue;
-    const v = val as { apiKey?: unknown; enabledModels?: unknown };
-    const apiKey = typeof v.apiKey === "string" ? v.apiKey : "";
+    const v = val as { credentials?: unknown; enabledModels?: unknown };
+    const credentials: Record<string, string> = {};
+    if (v.credentials && typeof v.credentials === "object" && !Array.isArray(v.credentials)) {
+      for (const [k, raw] of Object.entries(v.credentials as Record<string, unknown>)) {
+        if (typeof raw === "string" && raw.length > 0) credentials[k] = raw;
+      }
+    }
     const enabledModels = Array.isArray(v.enabledModels)
       ? v.enabledModels.filter((m): m is string => typeof m === "string")
       : [];
-    out[pid] = { apiKey, enabledModels };
+    out[pid] = { credentials, enabledModels };
   }
   return { providers: out };
 }
