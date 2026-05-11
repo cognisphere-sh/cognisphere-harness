@@ -327,6 +327,15 @@ export const endpoints = {
       file,
       { dir },
     ),
+  mkdir: (id: string, path: string) =>
+    api.post<{ path: string }>(`/api/agents/${id}/fs/mkdir`, undefined, {
+      path,
+    }),
+  deletePath: (id: string, path: string) =>
+    api.delete<{ path: string; isDir: boolean }>(
+      `/api/agents/${id}/fs/path`,
+      { path },
+    ),
 
   listThreads: (id: string) =>
     api.get<{ threads: ThreadRow[] }>(`/api/agents/${id}/sessions`),

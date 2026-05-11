@@ -137,6 +137,14 @@ function FilesPane({ agentId }: { agentId: string }) {
           agentId={agentId}
           selectedPath={selected}
           onSelectFile={(p) => setSelected(p)}
+          onPathDeleted={(p) => {
+            if (
+              selected &&
+              (selected === p || selected.startsWith(`${p}/`))
+            ) {
+              setSelected(null);
+            }
+          }}
         />
       </aside>
       <section

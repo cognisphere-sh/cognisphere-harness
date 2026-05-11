@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -25,6 +26,7 @@ import type { ServerConfig } from "../config.js";
  *   GET    /raw?path=         — raw bytes (download / open)
  *   POST   /upload?dir=       — upload a file (multipart/form-data, field: file)
  *   POST   /mkdir?path=       — create a directory
+ *   DELETE /path?path=        — remove a file or directory (recursive)
  *
  * `path` is always relative to the agent dir; "" and "." mean the root.
  */
@@ -169,6 +171,20 @@ export function filesRouter(am: AgentManager, cfg: ServerConfig): Hono {
     if (!abs) return c.json({ error: "path escapes agent dir" }, 400);
     mkdirSync(abs, { recursive: true });
     return c.json({ path: toRel(root, abs) });
+  });
+
+  r.delete("/:id/fs/path", (c) => {
+    const id = c.req.param("id");
+    if (!am.get(id)) return c.json({ error: "unknown agent" }, 404);
+    const root = agentDir(cfg, id);
+    const rel = c.req.query("path") ?? "";
+    const abs = resolveSafe(root, rel);
+    if (!abs) return c.json({ error: "path escapes agent dir" }, 400);
+    if (abs === root) return c.json({ error: "cannot delete agent root" }, 400);
+    if (!existsSync(abs)) return c.json({ error: "no such path" }, 404);
+    const st = statSync(abs);
+    rmSync(abs, { recursive: st.isDirectory(), force: false });
+    return c.json({ path: toRel(root, abs), isDir: st.isDirectory() });
   });
 
   return r;
