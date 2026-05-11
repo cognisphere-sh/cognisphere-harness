@@ -6,7 +6,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { adminRouter } from "./api/admin.js";
 import { agentsRouter } from "./api/agents.js";
-import { authRouter, makeAuthStore, requireAuth } from "./api/auth.js";
+import {
+  authRouter,
+  makeAuthStore,
+  redirectIfUnauthenticated,
+  requireAuth,
+} from "./api/auth.js";
 import { filesRouter } from "./api/files.js";
 import { modelsRouter } from "./api/models.js";
 import { secretsRouter } from "./api/secrets.js";
@@ -65,11 +70,12 @@ async function main(): Promise<void> {
     log.info({ dir: WEB_DIST_DIR }, "serving web UI");
     const indexHtml = readFileSync(resolve(WEB_DIST_DIR, "index.html"), "utf8");
     app.use("/assets/*", serveStatic({ root: relativeToCwd(WEB_DIST_DIR) }));
-    app.get("/", (c) => c.html(indexHtml));
     app.get("/login", (c) => c.html(indexHtml));
-    app.get("/settings", (c) => c.html(indexHtml));
-    app.get("/settings/*", (c) => c.html(indexHtml));
-    app.get("/agents/*", (c) => c.html(indexHtml));
+    const gate = redirectIfUnauthenticated(auth);
+    app.get("/", gate, (c) => c.html(indexHtml));
+    app.get("/settings", gate, (c) => c.html(indexHtml));
+    app.get("/settings/*", gate, (c) => c.html(indexHtml));
+    app.get("/agents/*", gate, (c) => c.html(indexHtml));
   } else {
     app.get("/", (c) =>
       c.json({

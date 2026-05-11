@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { ServerConfig } from "../config.js";
@@ -17,9 +17,12 @@ import type { Logger } from "../logger.js";
  * On first boot the file is auto-created with a single `admin / changeme`
  * entry that must be changed before exposing the server.
  *
- * Sessions are kept in memory: an opaque token (32 random bytes, hex-encoded)
- * is stored in the `pi_sid` cookie. Restarting the server invalidates every
- * session — sufficient for a single-user local tool.
+ * Sessions are stateless signed cookies: `<payload>.<sig>` where
+ * payload = base64url("<username>|<expiresAt>") and sig = base64url(
+ * hmac-sha256(secret, payload)). The 32-byte secret is persisted to
+ * `<harnessRoot>/session-key` on first boot, so sessions survive
+ * restarts. Logout just clears the cookie; there is no server-side
+ * revocation list — deleting `session-key` invalidates every session.
  */
 
 interface User {
@@ -38,19 +41,37 @@ const PLACEHOLDER: UsersFile = {
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const COOKIE_NAME = "pi_sid";
 
-interface Session {
-  username: string;
-  expiresAt: number;
-}
-
 export class AuthStore {
   private cache: UsersFile | null = null;
-  private sessions = new Map<string, Session>();
+  private readonly secret: Buffer;
 
   constructor(
     private readonly filePath: string,
+    private readonly keyPath: string,
     private readonly log: Logger,
-  ) {}
+  ) {
+    this.secret = this.loadOrCreateKey();
+  }
+
+  private loadOrCreateKey(): Buffer {
+    if (existsSync(this.keyPath)) {
+      const key = readFileSync(this.keyPath);
+      if (key.length < 32) {
+        throw new Error(
+          `session key ${this.keyPath} is too short (${key.length} bytes); expected at least 32`,
+        );
+      }
+      return key;
+    }
+    mkdirSync(dirname(this.keyPath), { recursive: true });
+    const key = randomBytes(32);
+    writeFileSync(this.keyPath, key, { mode: 0o600 });
+    this.log.info(
+      { path: this.keyPath },
+      "auth: generated new session-signing key",
+    );
+    return key;
+  }
 
   private load(): UsersFile {
     if (this.cache) return this.cache;
@@ -93,32 +114,45 @@ export class AuthStore {
   }
 
   createSession(username: string): string {
-    const token = randomBytes(32).toString("hex");
-    this.sessions.set(token, {
-      username,
-      expiresAt: Date.now() + SESSION_TTL_MS,
-    });
-    return token;
+    const expiresAt = Date.now() + SESSION_TTL_MS;
+    const payload = Buffer.from(`${username}|${expiresAt}`, "utf8").toString(
+      "base64url",
+    );
+    return `${payload}.${this.sign(payload)}`;
   }
 
   resolveSession(token: string | undefined): string | null {
     if (!token) return null;
-    const s = this.sessions.get(token);
-    if (!s) return null;
-    if (s.expiresAt < Date.now()) {
-      this.sessions.delete(token);
-      return null;
-    }
-    return s.username;
+    const dot = token.indexOf(".");
+    if (dot <= 0 || dot === token.length - 1) return null;
+    const payload = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const expected = this.sign(payload);
+    const a = Buffer.from(sig, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    if (a.length !== b.length) return null;
+    if (!timingSafeEqual(a, b)) return null;
+    // lastIndexOf so usernames containing "|" still parse — expiresAt is
+    // always the trailing field.
+    const decoded = Buffer.from(payload, "base64url").toString("utf8");
+    const pipe = decoded.lastIndexOf("|");
+    if (pipe <= 0) return null;
+    const username = decoded.slice(0, pipe);
+    const expiresAt = Number(decoded.slice(pipe + 1));
+    if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return null;
+    return username;
   }
 
-  destroySession(token: string | undefined): void {
-    if (token) this.sessions.delete(token);
+  private sign(payload: string): string {
+    return createHmac("sha256", this.secret)
+      .update(payload)
+      .digest("base64url");
   }
 }
 
 export function makeAuthStore(cfg: ServerConfig, log: Logger): AuthStore {
-  return new AuthStore(join(harnessRoot(cfg), "users.json"), log);
+  const root = harnessRoot(cfg);
+  return new AuthStore(join(root, "users.json"), join(root, "session-key"), log);
 }
 
 export function requireAuth(auth: AuthStore): MiddlewareHandler {
@@ -126,6 +160,23 @@ export function requireAuth(auth: AuthStore): MiddlewareHandler {
     const token = getCookie(c, COOKIE_NAME);
     const user = auth.resolveSession(token);
     if (!user) return c.json({ error: "unauthenticated" }, 401);
+    c.set("user", user);
+    await next();
+  };
+}
+
+/**
+ * For HTML page routes: bounce unauthenticated requests to `/login`
+ * instead of returning a 401, so a fresh browser tab lands on the
+ * login form rather than the SPA shell.
+ */
+export function redirectIfUnauthenticated(
+  auth: AuthStore,
+): MiddlewareHandler {
+  return async (c, next) => {
+    const token = getCookie(c, COOKIE_NAME);
+    const user = auth.resolveSession(token);
+    if (!user) return c.redirect("/login");
     c.set("user", user);
     await next();
   };
@@ -151,8 +202,6 @@ export function authRouter(auth: AuthStore): Hono {
   });
 
   r.post("/logout", (c) => {
-    const token = getCookie(c, COOKIE_NAME);
-    auth.destroySession(token);
     deleteCookie(c, COOKIE_NAME, { path: "/" });
     return c.json({ ok: true });
   });

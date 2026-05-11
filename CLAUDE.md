@@ -65,6 +65,22 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Keep the Docs in Sync
+
+**Project docs are part of the surface area. Update them with the code.**
+
+- [`docs/server.md`](docs/server.md) — agent-runner subsystem: process model, on-disk layout, components (`agent-manager`, `runner`, `queue`, `rpc`, `plugin-registry`, `secrets`, `models-store`, `models-catalog`, `types`, `config`, `logger`), key flows, design decisions.
+- [`docs/api.md`](docs/api.md) — HTTP surface: auth model, every route under `/healthz`, `/api/*`, `/admin/*`, `/webhook/*`, request/response shapes, error codes, conventions.
+
+**When to update which doc:**
+
+- Touching `apps/server/src/agent-manager.ts`, `runner.ts`, `queue.ts`, `rpc.ts`, `plugin-registry.ts`, `secrets.ts`, `models-*.ts`, `types.ts`, `config.ts`, `logger.ts`, or built-in plugin runtime contracts → update `docs/server.md`.
+- Touching anything under `apps/server/src/api/` or `apps/server/src/main.ts`'s route wiring → update `docs/api.md`.
+- Changes that span both (e.g. a new lifecycle method exposed via a new HTTP route) → update both.
+- On-disk layout changes (file names, secrets shape, models.json shape, agent dir structure) → update `docs/server.md` §3 and the relevant section in `docs/api.md` if it's reachable over HTTP.
+
+If the change is large enough to need a new section, add one. If a section becomes wrong, fix it in the same diff — stale docs are worse than missing docs.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

@@ -78,4 +78,8 @@ else
   warn "cargo (Rust) not found; install Rust (https://rustup.rs) and re-run, or install websearch by hand"
 fi
 
+# ── 4. websearch (Rust binary) ────────────────────────────────────────
+npm install -g agent-browser
+agent-browser install
+
 log "done. Restart the server so the runner picks up the new .venv."
