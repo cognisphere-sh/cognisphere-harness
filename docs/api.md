@@ -19,9 +19,10 @@ follow `apps/server/src/api/*.ts`.
 5. [Filesystem — `/api/agents/:id/fs/*`](#5-filesystem--apiagentsidfs)
 6. [Secrets — `/api/secrets`](#6-secrets--apisecrets)
 7. [Models — `/api/models`](#7-models--apimodels)
-8. [Admin chat — `/admin/*`](#8-admin-chat--admin)
-9. [Plugin webhooks — `/webhook/*`](#9-plugin-webhooks--webhook)
-10. [Conventions](#10-conventions)
+8. [Harness — `/api/harness`](#8-harness--apiharness)
+9. [Admin chat — `/admin/*`](#9-admin-chat--admin)
+10. [Plugin webhooks — `/webhook/*`](#10-plugin-webhooks--webhook)
+11. [Conventions](#11-conventions)
 
 ---
 
@@ -531,7 +532,43 @@ After saving, the route reloads every running agent whose
 
 ---
 
-## 8. Admin chat — `/admin/*`
+## 8. Harness — `/api/harness`
+
+Implemented in `apps/server/src/api/harness.ts`. Reads/writes the
+harness-wide settings file at `<harnessRoot>/harness.json`. Both routes
+require auth.
+
+The file currently has one key: `timezone` (IANA string). It feeds the
+`<harness-metadata>` block on every spawned batch and the scheduler
+plugin's cron timer.
+
+### `GET /api/harness`
+
+```json
+{ "timezone": "Asia/Kolkata", "path": "/.../harness.json" }
+```
+
+`timezone` defaults to `UTC` if the file is missing or malformed.
+
+### `PUT /api/harness`
+
+```json
+{ "timezone": "America/Los_Angeles" }
+```
+
+The route validates the string against `Intl.DateTimeFormat` (rejects
+unknown IANA ids with 400), writes the file, mutates `cfg.timezone` in
+place, and calls `reloadAgent` on every loaded agent so the new value
+reaches running runners and plugin contexts without a server bounce.
+Response:
+
+```json
+{ "ok": true, "timezone": "America/Los_Angeles", "restarted": ["dr-renu"] }
+```
+
+---
+
+## 9. Admin chat — `/admin/*`
 
 Implemented in `apps/server/src/api/admin.ts`. Both routes require
 auth. Predates the `/api` namespace; the SPA's chat view still calls
@@ -578,7 +615,7 @@ Errors:
 
 ---
 
-## 9. Plugin webhooks — `/webhook/*`
+## 10. Plugin webhooks — `/webhook/*`
 
 Implemented in `apps/server/src/api/webhook.ts`. **Not** gated by auth
 — this surface receives unauthenticated external traffic.
@@ -616,7 +653,7 @@ plugin CLI scripts. See [`server.md` §5.6](./server.md#56-plugin-script--in-pro
 
 ---
 
-## 10. Conventions
+## 11. Conventions
 
 ### JSON only
 
@@ -651,7 +688,7 @@ exposed in GET responses, so the client has nothing to send back.
 
 ### Auto-reload on settings PUTs
 
-Three PUTs trigger an auto-reload of affected agents instead of
+Five PUTs trigger an auto-reload of affected agents instead of
 requiring a manual restart:
 
 | Endpoint | Reload |
@@ -660,6 +697,7 @@ requiring a manual restart:
 | `PUT /api/agents/:id/plugins/:pid/config` | `reloadPlugin(id, pid)` (plugin bounce only) |
 | `PUT /api/secrets` | `reloadAgent(aid)` for every agent named in the body |
 | `PUT /api/models` | `reloadAgent(aid)` for every running agent whose `model.provider` matches a touched provider |
+| `PUT /api/harness` | `reloadAgent(aid)` for every loaded agent (timezone is captured at runner construction and in plugin contexts) |
 
 `reloadAgent` waits for active batches to drain before swapping (zero
 interruption); `reloadPlugin` stops/starts the one plugin in place

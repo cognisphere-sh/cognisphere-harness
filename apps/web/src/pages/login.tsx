@@ -38,8 +38,8 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-full items-center justify-center bg-background p-4">
-      <div className="absolute right-3 top-3">
+    <div className="relative flex min-h-full min-h-dvh w-full items-center justify-center bg-background p-4">
+      <div className="absolute right-3 top-3 z-10">
         <ThemeToggle />
       </div>
       <motion.div

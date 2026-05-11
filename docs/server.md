@@ -117,6 +117,7 @@ is `<rootDir>/<harnessId>`.
 
 ```
 <rootDir>/<harnessId>/
+├── harness.json                  ← harness-wide settings ({ timezone })
 ├── secrets.json                  ← plaintext, agent + plugin secret buckets
 ├── models.json                   ← per-provider credentials + enabled models
 ├── plugins/                      ← (optional) user-space plugins; user
@@ -170,7 +171,8 @@ Conventions worth knowing:
 
 ### 4.1 Config — `config.ts`
 
-Env-driven, no config file. Loaded once at boot:
+Env-driven for host/port/paths; harness-wide settings live in a file.
+Loaded once at boot:
 
 | Env var | Default | Used as |
 |---|---|---|
@@ -179,10 +181,16 @@ Env-driven, no config file. Loaded once at boot:
 | `PORT` | `7331` | HTTP listen port |
 | `BIND_HOST` | `127.0.0.1` | bind address |
 | `SERVER_BASE_URL` | `http://${BIND_HOST}:${PORT}` | used to build `PI_WEBHOOK_BASE` |
-| `TZ` | `UTC` | timezone for `<harness-metadata>` timestamps |
 
-Path helpers: `harnessRoot`, `agentsRoot`, `agentDir`, `userPluginsRoot`.
-`.env` files in cwd are loaded via `dotenv`.
+Timezone is read from `<harnessRoot>/harness.json` (shape:
+`{ "timezone": "<IANA>" }`; defaults to `UTC` if the file is missing or
+malformed). It feeds the `<harness-metadata>` block on every spawned
+batch and the scheduler plugin's cron timer. Edits land through
+`PUT /api/harness`, which writes the file, mutates `cfg.timezone` in
+place, and reloads every agent.
+
+Path helpers: `harnessRoot`, `harnessJsonFile`, `agentsRoot`, `agentDir`,
+`userPluginsRoot`. `.env` files in cwd are loaded via `dotenv`.
 
 ### 4.2 Logger — `logger.ts`
 
@@ -552,9 +560,11 @@ in progress", "conflict")`.
    check, required-credential check, Vertex SA materialization. Returns
    `providerEnv` to merge into the pi child's env.
 3. **Snapshot env secrets.** Call `secrets.resolveAll(agentId)`. This
-   throws if any key collides across buckets. Then check that no
-   secret-key shadows a `providerEnv` key (also throws). Merge into
-   `envSecrets = { ...providerEnv, ...resolvedSecrets }`.
+   throws if any key collides across buckets. Read non-secret env from
+   `agentJson.config` (a flat `Record<string, string>`; empty strings are
+   skipped). Check that no key in either source shadows `providerEnv`
+   or each other (collisions throw). Merge into
+   `envSecrets = { ...providerEnv, ...resolvedSecrets, ...agentConfigEnv }`.
 4. **Open the queue db.** Lazy — created on first start, reused across
    stop/start cycles.
 5. **Construct a fresh `AgentRunner`** with the envSecrets snapshot.
@@ -587,6 +597,7 @@ populated, no runner constructed.
    {
      agentId, agentDir, stateDir, inboxDir,
      config, secrets,
+     timezone: cfg.timezone,
      log: childLogger(`plugin:${agentId}:${pid}`),
      httpBaseUrl: <serverBaseUrl>/webhook/<agentId>/<pid>
                   (only if the plugin defines handleHttpRequest),
@@ -642,7 +653,9 @@ The shared type surface every component imports from. Notable shapes:
 - `AgentJson` — what `agent.json` deserializes to. `model: { provider,
   id, thinkingLevel? }`, `threadIdStrategy`, `maxConcurrentSlots?`,
   `maxAttempts?`, `runtime? = "subprocess"`, optional `secretsSchema`
-  for agent-level secrets.
+  for agent-level secrets, optional `config: Record<string, string>` for
+  non-secret env vars exposed to the pi runtime (merged into env on
+  start; collisions with secrets/provider env throw).
 - `AGENT_TOOLS` — frozen list of the 7 built-in pi tools (`read`,
   `bash`, `edit`, `write`, `grep`, `find`, `ls`).
 - `NotifyPayload` — what plugins pass to `ctx.notify()`. `text`,

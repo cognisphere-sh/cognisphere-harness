@@ -191,6 +191,18 @@ function SchemaField({
     );
   }
   if (t === "object") {
+    // No declared properties but an `additionalProperties` schema (e.g. a
+    // free-form `Record<string, string>` map like agent.json's `config`):
+    // fall through to a raw-JSON editor since the structured form has no
+    // way to render arbitrary keys.
+    const hasNoProps =
+      !schema.properties || Object.keys(schema.properties).length === 0;
+    const hasAdditional =
+      schema.additionalProperties !== undefined &&
+      schema.additionalProperties !== false;
+    if (hasNoProps && hasAdditional) {
+      return <JsonFallback value={value} onChange={onChange} />;
+    }
     return (
       <NestedObjectField
         schema={schema}

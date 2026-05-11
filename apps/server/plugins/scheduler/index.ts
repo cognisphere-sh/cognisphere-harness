@@ -29,12 +29,11 @@ interface SchedulesFile {
 export default class SchedulerPlugin implements Plugin {
   manifest: PluginManifest = {
     displayName: "Scheduler",
-    description: "Cron-style timers. Schedules persisted to state/schedules.json.",
+    description:
+      "Cron-style timers. Schedules persisted to state/schedules.json; fires use the harness timezone (see Settings).",
     configSchema: {
       type: "object",
-      properties: {
-        timezone: { type: "string", description: "IANA tz; default UTC" },
-      },
+      properties: {},
       additionalProperties: false,
     },
     secretsSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -72,8 +71,7 @@ export default class SchedulerPlugin implements Plugin {
 
   private reload(): void {
     if (!this.ctx) return;
-    const cfg = (this.ctx.config as { timezone?: string } | undefined) ?? {};
-    const tz = cfg.timezone ?? "UTC";
+    const tz = this.ctx.timezone;
     const data = JSON.parse(readFileSync(this.statePath, "utf8")) as SchedulesFile;
 
     for (const t of this.timers.values()) t.stop();

@@ -13,6 +13,7 @@ import {
   requireAuth,
 } from "./api/auth.js";
 import { filesRouter } from "./api/files.js";
+import { harnessRouter } from "./api/harness.js";
 import { modelsRouter } from "./api/models.js";
 import { secretsRouter } from "./api/secrets.js";
 import { maybeHandleWebhook } from "./api/webhook.js";
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   api.route("/agents", filesRouter(am, cfg));
   api.route("/secrets", secretsRouter(am, cfg, childLogger("secrets-api")));
   api.route("/models", modelsRouter(am, cfg, childLogger("models-api")));
+  api.route("/harness", harnessRouter(am, cfg, childLogger("harness-api")));
   app.route("/api", api);
 
   // /admin/* (predates web UI) — also gated by auth.

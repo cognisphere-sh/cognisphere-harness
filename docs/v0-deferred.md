@@ -145,7 +145,7 @@ keys are declared in each plugin's manifest:
 ```json
 {
   "dr-renu": {
-    "agent":    { "ELEVENLABS_API_KEY": "sk-...", "ELEVENLABS_VOICE_ID": "v-..." },
+    "agent":    { "ELEVENLABS_API_KEY": "sk-..." },
     "telegram": { "TELEGRAM_BOT_TOKEN": "123:ABC..." },
     "gmail":    { "GMAIL_OAUTH_TOKEN": "ya29...." }
   }
@@ -159,7 +159,10 @@ env. Top-level keys starting with `_` are ignored — used for inline docs
 in the auto-created placeholder. Plaintext on disk for v0 (encryption
 deferred). Restart the server after editing for changes to take effect.
 
-To declare agent-level secrets, add a `secretsSchema` to `agent.json`:
+To declare agent-level secrets, add a `secretsSchema` to `agent.json`.
+Non-secret env vars (model ids, voice ids, feature flags) go in a
+`config` map alongside it — they're flattened into the pi runtime env
+the same way, but don't live in `secrets.json`:
 
 ```json
 {
@@ -169,9 +172,12 @@ To declare agent-level secrets, add a `secretsSchema` to `agent.json`:
   "secretsSchema": {
     "type": "object",
     "properties": {
-      "ELEVENLABS_API_KEY":   { "type": "string", "description": "TTS/STT key" },
-      "ELEVENLABS_VOICE_ID":  { "type": "string" }
+      "ELEVENLABS_API_KEY": { "type": "string", "description": "TTS/STT key" }
     }
+  },
+  "config": {
+    "ELEVENLABS_VOICE_ID":  "v-...",
+    "ELEVENLABS_TTS_MODEL": "eleven_multilingual_v2"
   }
 }
 ```

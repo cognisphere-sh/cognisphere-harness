@@ -78,8 +78,8 @@ export function FileEditor({ agentId, path }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-3 border-b px-4 py-2">
-        <code className="truncate text-xs text-muted-foreground">{path}</code>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2">
+        <code className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{path}</code>
         {data && (
           <span className="text-[10px] text-muted-foreground">
             {formatBytes(data.size)}

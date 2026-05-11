@@ -7,19 +7,22 @@ import {
   ChevronRight,
   LogOut,
   Menu,
+  Moon,
   Settings,
+  Sun,
   X,
 } from "lucide-react";
 import { endpoints } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { ThemeToggle } from "@/components/theme-toggle";
 
 export function Sidebar() {
   const { id } = useParams<{ id: string }>();
   const { user, logout } = useAuth();
+  const { theme, toggle: toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -42,7 +45,7 @@ export function Sidebar() {
   const drawer = (
     <aside
       className={cn(
-        "flex h-full w-64 flex-col border-r border-border bg-card",
+        "flex h-full w-64 max-w-[85vw] flex-col border-r border-border bg-card",
         "shrink-0",
       )}
     >
@@ -115,14 +118,20 @@ export function Sidebar() {
           <Settings className="size-4" />
           Settings
         </NavLink>
-        <div className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-xs text-muted-foreground">
-          <span className="truncate">{user ?? ""}</span>
+        <div className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">{user ?? ""}</span>
           <ThemeToggle />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-foreground"
+            onClick={onLogout}
+            aria-label="logout"
+          >
+            <LogOut className="size-4" />
+            Logout
+          </Button>
         </div>
-        <Button variant="ghost" className="justify-start" onClick={onLogout}>
-          <LogOut className="size-4" />
-          Logout
-        </Button>
       </div>
     </aside>
   );

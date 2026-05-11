@@ -92,6 +92,12 @@ const AGENT_CONFIG_SCHEMA: JsonSchema = {
       enum: ["subprocess"],
       description: "Execution runtime (only `subprocess` in v0).",
     },
+    config: {
+      type: "object",
+      description:
+        "Non-secret env vars exposed to the pi runtime (e.g. ELEVENLABS_VOICE_ID). Free-form { string: string } map.",
+      additionalProperties: { type: "string" },
+    },
   },
 };
 

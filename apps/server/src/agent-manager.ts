@@ -364,15 +364,19 @@ export class AgentManager {
         this.log,
       );
       const resolvedSecrets = this.secrets.resolveAll(inst.id);
-      const collisions = Object.keys(resolvedSecrets).filter(
-        (k) => k in providerEnv,
-      );
+      const agentConfigEnv = resolveAgentConfigEnv(agentJson, inst.id);
+      const collisions = [
+        ...Object.keys(resolvedSecrets).filter((k) => k in providerEnv),
+        ...Object.keys(agentConfigEnv).filter(
+          (k) => k in providerEnv || k in resolvedSecrets,
+        ),
+      ];
       if (collisions.length > 0) {
         throw new Error(
-          `agent ${inst.id}: secret keys collide with provider env: ${collisions.join(", ")}`,
+          `agent ${inst.id}: env keys collide across provider/secrets/config: ${collisions.join(", ")}`,
         );
       }
-      envSecrets = { ...providerEnv, ...resolvedSecrets };
+      envSecrets = { ...providerEnv, ...resolvedSecrets, ...agentConfigEnv };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, agent: inst.id }, "agent spec parse/validate failed");
@@ -549,6 +553,7 @@ export class AgentManager {
       inboxDir,
       config,
       secrets: resolvedSecrets,
+      timezone: this.cfg.timezone,
       log,
       httpBaseUrl: pluginInstance.handleHttpRequest
         ? `${this.cfg.serverBaseUrl}/webhook/${inst.id}/${pluginId}`
@@ -756,6 +761,35 @@ function checkRequiredSecrets(
   if (missing.length > 0) {
     throw new Error(`${label}: missing secrets: ${missing.join(", ")}`);
   }
+}
+
+/**
+ * Validate and return the env-vars map from `agent.json.config`. Empty if
+ * the field is absent. Throws if the field is present but malformed so a
+ * typo in agent.json surfaces at start instead of silently dropping values.
+ */
+function resolveAgentConfigEnv(
+  agentJson: AgentJson,
+  agentId: string,
+): Record<string, string> {
+  const raw = agentJson.config;
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(
+      `agent ${agentId}: agent.json "config" must be an object mapping env-var names to string values`,
+    );
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v !== "string") {
+      throw new Error(
+        `agent ${agentId}: agent.json config.${k} must be a string (got ${typeof v})`,
+      );
+    }
+    if (v.length === 0) continue;
+    out[k] = v;
+  }
+  return out;
 }
 
 /** Typed lookup for the admin plugin's `deliver()`. Null unless the plugin

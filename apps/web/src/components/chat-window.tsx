@@ -125,21 +125,26 @@ export function ChatWindow({ agentId }: Props) {
   };
 
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[260px_1fr]">
+    <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[minmax(220px,22%)_1fr]">
       <ThreadList
         threads={threads}
         loading={threadsLoading}
         selected={selected}
         onSelect={setSelected}
       />
-      <div className="flex h-full min-h-0 flex-col border-l">
-        <div className="flex shrink-0 items-center gap-3 border-b px-4 py-2 text-xs text-muted-foreground">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col lg:border-l">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-xs text-muted-foreground">
+          <MobileThreadPicker
+            threads={threads}
+            selected={selected}
+            onSelect={setSelected}
+          />
           {selected ? (
             <>
-              <MessagesSquare className="size-4" />
-              <code className="truncate">{selected.threadId}</code>
+              <MessagesSquare className="hidden size-4 lg:inline" />
+              <code className="min-w-0 truncate">{selected.threadId}</code>
               <span className="text-[10px]">·</span>
-              <code className="truncate">{selected.sessionId}</code>
+              <code className="min-w-0 truncate">{selected.sessionId}</code>
             </>
           ) : (
             <span>No session selected</span>
@@ -193,7 +198,7 @@ export function ChatWindow({ agentId }: Props) {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Message the agent…"
               rows={1}
-              className={cn("max-h-40 min-h-9 resize-none")}
+              className={cn("max-h-40 min-h-9 min-w-0 flex-1 resize-none")}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.metaKey) {
                   e.preventDefault();
@@ -232,6 +237,45 @@ export function ChatWindow({ agentId }: Props) {
         </div>
       </div>
     </div>
+  );
+}
+
+function MobileThreadPicker({
+  threads,
+  selected,
+  onSelect,
+}: {
+  threads: ThreadRow[];
+  selected: { threadId: string; sessionId: string } | null;
+  onSelect: (s: { threadId: string; sessionId: string }) => void;
+}) {
+  if (threads.length === 0) return null;
+  const value = selected ? `${selected.threadId}::${selected.sessionId}` : "";
+  return (
+    <label className="flex min-w-0 flex-1 items-center gap-1.5 lg:hidden">
+      <MessagesSquare className="size-4 shrink-0" />
+      <select
+        value={value}
+        onChange={(e) => {
+          const [threadId, sessionId] = e.target.value.split("::");
+          if (threadId && sessionId) onSelect({ threadId, sessionId });
+        }}
+        className="min-w-0 flex-1 truncate rounded-md border border-input bg-background px-2 py-1 font-mono text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="select thread"
+      >
+        {!selected && <option value="">— pick a thread —</option>}
+        {threads.map((t) =>
+          t.sessions.slice(0, 5).map((s) => (
+            <option
+              key={`${t.threadId}::${s.sessionId}`}
+              value={`${t.threadId}::${s.sessionId}`}
+            >
+              {t.threadId.slice(0, 12)}… / {s.sessionId.slice(0, 10)}…
+            </option>
+          )),
+        )}
+      </select>
+    </label>
   );
 }
 

@@ -9,6 +9,7 @@ import {
 } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   Bot,
   Copy,
   FolderTree,
@@ -43,7 +44,7 @@ export function AgentPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b px-4 py-3 sm:px-6">
+      <header className="flex flex-wrap items-center gap-3 border-b py-3 pl-14 pr-4 md:px-6">
         <div className="grid size-8 place-items-center rounded-md bg-primary/10 text-primary">
           <Bot className="size-4" />
         </div>
@@ -98,7 +99,7 @@ function SubTabs({ agentId }: { agentId: string }) {
     { to: `/agents/${agentId}/settings`, key: "settings", label: "Settings", icon: Settings },
   ];
   return (
-    <nav className="flex shrink-0 gap-1 border-b px-3 py-1 sm:px-4">
+    <nav className="flex shrink-0 gap-1 overflow-x-auto border-b px-3 py-1 sm:px-4">
       {tabs.map((t) => {
         const active = loc.pathname.startsWith(t.to);
         const Icon = t.icon;
@@ -107,7 +108,7 @@ function SubTabs({ agentId }: { agentId: string }) {
             key={t.key}
             to={t.to}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              "inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
               active
                 ? "bg-primary/10 text-primary"
                 : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -125,17 +126,39 @@ function SubTabs({ agentId }: { agentId: string }) {
 function FilesPane({ agentId }: { agentId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   return (
-    <div className="grid h-full grid-cols-1 md:grid-cols-[280px_1fr]">
-      <aside className="min-h-0 overflow-y-auto border-r bg-card/50">
+    <div className="flex h-full min-h-0 md:grid md:grid-cols-[minmax(220px,28%)_1fr]">
+      <aside
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto border-r bg-card/50 md:flex-none",
+          selected && "hidden md:block",
+        )}
+      >
         <FileTree
           agentId={agentId}
           selectedPath={selected}
           onSelectFile={(p) => setSelected(p)}
         />
       </aside>
-      <section className="min-h-0">
+      <section
+        className={cn(
+          "min-h-0 min-w-0 flex-1 flex-col md:flex",
+          selected ? "flex" : "hidden md:flex",
+        )}
+      >
         {selected ? (
-          <FileEditor agentId={agentId} path={selected} />
+          <>
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="flex shrink-0 items-center gap-1.5 border-b px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent md:hidden"
+            >
+              <ArrowLeft className="size-3.5" />
+              Back to files
+            </button>
+            <div className="min-h-0 flex-1">
+              <FileEditor agentId={agentId} path={selected} />
+            </div>
+          </>
         ) : (
           <div className="grid h-full place-items-center text-sm text-muted-foreground">
             Select a file from the tree to open it.
@@ -190,7 +213,7 @@ function PluginsPane({ agentId }: { agentId: string }) {
 function ErrorStrip({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-3 border-y border-destructive/30 bg-destructive/10 px-4 py-2 text-destructive sm:px-6">
-      <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-words text-xs">
+      <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-words text-xs">
         {message}
       </pre>
       <Button

@@ -27,6 +27,14 @@ export interface AgentJson {
    * required, regardless of `required`.
    */
   secretsSchema?: JsonSchema;
+  /**
+   * Non-secret agent-level env vars exposed to the pi runtime. Use this
+   * for values that aren't sensitive (model ids, voice ids, feature
+   * toggles) so they don't end up in `secrets.json`. Keys are flattened
+   * into the pi child's env on every spawn alongside agent secrets and
+   * provider env; collisions across these three sources throw at start.
+   */
+  config?: Record<string, string>;
 }
 
 /** All 7 built-in pi tools, fixed for every harness agent. */
@@ -82,6 +90,10 @@ export interface PluginInstanceContext {
   inboxDir: string;
   config: unknown;
   secrets: Record<string, string>;
+  /** Harness-wide IANA timezone (from `<harnessRoot>/harness.json`).
+   *  Plugins that schedule or render times should use this rather than
+   *  declaring their own `timezone` config field. */
+  timezone: string;
   notify(name: string, payload: NotifyPayload): void;
   httpBaseUrl?: string;
   log: Logger;

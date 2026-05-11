@@ -17,7 +17,7 @@ export function IndexPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b px-4 py-3 sm:px-6">
+      <header className="border-b py-3 pl-14 pr-4 md:px-6">
         <h1 className="text-lg font-semibold">Agents</h1>
         <p className="text-xs text-muted-foreground">
           Pick an agent to manage files, chat, or inspect the queue.

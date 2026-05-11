@@ -1,17 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   ChevronRight,
+  Clock,
   KeyRound,
-  Lock,
+  Loader2,
   Palette,
+  Save,
   ShieldAlert,
   Sparkles,
-  Users,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
 import { endpoints } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
 import {
   Card,
@@ -20,8 +22,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 /**
  * Global / app-level settings page. Per-agent + per-plugin configuration
@@ -29,25 +32,15 @@ import { Button } from "@/components/ui/button";
  * `<AgentSettingsPane>`.
  */
 export function SettingsPage() {
-  const { user } = useAuth();
   const { theme, set } = useTheme();
   const { data: agents } = useQuery({
     queryKey: ["agents"],
     queryFn: endpoints.listAgents,
   });
-  const { data: secrets } = useQuery({
-    queryKey: ["secrets"],
-    queryFn: endpoints.getSecrets,
-  });
-
-  const harnessRoot = secrets?.path
-    ? secrets.path.replace(/\/secrets\.json$/, "")
-    : null;
-  const usersPath = harnessRoot ? `${harnessRoot}/users.json` : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-b px-4 py-3 sm:px-6">
+      <header className="border-b py-3 pl-14 pr-4 md:px-6">
         <h1 className="text-lg font-semibold">Settings</h1>
         <p className="text-xs text-muted-foreground">
           App-level — for agent and plugin configuration, open the agent's
@@ -82,24 +75,7 @@ export function SettingsPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Users className="size-4 text-primary/80" />
-                <CardTitle>Account</CardTitle>
-              </div>
-              <CardDescription>Logged-in user</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2 text-sm">
-                <Badge variant="secondary">{user ?? "—"}</Badge>
-                <span className="text-xs text-muted-foreground">
-                  edit <code>{usersPath ?? "users.json"}</code> and restart
-                  to manage accounts
-                </span>
-              </div>
-            </CardContent>
-          </Card>
+          <TimezoneCard />
 
           <Link to="/settings/models" className="lg:col-span-2 block">
             <Card className="group cursor-pointer transition-colors hover:bg-accent/30">
@@ -117,31 +93,6 @@ export function SettingsPage() {
             </Card>
           </Link>
 
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Lock className="size-4 text-primary/80" />
-                <CardTitle>Storage</CardTitle>
-              </div>
-              <CardDescription>
-                Where the harness keeps its state on disk
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-2 text-sm">
-              <KV label="Harness root" value={harnessRoot ?? "—"} />
-              <KV
-                label="Secrets file"
-                value={secrets?.path ?? "—"}
-                hint="plaintext in v0; encryption in v1"
-              />
-              <KV label="Users file" value={usersPath ?? "—"} />
-              <KV
-                label="Agent buckets"
-                value={`${agents?.agents.length ?? 0} agent(s) loaded`}
-              />
-            </CardContent>
-          </Card>
-
           <Card className="lg:col-span-2 border-warning/40 bg-warning/5">
             <CardHeader className="flex-row items-start gap-3">
               <ShieldAlert className="mt-0.5 size-4 text-warning" />
@@ -150,9 +101,10 @@ export function SettingsPage() {
                   Plaintext secrets on disk
                 </CardTitle>
                 <CardDescription className="mt-1">
-                  All plugin and agent secrets are stored unencrypted at the
-                  path above. Restrict access to that file at the OS level
-                  until v1 ships encryption.
+                  All plugin and agent secrets are stored unencrypted in
+                  the harness root's <code>secrets.json</code>. Restrict
+                  access to that file at the OS level until v1 ships
+                  encryption.
                 </CardDescription>
               </div>
             </CardHeader>
@@ -198,22 +150,116 @@ export function SettingsPage() {
   );
 }
 
-function KV({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-}) {
+function TimezoneCard() {
+  const qc = useQueryClient();
+  const { data: harness } = useQuery({
+    queryKey: ["harness"],
+    queryFn: endpoints.getHarness,
+  });
+  const [draft, setDraft] = useState<string>("");
+
+  useEffect(() => {
+    if (harness?.timezone) setDraft(harness.timezone);
+  }, [harness?.timezone]);
+
+  const tzOptions = useMemo(() => listIanaTimezones(), []);
+  const tzSet = useMemo(() => new Set(tzOptions), [tzOptions]);
+
+  const save = useMutation({
+    mutationFn: (tz: string) => endpoints.putHarness({ timezone: tz }),
+    onSuccess: (res) => {
+      toast.success(
+        res.restarted.length > 0
+          ? `timezone saved · reloaded ${res.restarted.length} agent(s)`
+          : "timezone saved",
+      );
+      qc.invalidateQueries({ queryKey: ["harness"] });
+      qc.invalidateQueries({ queryKey: ["agents"] });
+    },
+    onError: (e: Error) => toast.error(`save failed: ${e.message}`),
+  });
+
+  const trimmed = draft.trim();
+  const isValid = tzSet.has(trimmed);
+  const dirty = !!harness && trimmed.length > 0 && trimmed !== harness.timezone;
+
   return (
-    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-      <span className="text-xs text-muted-foreground">{label}:</span>
-      <code className="break-all text-xs">{value}</code>
-      {hint && (
-        <span className="text-[10px] text-muted-foreground">· {hint}</span>
-      )}
-    </div>
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Clock className="size-4 text-primary/80" />
+          <CardTitle>Timezone</CardTitle>
+        </div>
+        <CardDescription>
+          IANA timezone used for <code>&lt;harness-metadata&gt;</code>{" "}
+          timestamps and scheduler cron firing. Saving reloads every
+          running agent.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-end gap-2">
+        <div className="flex min-w-[14rem] flex-1 flex-col gap-1.5">
+          <Label className="font-mono text-xs" htmlFor="harness-tz-input">
+            timezone
+          </Label>
+          <Input
+            id="harness-tz-input"
+            list="harness-tz-options"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Search… e.g. Asia/Kolkata"
+            autoComplete="off"
+            className="font-mono text-xs"
+          />
+          <datalist id="harness-tz-options">
+            {tzOptions.map((tz) => (
+              <option key={tz} value={tz} />
+            ))}
+          </datalist>
+          {trimmed.length > 0 && !isValid && (
+            <span className="text-[11px] text-warning">
+              ● not a recognized IANA timezone
+            </span>
+          )}
+        </div>
+        <Button
+          size="sm"
+          disabled={!dirty || !isValid || save.isPending}
+          onClick={() => save.mutate(trimmed)}
+        >
+          {save.isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Save className="size-4" />
+          )}
+          Save
+        </Button>
+      </CardContent>
+    </Card>
   );
+}
+
+/** IANA timezones from the browser when available; small fallback list
+ *  otherwise (older browsers). */
+function listIanaTimezones(): string[] {
+  const IntlAny = Intl as unknown as {
+    supportedValuesOf?: (key: string) => string[];
+  };
+  if (typeof IntlAny.supportedValuesOf === "function") {
+    try {
+      return IntlAny.supportedValuesOf("timeZone");
+    } catch {
+      // fall through
+    }
+  }
+  return [
+    "UTC",
+    "America/Los_Angeles",
+    "America/New_York",
+    "Europe/London",
+    "Europe/Berlin",
+    "Asia/Kolkata",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+  ];
 }

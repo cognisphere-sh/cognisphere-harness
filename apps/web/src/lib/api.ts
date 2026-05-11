@@ -128,11 +128,17 @@ export interface AgentDetail {
     maxConcurrentSlots?: number;
     maxAttempts?: number;
     runtime?: string;
+    config?: Record<string, string>;
   } | null;
   installedPlugins: string[];
   state: AgentState;
   error: string | null;
   changedAt: number;
+}
+
+export interface HarnessSettings {
+  timezone: string;
+  path: string;
 }
 
 export interface PluginManifest {
@@ -352,6 +358,13 @@ export const endpoints = {
   getModels: () => api.get<ModelsView>("/api/models"),
   putModels: (body: PutModelsBody) =>
     api.put<{ ok: true; restartRequired: boolean }>("/api/models", body),
+
+  getHarness: () => api.get<HarnessSettings>("/api/harness"),
+  putHarness: (body: { timezone: string }) =>
+    api.put<{ ok: true; timezone: string; restarted: string[] }>(
+      "/api/harness",
+      body,
+    ),
 
   putAgentConfig: (id: string, config: unknown) =>
     api.put<{ ok: true; restartRequired: boolean }>(

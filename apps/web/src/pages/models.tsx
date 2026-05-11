@@ -49,7 +49,7 @@ export function ModelsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-b px-4 py-3 sm:px-6">
+      <header className="border-b py-3 pl-14 pr-4 md:px-6">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Link
             to="/settings"
