@@ -22,7 +22,7 @@ write() {
 
 case "$cmd" in
   add)
-    name=""; cron=""; text=""; tid=""; chan=""
+    name=""; cron=""; text=""; tid=""; chan=""; once="false"
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
@@ -30,15 +30,18 @@ case "$cmd" in
         --text) text="$2"; shift 2 ;;
         --thread-id) tid="$2"; shift 2 ;;
         --channel) chan="$2"; shift 2 ;;
+        --once) once="true"; shift ;;
         *) echo "unknown flag: $1" >&2; exit 2 ;;
       esac
     done
     [ -n "$name" ] && [ -n "$cron" ] && [ -n "$text" ] && [ -n "$tid" ] || {
-      echo "usage: scheduler-cli add --name N --cron C --text T --thread-id ID [--channel CH]" >&2
+      echo "usage: scheduler-cli add --name N --cron C --text T --thread-id ID [--channel CH] [--once]" >&2
       exit 2
     }
-    new="$(jq -nc --arg n "$name" --arg c "$cron" --arg t "$text" --arg tid "$tid" --arg ch "$chan" \
-      '{name:$n,cron:$c,text:$t,threadId:$tid} + (if $ch=="" then {} else {channelId:$ch} end)')"
+    new="$(jq -nc --arg n "$name" --arg c "$cron" --arg t "$text" --arg tid "$tid" --arg ch "$chan" --argjson once "$once" \
+      '{name:$n,cron:$c,text:$t,threadId:$tid}
+       + (if $ch=="" then {} else {channelId:$ch} end)
+       + (if $once then {onetime:true} else {} end)')"
     body="$(jq -c --argjson new "$new" \
       '.schedules |= ((map(select(.name != $new.name))) + [$new])' "$state")"
     write "$body"

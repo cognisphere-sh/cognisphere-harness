@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { existsSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   Plugin,
@@ -14,6 +14,9 @@ interface Schedule {
   threadId: string;
   channelId?: string;
   paused?: boolean;
+  /** One-shot: after the first fire, the plugin marks the schedule
+   *  `paused: true` so it won't fire again. */
+  onetime?: boolean;
 }
 
 interface SchedulesFile {
@@ -43,6 +46,7 @@ export default class SchedulerPlugin implements Plugin {
   private timers = new Map<string, Cron>();
   private statePath = "";
   private fsWatcher: ReturnType<typeof watch> | null = null;
+  private reloadTimer: NodeJS.Timeout | null = null;
 
   async start(ctx: PluginInstanceContext): Promise<void> {
     this.ctx = ctx;
@@ -51,12 +55,20 @@ export default class SchedulerPlugin implements Plugin {
       writeFileSync(this.statePath, JSON.stringify({ schedules: [] }, null, 2));
     }
     this.reload();
-    this.fsWatcher = watch(this.statePath, { persistent: false }, () => {
-      try {
-        this.reload();
-      } catch (err) {
-        ctx.log.error({ err }, "scheduler reload failed");
-      }
+    // Watch the parent dir, not the file: atomic writes (mktemp + rename)
+    // replace the inode, and `fs.watch(file)` stays attached to the unlinked
+    // inode and never fires again. Watching the dir survives renames.
+    this.fsWatcher = watch(ctx.stateDir, { persistent: false }, (_event, fname) => {
+      if (fname !== "schedules.json") return;
+      if (this.reloadTimer) return;
+      this.reloadTimer = setTimeout(() => {
+        this.reloadTimer = null;
+        try {
+          this.reload();
+        } catch (err) {
+          ctx.log.error({ err }, "scheduler reload failed");
+        }
+      }, 50);
     });
     ctx.log.info({ count: this.timers.size }, "scheduler started");
   }
@@ -64,6 +76,10 @@ export default class SchedulerPlugin implements Plugin {
   async stop(): Promise<void> {
     this.fsWatcher?.close();
     this.fsWatcher = null;
+    if (this.reloadTimer) {
+      clearTimeout(this.reloadTimer);
+      this.reloadTimer = null;
+    }
     for (const t of this.timers.values()) t.stop();
     this.timers.clear();
     this.ctx = undefined;
@@ -102,5 +118,32 @@ export default class SchedulerPlugin implements Plugin {
       doNotSteer: true,
       metadata: { ScheduleName: s.name, Cron: s.cron },
     });
+    if (s.onetime) {
+      this.timers.get(s.name)?.stop();
+      this.timers.delete(s.name);
+      this.pauseInFile(s.name);
+    }
+  }
+
+  /** Read-modify-write `schedules.json` atomically, marking `name` paused.
+   *  Triggers our own dir watcher → reload, but reload is idempotent. */
+  private pauseInFile(name: string): void {
+    if (!this.ctx) return;
+    try {
+      const data = JSON.parse(readFileSync(this.statePath, "utf8")) as SchedulesFile;
+      let changed = false;
+      for (const s of data.schedules ?? []) {
+        if (s.name === name && !s.paused) {
+          s.paused = true;
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      const tmp = `${this.statePath}.tmp-${process.pid}-${Date.now()}`;
+      writeFileSync(tmp, JSON.stringify(data, null, 2));
+      renameSync(tmp, this.statePath);
+    } catch (err) {
+      this.ctx.log.error({ err, name }, "scheduler one-time pause-after-fire failed");
+    }
   }
 }
