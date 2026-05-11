@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
+  FileText,
   Loader2,
   MessagesSquare,
   Paperclip,
   Square,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { endpoints, type ThreadRow } from "@/lib/api";
@@ -65,6 +67,7 @@ export function ChatWindow({ agentId }: Props) {
   );
 
   const [input, setInput] = useState("");
+  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
@@ -84,14 +87,28 @@ export function ChatWindow({ agentId }: Props) {
   };
 
   const send = useMutation({
-    mutationFn: (text: string) =>
-      endpoints.sendChat(agentId, text, selected?.threadId),
+    mutationFn: async ({ text, files }: { text: string; files: File[] }) => {
+      const uploaded: string[] = [];
+      for (const f of files) {
+        const r = await endpoints.uploadFile(agentId, f, "plugins/admin/inbox");
+        uploaded.push(r.path);
+      }
+      const body =
+        uploaded.length === 0
+          ? text
+          : [text, "attachments:", ...uploaded.map((p) => `- ${p}`)]
+              .filter(Boolean)
+              .join("\n");
+      return endpoints.sendChat(agentId, body, selected?.threadId);
+    },
     onSuccess: () => {
       setInput("");
+      setStagedFiles([]);
       qc.invalidateQueries({ queryKey: ["threads", agentId] });
       qc.invalidateQueries({
         queryKey: ["session", agentId, selected?.threadId, selected?.sessionId],
       });
+      qc.invalidateQueries({ queryKey: ["tree", agentId] });
     },
     onError: (e: Error) => toast.error(`send failed: ${e.message}`),
   });
@@ -107,22 +124,22 @@ export function ChatWindow({ agentId }: Props) {
     },
   });
 
-  const upload = useMutation({
-    mutationFn: (file: File) => endpoints.uploadFile(agentId, file, "uploads"),
-    onSuccess: (r) => {
-      const ref = `uploads/${r.name}`;
-      setInput((prev) => (prev ? `${prev} ${ref}` : ref));
-      toast.success(`uploaded ${ref}`);
-      qc.invalidateQueries({ queryKey: ["tree", agentId] });
-    },
-    onError: (e: Error) => toast.error(`upload failed: ${e.message}`),
-  });
-
   const onSend = () => {
     const text = input.trim();
-    if (!text) return;
-    send.mutate(text);
+    if (!text && stagedFiles.length === 0) return;
+    send.mutate({ text, files: stagedFiles });
   };
+
+  const onFilesPicked = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setStagedFiles((prev) => [...prev, ...Array.from(files)]);
+  };
+
+  const removeStaged = (idx: number) => {
+    setStagedFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const canSend = (!!input.trim() || stagedFiles.length > 0) && !send.isPending;
 
   return (
     <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[minmax(220px,22%)_1fr]">
@@ -169,14 +186,26 @@ export function ChatWindow({ agentId }: Props) {
           )}
         </div>
         <div className="shrink-0 border-t bg-card p-3">
+          {stagedFiles.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {stagedFiles.map((f, i) => (
+                <StagedFileChip
+                  key={`${f.name}-${i}`}
+                  file={f}
+                  onRemove={() => removeStaged(i)}
+                  disabled={send.isPending}
+                />
+              ))}
+            </div>
+          )}
           <div className="flex items-end gap-2">
             <input
               ref={fileInput}
               type="file"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) upload.mutate(f);
+                onFilesPicked(e.target.files);
                 e.target.value = "";
               }}
             />
@@ -184,14 +213,10 @@ export function ChatWindow({ agentId }: Props) {
               variant="outline"
               size="icon"
               onClick={() => fileInput.current?.click()}
-              disabled={upload.isPending}
-              aria-label="upload file"
+              disabled={send.isPending}
+              aria-label="attach file"
             >
-              {upload.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Paperclip className="size-4" />
-              )}
+              <Paperclip className="size-4" />
             </Button>
             <Textarea
               value={input}
@@ -210,7 +235,7 @@ export function ChatWindow({ agentId }: Props) {
               variant={send.isPending ? "secondary" : "default"}
               size="icon"
               onClick={() => (send.isPending ? null : onSend())}
-              disabled={!input.trim() || send.isPending}
+              disabled={!canSend}
               aria-label="send"
             >
               {send.isPending ? (
@@ -231,13 +256,52 @@ export function ChatWindow({ agentId }: Props) {
             </Button>
           </div>
           <div className="px-1 pt-1 text-[10px] text-muted-foreground">
-            Enter to send · Shift+Enter for newline · 📎 uploads to{" "}
-            <code>uploads/</code>
+            Enter to send · Shift+Enter for newline · 📎 attaches to{" "}
+            <code>plugins/admin/inbox/</code>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function StagedFileChip({
+  file,
+  onRemove,
+  disabled,
+}: {
+  file: File;
+  onRemove: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex max-w-xs items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs">
+      <div className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+        <FileText className="size-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium">{file.name}</div>
+        <div className="text-[10px] text-muted-foreground">
+          {formatFileSize(file.size)}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={disabled}
+        aria-label={`remove ${file.name}`}
+        className="grid size-5 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+      >
+        <X className="size-3" />
+      </button>
+    </div>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function MobileThreadPicker({
