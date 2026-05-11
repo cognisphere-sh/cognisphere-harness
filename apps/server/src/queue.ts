@@ -65,6 +65,7 @@ function rowToMessage(row: QueuedRow): BatchMessage {
     text: row.text,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     isSilent: row.is_silent === 1,
+    attempts: row.attempts,
   };
 }
 

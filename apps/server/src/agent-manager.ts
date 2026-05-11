@@ -56,6 +56,12 @@ export interface AgentInstance {
    *  `stopAgent` leaves entries with state="stopped" so the UI can still
    *  render them. */
   plugins: Map<string, PluginEntry>;
+  /** Non-null when a config/secrets edit landed while batches were active.
+   *  The runner was paused (no new threads dequeued) and is awaiting
+   *  natural drain; once `runner.activeCount` hits 0 the manager swaps in
+   *  a fresh runner with the new config. Cleared synchronously when the
+   *  swap fires. */
+  staleReason: string | null;
 }
 
 export type LifecycleErrorCode = "not_found" | "conflict";
@@ -73,11 +79,15 @@ export class LifecycleError extends Error {
  * server picks them up at boot.
  *
  * Lifecycle:
- *   - boot()              → load every agent dir; failed agents stay listed.
- *   - manualStart(id)     → from "stopped" / "failed" → "running" / "failed".
- *   - manualStop(id)      → from "running" → "stopped".
- *   - restartAgent(id)    → stop (if running) → re-read disk → start.
- *   - shutdown()          → stop everything and close dbs.
+ *   - boot()                   → load every agent dir; failed agents stay listed.
+ *   - manualStart(id)          → from "stopped" / "failed" → "running" / "failed".
+ *   - manualStop(id)           → from "running" → "stopped" (aborts active batches).
+ *   - restartAgent(id)         → stop (if running) → re-read disk → start.
+ *   - reloadAgent(id)          → soft: mark stale, pause new dequeues, swap
+ *                                runner once active batches drain naturally.
+ *   - reloadPlugin(id, pid)    → bounce a single plugin in place; runner
+ *                                untouched.
+ *   - shutdown()               → stop everything and close dbs.
  */
 export class AgentManager {
   private agents = new Map<string, AgentInstance>();
@@ -195,25 +205,103 @@ export class AgentManager {
 
   /**
    * Apply an out-of-band config/secrets/models edit. Always invalidates
-   * the secrets cache (so the next start re-reads the file). If the
-   * agent is currently running, restart it so the new values reach the
-   * pi runtime immediately. Stopped/failed agents stay as-is — the next
+   * the secrets cache (so the next start re-reads the file). For a
+   * running agent, mark it stale and pause new dequeues; the runner is
+   * swapped once active batches drain naturally (zero interruption,
+   * zero Retry events). Stopped/failed agents stay as-is — the next
    * manual start will pick up the changes naturally.
    *
-   * Restart errors are caught and logged; the agent stays listed with
-   * its updated state/error so the UI can surface the failure. Returns
-   * `null` if the id is unknown (no throw — callers iterate freely).
+   * Coalesced: a second `reloadAgent` call while already stale is a
+   * no-op (the pending swap will satisfy both edits). Returns `null`
+   * if the id is unknown.
    */
   async reloadAgent(id: string): Promise<AgentInstance | null> {
     const inst = this.agents.get(id);
     if (!inst) return null;
     this.secrets.invalidate();
-    if (inst.state !== "running" && !inst.runner) return inst;
+    if (inst.state !== "running" || !inst.runner) return inst;
+    if (inst.staleReason) return inst;
+
+    inst.staleReason = "config or secrets edit";
+    inst.runner.pauseDequeue();
+    if (inst.runner.activeCount === 0) {
+      return this.performStaleSwap(inst);
+    }
+    return inst;
+  }
+
+  /**
+   * Reload a single plugin in place: stop its instance (if running),
+   * then re-run `startPluginInstance` so the next batch sees the new
+   * config / secrets. Decoupled from agent reload — does not touch the
+   * runner or other plugins. The agent remains "running" throughout.
+   */
+  async reloadPlugin(
+    agentId: string,
+    pluginId: string,
+  ): Promise<AgentInstance | null> {
+    const inst = this.agents.get(agentId);
+    if (!inst) return null;
+    this.secrets.invalidate();
+    if (inst.state !== "running") return inst;
+    if (!inst.plugins.has(pluginId)) return inst;
+
+    const entry = inst.plugins.get(pluginId);
+    if (entry?.state === "running" && entry.instance) {
+      const instance = entry.instance;
+      try {
+        await Promise.race([
+          instance.stop(),
+          new Promise<void>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("plugin stop timed out after 5s")),
+              5000,
+            ),
+          ),
+        ]);
+      } catch (err) {
+        this.log.warn(
+          { err, agent: agentId, plugin: pluginId },
+          "plugin stop failed during reload",
+        );
+      }
+    }
+
     try {
-      return await this.restartAgent(id);
+      await this.startPluginInstance(inst, pluginId);
     } catch (err) {
-      this.log.warn({ err, agent: id }, "auto-reload failed");
-      return this.agents.get(id) ?? null;
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error(
+        { err, agent: agentId, plugin: pluginId },
+        "plugin reload failed",
+      );
+      inst.plugins.set(pluginId, {
+        state: "failed",
+        instance: null,
+        config: null,
+        error: message,
+        changedAt: Date.now(),
+      });
+    }
+    return inst;
+  }
+
+  /**
+   * Internal: swap in a fresh runner once active batches have drained.
+   * Clears `staleReason` synchronously up-front so concurrent
+   * `batch-completed` events that fire on the dying runner during stop
+   * don't trigger duplicate swaps.
+   */
+  private async performStaleSwap(
+    inst: AgentInstance,
+  ): Promise<AgentInstance> {
+    if (!inst.staleReason) return inst;
+    inst.staleReason = null;
+    try {
+      return await this.restartAgent(inst.id);
+    } catch (err) {
+      this.log.warn({ err, agent: inst.id }, "stale swap failed");
+      return this.agents.get(inst.id) ?? inst;
     }
   }
 
@@ -234,6 +322,7 @@ export class AgentManager {
       error: null,
       changedAt: Date.now(),
       plugins: new Map(),
+      staleReason: null,
     };
     this.agents.set(id, inst);
     try {
@@ -313,6 +402,14 @@ export class AgentManager {
       envSecrets,
       log: childLogger(`agent:${inst.id}`),
     });
+    // When a stale-reload is pending and the last active batch finishes,
+    // swap to a fresh runner. The listener captures `inst` (stable) and
+    // checks `inst.runner` at fire time so a swap-in-progress no-ops.
+    inst.runner.on("batch-completed", () => {
+      if (inst.staleReason && inst.runner?.activeCount === 0) {
+        void this.performStaleSwap(inst);
+      }
+    });
 
     // 4. Start each installed plugin; per-plugin failures don't sink the agent.
     for (const pid of installedPluginIds) {
@@ -349,6 +446,9 @@ export class AgentManager {
   }
 
   private async stopAgent(inst: AgentInstance): Promise<AgentInstance> {
+    // A stop supersedes any pending stale swap; otherwise the listener on
+    // the dying runner could re-trigger a swap mid-stop.
+    inst.staleReason = null;
     for (const [pid, entry] of inst.plugins) {
       if (entry.state !== "running" || !entry.instance) continue;
       const instance = entry.instance;

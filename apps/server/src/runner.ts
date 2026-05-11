@@ -13,7 +13,7 @@ import type {
 import { AGENT_TOOLS } from "./types.js";
 import type { Logger } from "./logger.js";
 
-const RESERVED_META = new Set(["Timestamp", "Plugin", "Channel", "IsSilent"]);
+const RESERVED_META = new Set(["Timestamp", "Plugin", "Channel", "IsSilent", "Retry"]);
 
 function pascal(s: string): string {
   return s
@@ -66,6 +66,7 @@ export function buildHarnessMetadata(m: BatchMessage, tz: string): string {
     `Channel: ${m.channelId}`,
   ];
   if (m.isSilent) lines.push("IsSilent: true");
+  if (m.attempts > 0) lines.push("Retry: true");
   if (m.metadata) {
     for (const [k, v] of Object.entries(m.metadata)) {
       const r = renderMetaValue(v);
@@ -115,9 +116,27 @@ export class AgentRunner extends EventEmitter {
   private readonly maxSlots: number;
   private readonly maxAttempts: number;
   private status: "stopped" | "running" = "stopped";
+  /** When true, workers stop dequeuing new threads but currently-active
+   *  batches keep running (and steers to them still land). Used by the
+   *  AgentManager's stale-reload path; never reset on the same runner —
+   *  the runner is replaced once `active` drains. */
+  private dequeuePaused = false;
   private active = new Map<string, ActiveBatch>();
   private workers: Promise<void>[] = [];
   private waiters: Array<() => void> = [];
+
+  /** Number of batches currently being processed. */
+  get activeCount(): number {
+    return this.active.size;
+  }
+
+  /** Soft-stop signal: stop dequeuing new threads. Active batches finish
+   *  on their own and emit `batch-completed` on exit; the AgentManager
+   *  swaps the runner once `activeCount === 0`. */
+  pauseDequeue(): void {
+    this.dequeuePaused = true;
+    this.signalAll();
+  }
 
   constructor(opts: RunnerOpts) {
     super();
@@ -203,6 +222,7 @@ export class AgentRunner extends EventEmitter {
         text: payload.text,
         metadata: payload.metadata ?? null,
         isSilent: payload.isSilent === true,
+        attempts: 0,
       };
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
       active.steerIds.add(id);
@@ -237,6 +257,10 @@ export class AgentRunner extends EventEmitter {
   private async workerLoop(idx: number): Promise<void> {
     const log = this.opts.log.child({ worker: idx });
     while (this.status === "running") {
+      if (this.dequeuePaused) {
+        await this.waitForWork();
+        continue;
+      }
       const exclude = new Set(this.active.keys());
       const threadId = this.opts.db.peekHighestPriorityThread(exclude);
       if (!threadId) {
@@ -262,6 +286,7 @@ export class AgentRunner extends EventEmitter {
         active.phase = "exited";
         this.active.delete(threadId);
         this.signalAll();
+        this.emit("batch-completed");
       }
     }
     log.debug("worker stopped");

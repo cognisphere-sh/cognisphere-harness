@@ -152,7 +152,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     }
     const path = pluginPath(cfg, id, pid, "config.json");
     writeFileSync(path, JSON.stringify(body.config, null, 2) + "\n");
-    const inst2 = await am.reloadAgent(id);
+    const inst2 = await am.reloadPlugin(id, pid);
     return c.json({
       ok: true,
       restartRequired: false,

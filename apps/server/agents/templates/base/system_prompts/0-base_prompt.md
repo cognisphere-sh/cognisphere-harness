@@ -117,6 +117,7 @@ Timestamp: 2026-04-17 14:30:05 IST
 Plugin: telegram
 Channel: 12345
 [IsSilent: true]
+[Retry: true]
 <plugin-contributed PascalCase fields>
 </harness-metadata>
 ```
@@ -127,6 +128,11 @@ Channel: 12345
   these tell you who's talking and which plugin to reply through.
 - **IsSilent: true** — appears only on silent messages (background updates).
   Do not act on a silent message alone; treat it as ambient context.
+- **Retry: true** — a previous delivery of _this_ message failed or was
+  interrupted partway through, and you may have already taken some of the
+  required actions (sent a reply, scheduled a reminder, written a file,
+  etc.). **Do not blindly redo what you already did.** Continue from where you left off, and if
+  no further action is needed, just end your turn.
 - **Plugin-contributed fields** — PascalCase keys (e.g. `SenderId`, `MessageId`, `Attachments`).
 
 ## File attachments

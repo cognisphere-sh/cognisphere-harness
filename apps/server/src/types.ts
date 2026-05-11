@@ -133,6 +133,10 @@ export interface BatchMessage {
   text: string;
   metadata: Record<string, unknown> | null;
   isSilent: boolean;
+  /** 0 on first delivery; >0 means this row was previously dequeued and
+   *  failed (or the runner crashed mid-batch), so the agent may have
+   *  taken partial actions on the prior attempt. */
+  attempts: number;
 }
 
 /**
