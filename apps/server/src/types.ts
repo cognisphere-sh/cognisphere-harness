@@ -136,20 +136,6 @@ export interface AgentSummary {
   failedPlugins: string[];
 }
 
-export interface QueuedRow {
-  id: number;
-  enqueued_at: number;
-  plugin_id: string;
-  channel_id: string;
-  thread_id: string;
-  text: string;
-  metadata: string | null;
-  priority: number;
-  is_silent: number;
-  in_flight: number;
-  attempts: number;
-}
-
 export interface BatchMessage {
   id: number;
   enqueuedAt: number;

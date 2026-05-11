@@ -1,64 +1,59 @@
 import Database from "better-sqlite3";
-import type { BatchMessage, QueuedRow } from "./types.js";
+import type { BatchMessage } from "./types.js";
 
+/**
+ * Single-table event lifecycle: every notify() inserts one row; the row's
+ * `status` advances as the runner processes it (queued → in_flight → done,
+ * or queued ↔ failed, or cancelled). Rows persist after completion so the
+ * UI can show the full history. Backed by a fresh `.events.db` file; the
+ * pre-v2 `.queue.db` (with its messages/dead_letter/events split) is left
+ * untouched on disk for operator inspection.
+ */
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS messages (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  enqueued_at  INTEGER NOT NULL,
-  plugin_id    TEXT NOT NULL,
-  channel_id   TEXT NOT NULL,
-  thread_id    TEXT NOT NULL,
-  text         TEXT NOT NULL,
-  metadata     TEXT,
-  priority     INTEGER NOT NULL DEFAULT 0,
-  is_silent    INTEGER NOT NULL DEFAULT 0,
-  in_flight    INTEGER NOT NULL DEFAULT 0,
-  attempts     INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_pending
-  ON messages(thread_id, in_flight, priority DESC, id);
-
-CREATE TABLE IF NOT EXISTS dead_letter (
-  id           INTEGER PRIMARY KEY,
-  enqueued_at  INTEGER NOT NULL,
-  plugin_id    TEXT NOT NULL,
-  channel_id   TEXT NOT NULL,
-  thread_id    TEXT NOT NULL,
-  text         TEXT NOT NULL,
-  metadata     TEXT,
-  priority     INTEGER NOT NULL,
-  is_silent    INTEGER NOT NULL DEFAULT 0,
-  attempts     INTEGER NOT NULL,
-  last_error   TEXT,
-  dead_at      INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS events (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts               INTEGER NOT NULL,
-  event            TEXT NOT NULL,
-  agent_id         TEXT NOT NULL,
-  plugin_id        TEXT,
-  notification     TEXT,
-  channel_id       TEXT,
-  thread_id        TEXT,
-  batch_id         TEXT,
-  status           TEXT NOT NULL,
-  message_queue_id INTEGER,
-  session_file     TEXT,
-  message_index    INTEGER,
-  log              TEXT,
-  error            TEXT
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  plugin_id    TEXT NOT NULL,
+  channel_id   TEXT NOT NULL,
+  thread_id    TEXT NOT NULL,
+  is_silent    INTEGER NOT NULL DEFAULT 0,
+  text         TEXT NOT NULL,
+  metadata     TEXT,
+  status       TEXT NOT NULL,
+  priority     INTEGER NOT NULL DEFAULT 0,
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  error        TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_events_ts        ON events(ts);
-CREATE INDEX IF NOT EXISTS idx_events_thread    ON events(thread_id, ts);
-CREATE INDEX IF NOT EXISTS idx_events_status    ON events(status, ts);
+CREATE INDEX IF NOT EXISTS idx_events_runnable
+  ON events(thread_id, status, is_silent, priority DESC, id);
+CREATE INDEX IF NOT EXISTS idx_events_updated ON events(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_status  ON events(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_plugin  ON events(plugin_id, updated_at DESC);
 `;
 
-function rowToMessage(row: QueuedRow): BatchMessage {
+export type EventStatus = "queued" | "in_flight" | "done" | "failed" | "cancelled";
+
+export interface EventRow {
+  id: number;
+  ts: number;
+  updated_at: number;
+  plugin_id: string;
+  channel_id: string;
+  thread_id: string;
+  is_silent: number;
+  text: string;
+  metadata: string | null;
+  status: EventStatus;
+  priority: number;
+  attempts: number;
+  error: string | null;
+}
+
+function rowToMessage(row: EventRow): BatchMessage {
   return {
     id: row.id,
-    enqueuedAt: row.enqueued_at,
+    enqueuedAt: row.ts,
     pluginId: row.plugin_id,
     channelId: row.channel_id,
     threadId: row.thread_id,
@@ -79,67 +74,38 @@ export interface EnqueueArgs {
   isSilent: boolean;
 }
 
-export interface DeadLetterRow {
-  id: number;
-  enqueued_at: number;
-  plugin_id: string;
-  channel_id: string;
-  thread_id: string;
-  text: string;
-  metadata: string | null;
-  priority: number;
-  is_silent: number;
-  attempts: number;
-  last_error: string | null;
-  dead_at: number;
-}
-
-export interface EventRow {
-  id: number;
-  ts: number;
-  event: string;
-  agent_id: string;
-  plugin_id: string | null;
-  notification: string | null;
-  channel_id: string | null;
-  thread_id: string | null;
-  batch_id: string | null;
-  status: string;
-  message_queue_id: number | null;
-  session_file: string | null;
-  message_index: number | null;
-  log: string | null;
-  error: string | null;
-}
-
-export interface AppendEventArgs {
-  event: string;
-  status: string;
+export interface ListEventsOpts {
+  statuses?: string[];
   pluginId?: string;
-  notification?: string;
-  channelId?: string;
-  threadId?: string;
-  batchId?: string;
-  messageQueueId?: number;
-  sessionFile?: string;
-  messageIndex?: number;
-  log?: string;
-  error?: string;
+  search?: string;
+  isSilent?: boolean;
+  tsFrom?: number;
+  tsTo?: number;
+  updatedFrom?: number;
+  updatedTo?: number;
+  sortBy?: "ts" | "updated_at" | "status" | "plugin_id" | "thread_id";
+  sortDir?: "asc" | "desc";
+  limit: number;
+  offset: number;
 }
+
+const SORTABLE_COLS = new Set<NonNullable<ListEventsOpts["sortBy"]>>([
+  "ts",
+  "updated_at",
+  "status",
+  "plugin_id",
+  "thread_id",
+]);
 
 /**
- * SQLite queue + event log for a single agent.
+ * SQLite event-lifecycle table for a single agent.
  *
- * `<agent>/sessions/.queue.db`. WAL mode, synchronous writes, all calls sync.
- * Both `messages` and `events` live in the same file.
+ * `<agent>/sessions/.events.db`. WAL mode, synchronous writes, all calls sync.
  */
 export class AgentDb {
   private db: Database.Database;
 
-  constructor(
-    dbPath: string,
-    private readonly agentId: string,
-  ) {
+  constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
@@ -150,38 +116,40 @@ export class AgentDb {
     this.db.close();
   }
 
-  // ── messages ───────────────────────────────────────────────
+  // ── lifecycle writes ──────────────────────────────────────
 
   enqueue(args: EnqueueArgs): number {
+    const now = Date.now();
     const info = this.db
       .prepare(
-        `INSERT INTO messages
-           (enqueued_at, plugin_id, channel_id, thread_id, text, metadata,
-            priority, is_silent, in_flight, attempts)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+        `INSERT INTO events
+           (ts, updated_at, plugin_id, channel_id, thread_id, is_silent,
+            text, metadata, status, priority, attempts)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0)`,
       )
       .run(
-        Date.now(),
+        now,
+        now,
         args.pluginId,
         args.channelId,
         args.threadId,
+        args.isSilent ? 1 : 0,
         args.text,
         args.metadata ? JSON.stringify(args.metadata) : null,
         args.priority,
-        args.isSilent ? 1 : 0,
       );
     return info.lastInsertRowid as number;
   }
 
   /**
-   * Pick a thread that has at least one pending non-silent message (so
-   * all-silent threads stay parked). Skip threads supplied in `excludeThreads`.
+   * Pick a thread that has at least one queued non-silent row (so all-silent
+   * threads stay parked). Skip threads supplied in `excludeThreads`.
    */
   peekHighestPriorityThread(excludeThreads: Set<string>): string | null {
     const rows = this.db
       .prepare<unknown[], { thread_id: string }>(
-        `SELECT DISTINCT thread_id FROM messages
-         WHERE in_flight = 0 AND is_silent = 0
+        `SELECT DISTINCT thread_id FROM events
+         WHERE status = 'queued' AND is_silent = 0
          ORDER BY priority DESC, id ASC`,
       )
       .all();
@@ -194,9 +162,9 @@ export class AgentDb {
   dequeueBatch(threadId: string): BatchMessage[] {
     const txn = this.db.transaction((): BatchMessage[] => {
       const rows = this.db
-        .prepare<unknown[], QueuedRow>(
-          `SELECT * FROM messages
-           WHERE thread_id = ? AND in_flight = 0
+        .prepare<unknown[], EventRow>(
+          `SELECT * FROM events
+           WHERE thread_id = ? AND status = 'queued'
            ORDER BY priority DESC, id ASC`,
         )
         .all(threadId);
@@ -204,8 +172,11 @@ export class AgentDb {
       const ids = rows.map((r) => r.id);
       const placeholders = ids.map(() => "?").join(",");
       this.db
-        .prepare(`UPDATE messages SET in_flight = 1 WHERE id IN (${placeholders})`)
-        .run(...ids);
+        .prepare(
+          `UPDATE events SET status = 'in_flight', updated_at = ?
+           WHERE id IN (${placeholders})`,
+        )
+        .run(Date.now(), ...ids);
       return rows.map(rowToMessage);
     });
     return txn();
@@ -214,7 +185,24 @@ export class AgentDb {
   markBatchDone(ids: number[]): void {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => "?").join(",");
-    this.db.prepare(`DELETE FROM messages WHERE id IN (${placeholders})`).run(...ids);
+    this.db
+      .prepare(
+        `UPDATE events SET status = 'done', updated_at = ?
+         WHERE id IN (${placeholders})`,
+      )
+      .run(Date.now(), ...ids);
+  }
+
+  /** Terminal cancellation (user abort, plugin-driven cancel, runner stop). */
+  markBatchCancelled(ids: number[]): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => "?").join(",");
+    this.db
+      .prepare(
+        `UPDATE events SET status = 'cancelled', updated_at = ?
+         WHERE id IN (${placeholders})`,
+      )
+      .run(Date.now(), ...ids);
   }
 
   markBatchFailed(
@@ -228,8 +216,8 @@ export class AgentDb {
     const txn = this.db.transaction(() => {
       const placeholders = ids.map(() => "?").join(",");
       const rows = this.db
-        .prepare<unknown[], QueuedRow>(
-          `SELECT * FROM messages WHERE id IN (${placeholders})`,
+        .prepare<unknown[], EventRow>(
+          `SELECT id, attempts FROM events WHERE id IN (${placeholders})`,
         )
         .all(...ids);
       const now = Date.now();
@@ -238,33 +226,20 @@ export class AgentDb {
         if (next >= maxAttempts) {
           this.db
             .prepare(
-              `INSERT INTO dead_letter
-                 (id, enqueued_at, plugin_id, channel_id, thread_id, text, metadata,
-                  priority, is_silent, attempts, last_error, dead_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `UPDATE events
+                 SET status = 'failed', attempts = ?, error = ?, updated_at = ?
+               WHERE id = ?`,
             )
-            .run(
-              r.id,
-              r.enqueued_at,
-              r.plugin_id,
-              r.channel_id,
-              r.thread_id,
-              r.text,
-              r.metadata,
-              r.priority,
-              r.is_silent,
-              next,
-              error,
-              now,
-            );
-          this.db.prepare(`DELETE FROM messages WHERE id = ?`).run(r.id);
+            .run(next, error, now, r.id);
           dead.push(r.id);
         } else {
           this.db
             .prepare(
-              `UPDATE messages SET attempts = ?, in_flight = 0 WHERE id = ?`,
+              `UPDATE events
+                 SET status = 'queued', attempts = ?, error = ?, updated_at = ?
+               WHERE id = ?`,
             )
-            .run(next, r.id);
+            .run(next, error, now, r.id);
           retrying.push(r.id);
         }
       }
@@ -273,19 +248,19 @@ export class AgentDb {
     return { retrying, dead };
   }
 
+  /** Drop a still-queued row. Refuses if it has already advanced past queued. */
   removeById(id: number): boolean {
     const info = this.db
-      .prepare(`DELETE FROM messages WHERE id = ? AND in_flight = 0`)
+      .prepare(`DELETE FROM events WHERE id = ? AND status = 'queued'`)
       .run(id);
     return info.changes > 0;
   }
 
-  /** Crash recovery: clear in_flight on all rows. Caller decides whether
-   *  to bump attempts; we preserve the stuck-row invariant by returning ids. */
+  /** Crash recovery: any row stuck in 'in_flight' is treated as a failed attempt. */
   sweepInFlight(maxAttempts: number, error = "process died mid-batch") {
     const rows = this.db
       .prepare<unknown[], { id: number }>(
-        `SELECT id FROM messages WHERE in_flight = 1`,
+        `SELECT id FROM events WHERE status = 'in_flight'`,
       )
       .all();
     if (rows.length === 0) return { retrying: [], dead: [] };
@@ -295,101 +270,109 @@ export class AgentDb {
   countPending(): number {
     const r = this.db
       .prepare<unknown[], { n: number }>(
-        `SELECT COUNT(*) as n FROM messages`,
+        `SELECT COUNT(*) as n FROM events WHERE status IN ('queued','in_flight')`,
       )
       .get();
     return r?.n ?? 0;
   }
 
-  listPending(limit = 200): QueuedRow[] {
-    return this.db
-      .prepare<unknown[], QueuedRow>(
-        `SELECT * FROM messages ORDER BY priority DESC, id ASC LIMIT ?`,
+  // ── DLQ-style actions on failed rows ──────────────────────
+
+  /** Reset a failed row back to queued. Returns the row id, or null if not found / not failed. */
+  requeueFailed(id: number): number | null {
+    const info = this.db
+      .prepare(
+        `UPDATE events
+           SET status = 'queued', attempts = 0, error = NULL, updated_at = ?
+         WHERE id = ? AND status = 'failed'`,
       )
-      .all(limit);
+      .run(Date.now(), id);
+    return info.changes > 0 ? id : null;
   }
 
-  listDeadLetter(limit = 200): DeadLetterRow[] {
-    return this.db
-      .prepare<unknown[], DeadLetterRow>(
-        `SELECT * FROM dead_letter ORDER BY dead_at DESC, id DESC LIMIT ?`,
-      )
-      .all(limit);
-  }
-
-  /** Move a DLQ row back to messages and reset attempts. Returns the new id. */
-  requeueDeadLetter(id: number): number | null {
-    const txn = this.db.transaction((): number | null => {
-      const row = this.db
-        .prepare<unknown[], DeadLetterRow>(
-          `SELECT * FROM dead_letter WHERE id = ?`,
-        )
-        .get(id);
-      if (!row) return null;
-      const info = this.db
-        .prepare(
-          `INSERT INTO messages
-             (enqueued_at, plugin_id, channel_id, thread_id, text, metadata,
-              priority, is_silent, in_flight, attempts)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
-        )
-        .run(
-          Date.now(),
-          row.plugin_id,
-          row.channel_id,
-          row.thread_id,
-          row.text,
-          row.metadata,
-          row.priority,
-          row.is_silent,
-        );
-      this.db.prepare(`DELETE FROM dead_letter WHERE id = ?`).run(id);
-      return info.lastInsertRowid as number;
-    });
-    return txn();
-  }
-
-  removeDeadLetter(id: number): boolean {
-    const info = this.db.prepare(`DELETE FROM dead_letter WHERE id = ?`).run(id);
+  /** Permanently delete a failed row. */
+  removeFailed(id: number): boolean {
+    const info = this.db
+      .prepare(`DELETE FROM events WHERE id = ? AND status = 'failed'`)
+      .run(id);
     return info.changes > 0;
   }
 
-  // ── events ────────────────────────────────────────────────
+  // ── reads ─────────────────────────────────────────────────
 
-  appendEvent(args: AppendEventArgs): number {
-    const info = this.db
-      .prepare(
-        `INSERT INTO events
-           (ts, event, agent_id, plugin_id, notification, channel_id,
-            thread_id, batch_id, status, message_queue_id, session_file,
-            message_index, log, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        Date.now(),
-        args.event,
-        this.agentId,
-        args.pluginId ?? null,
-        args.notification ?? null,
-        args.channelId ?? null,
-        args.threadId ?? null,
-        args.batchId ?? null,
-        args.status,
-        args.messageQueueId ?? null,
-        args.sessionFile ?? null,
-        args.messageIndex ?? null,
-        args.log ?? null,
-        args.error ?? null,
-      );
-    return info.lastInsertRowid as number;
-  }
-
-  tailEvents(sinceMs: number | null, limit: number): EventRow[] {
-    const since = sinceMs ?? 0;
+  listEvents(opts: ListEventsOpts): EventRow[] {
+    const { sql, params } = this.buildWhere(opts);
+    const sortBy = opts.sortBy && SORTABLE_COLS.has(opts.sortBy) ? opts.sortBy : "updated_at";
+    const sortDir = opts.sortDir === "asc" ? "ASC" : "DESC";
     return this.db
       .prepare<unknown[], EventRow>(
-        `SELECT * FROM events WHERE ts >= ? ORDER BY id DESC LIMIT ?`,
+        `SELECT * FROM events ${sql} ORDER BY ${sortBy} ${sortDir}, id ${sortDir} LIMIT ? OFFSET ?`,
       )
-      .all(since, limit);
+      .all(...params, opts.limit, opts.offset);
+  }
+
+  countEvents(opts: Omit<ListEventsOpts, "sortBy" | "sortDir" | "limit" | "offset">): number {
+    const { sql, params } = this.buildWhere(opts);
+    const r = this.db
+      .prepare<unknown[], { n: number }>(
+        `SELECT COUNT(*) as n FROM events ${sql}`,
+      )
+      .get(...params);
+    return r?.n ?? 0;
+  }
+
+  private buildWhere(
+    opts: Pick<
+      ListEventsOpts,
+      | "statuses"
+      | "pluginId"
+      | "search"
+      | "isSilent"
+      | "tsFrom"
+      | "tsTo"
+      | "updatedFrom"
+      | "updatedTo"
+    >,
+  ): { sql: string; params: unknown[] } {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (opts.statuses && opts.statuses.length > 0) {
+      const ph = opts.statuses.map(() => "?").join(",");
+      clauses.push(`status IN (${ph})`);
+      params.push(...opts.statuses);
+    }
+    if (opts.pluginId) {
+      clauses.push(`plugin_id = ?`);
+      params.push(opts.pluginId);
+    }
+    if (opts.search) {
+      clauses.push(`(text LIKE ? OR metadata LIKE ?)`);
+      const needle = `%${opts.search}%`;
+      params.push(needle, needle);
+    }
+    if (opts.isSilent != null) {
+      clauses.push(`is_silent = ?`);
+      params.push(opts.isSilent ? 1 : 0);
+    }
+    if (opts.tsFrom != null) {
+      clauses.push(`ts >= ?`);
+      params.push(opts.tsFrom);
+    }
+    if (opts.tsTo != null) {
+      clauses.push(`ts <= ?`);
+      params.push(opts.tsTo);
+    }
+    if (opts.updatedFrom != null) {
+      clauses.push(`updated_at >= ?`);
+      params.push(opts.updatedFrom);
+    }
+    if (opts.updatedTo != null) {
+      clauses.push(`updated_at <= ?`);
+      params.push(opts.updatedTo);
+    }
+    return {
+      sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+      params,
+    };
   }
 }

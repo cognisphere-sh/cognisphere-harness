@@ -140,7 +140,7 @@ is `<rootDir>/<harnessId>`.
         │   ├── memory/
         │   └── <ThreadId>/...
         ├── sessions/
-        │   ├── .queue.db         ← SQLite WAL: messages + dead_letter + events
+        │   ├── .events.db        ← SQLite WAL: single `events` lifecycle table
         │   └── <ThreadId>/<sid>.jsonl
         ├── plugins/<plugin-id>/
         │   ├── config.json       ← validated against manifest.configSchema
@@ -309,42 +309,51 @@ credential).
 
 ### 4.6 AgentDb — `queue.ts`
 
-Per-agent SQLite WAL at `<agent>/sessions/.queue.db`. Three tables:
+Per-agent SQLite WAL at `<agent>/sessions/.events.db`. One table:
 
-- `messages` — `(id, enqueued_at, plugin_id, channel_id, thread_id,
-  text, metadata, priority, is_silent, in_flight, attempts)`
-- `dead_letter` — rows that exceeded `maxAttempts`. Same columns plus
-  `last_error` and `dead_at`.
-- `events` — append-only audit log of `notify` / `batch_start` /
-  `batch_end` rows. Carries `agent_id` so cross-agent tooling can
-  consume one shared sink later.
+- `events` — every event ever produced by `notify()`. Columns:
+  `(id, ts, updated_at, plugin_id, channel_id, thread_id, is_silent,
+  text, metadata, status, priority, attempts, error)`.
+
+`status` advances through the lifecycle: `queued` → `in_flight` →
+`done` (success), or back to `queued` on retry, or to `failed` (out
+of attempts), or to `cancelled` (user abort, plugin-driven cancel,
+runner stop). Rows persist after completion so the UI can render
+history. The pre-v2 split into `messages`, `dead_letter`, and an
+append-only `events` audit log is dropped at schema init
+(`DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS dead_letter;
+DROP TABLE IF EXISTS events;` runs before the new `CREATE`). Existing
+dev DBs lose their old rows on the next boot — acceptable for v0.
 
 Load-bearing methods:
 
-- `enqueue(args) → id`
+- `enqueue(args) → id` — inserts a row with `status='queued'`.
 - `peekHighestPriorityThread(exclude: Set<string>) → threadId | null` —
   the worker calls this with the active threads excluded so two workers
-  never claim the same thread. Threads whose only pending rows are
-  `is_silent=1` are skipped (silent rows never wake a worker on their
-  own; they ride along with the next non-silent batch).
-- `dequeueBatch(threadId) → BatchMessage[]` — pulls all queued rows
-  for one thread and flips them to `in_flight=1` in a single transaction.
-- `markBatchDone(ids[])` — deletes rows.
+  never claim the same thread. Filters `status='queued' AND is_silent=0`
+  (silent rows never wake a worker on their own; they ride along with
+  the next non-silent batch).
+- `dequeueBatch(threadId) → BatchMessage[]` — pulls all `status='queued'`
+  rows for one thread and flips them to `status='in_flight'` in a single
+  transaction.
+- `markBatchDone(ids[])` — sets `status='done'`. Rows stay in place.
+- `markBatchCancelled(ids[])` — terminal cancellation for user abort,
+  plugin-driven cancel, runner stop.
 - `markBatchFailed(ids[], err, maxAttempts) → { retrying[], dead[] }` —
-  bumps attempts; rows past the cap move to `dead_letter`.
-- `sweepInFlight(maxAttempts)` — at runner start, treats every row still
-  flagged `in_flight=1` (from a previous crash) as a failed attempt and
-  routes it through `markBatchFailed`. So crash-mid-batch counts as one
-  attempt against the retry budget.
-- `requeueDeadLetter(id) → newId | null`, `removeDeadLetter(id)` —
-  operator-facing DLQ controls.
-- `appendEvent(args) → id` / `tailEvents(sinceMs, limit)` — used by the
-  runner for batch lifecycle events and by ops tooling for tailing.
+  bumps attempts; rows past the cap get `status='failed'`, otherwise
+  bounce back to `status='queued'` with `error` populated.
+- `sweepInFlight(maxAttempts)` — at runner start, every row still
+  `status='in_flight'` (from a previous crash) is routed through
+  `markBatchFailed`. Crash-mid-batch counts as one attempt.
+- `requeueFailed(id) → id | null`, `removeFailed(id)` — operator-facing
+  controls on failed rows. Requeue preserves the row id (just resets
+  status/attempts/error). Discard hard-deletes.
+- `listEvents(opts)` / `countEvents(opts)` — filter/sort/paginated read
+  used by the UI's Events tab. `sortBy` is whitelist-validated.
 
 WAL mode + a single writer (the worker pool) means concurrent reads
-(event tailing for ops, listing pending messages from the UI) don't
-block. The DB is opened lazily at first `startAgent` and kept open
-across stop/start cycles — only `shutdown()` closes it.
+don't block writes. The DB is opened lazily at first `startAgent` and
+kept open across stop/start cycles — only `shutdown()` closes it.
 
 ### 4.7 PiRpcClient — `rpc.ts`
 
@@ -568,7 +577,7 @@ in progress", "conflict")`.
    that no key shadows `providerEnv` or `resolvedSecrets` (collisions
    throw). Merge into
    `envSecrets = { ...providerEnv, ...resolvedSecrets, ...agentConfigEnv }`.
-4. **Open the queue db.** Lazy — created on first start, reused across
+4. **Open the events db.** Lazy — created on first start, reused across
    stop/start cycles.
 5. **Construct a fresh `AgentRunner`** with the envSecrets snapshot.
    Attach a `batch-completed` listener: if a stale-swap is pending and
@@ -707,17 +716,17 @@ calls `rpc.sendSteer` against the live child. The row id is added to
 `active.steerIds` and merged into the "done" set on batch completion.
 If the batch fails, the steer ids ride along into `markBatchFailed` so
 their attempts get bumped (rows that have been steered into N
-consecutive failing batches eventually reach the DLQ instead of
-looping forever).
+consecutive failing batches eventually reach `status='failed'` instead
+of looping forever).
 
 ### 5.3 Crash recovery
 
 `runner.start` calls `db.sweepInFlight(maxAttempts)`:
 
-- For every row with `in_flight=1`: treat it as a failed attempt
-  (delegate to `markBatchFailed`). Bump `attempts`, reset
-  `in_flight=0`. Now eligible for re-claim.
-- If `attempts >= maxAttempts`: move to `dead_letter`.
+- For every row with `status='in_flight'`: treat it as a failed attempt
+  (delegate to `markBatchFailed`). Bump `attempts`, flip back to
+  `status='queued'` — now eligible for re-claim.
+- If `attempts >= maxAttempts`: row goes to `status='failed'`.
 
 Boot then proceeds normally; the worker loop picks up retried rows on
 its next `peekHighestPriorityThread`. The retried batch's first prompt
@@ -815,7 +824,7 @@ fault isolation. A pi crash takes down one batch, not the server.
 
 ### 6.2 SQLite WAL, one DB per agent
 
-**Decision**: per-agent `<agent>/sessions/.queue.db`, WAL mode, single
+**Decision**: per-agent `<agent>/sessions/.events.db`, WAL mode, single
 writer (the worker pool).
 
 **Why**: durable across crashes; simple to reason about; cheap to back
@@ -1096,18 +1105,18 @@ bash   ~/.piharness/default/agents/$ID/bootstrap/bootstrap.sh
   `pino-pretty` (auto-applied in TTY mode) or pipe to `jq`. Key
   scopes: `agent-manager`, `agent:<id>` (the runner), `plugin:<id>:<pid>`,
   `plugin-registry`, `webhook`.
-- **Per-agent event log**: `<agent>/sessions/.queue.db` table `events`.
-  Tail via:
+- **Per-agent event lifecycle**: `<agent>/sessions/.events.db` table
+  `events` (one row per event, status reflects current state). Tail via:
 
   ```bash
-  sqlite3 ~/.piharness/default/agents/$ID/sessions/.queue.db \
-    "SELECT id, ts, event, status, log FROM events ORDER BY id DESC LIMIT 20;"
+  sqlite3 ~/.piharness/default/agents/$ID/sessions/.events.db \
+    "SELECT id, ts, updated_at, status, plugin_id, thread_id, attempts \
+     FROM events ORDER BY updated_at DESC LIMIT 20;"
   ```
 
-  Includes one row per `notify`, `batch_start`, `batch_end`.
-- **Pending / dead-letter queue inspection**: `messages` and
-  `dead_letter` tables in the same DB. The web UI's queue view reads
-  from these.
+  Filter on `status` for queue / DLQ-style inspection: `status='queued'`
+  for backlog, `status='in_flight'` for running, `status='failed'` for
+  dead-letter, etc. The web UI's Events tab reads this table.
 - **Per-thread session JSONLs**: `<agent>/sessions/<ThreadId>/<sid>.jsonl`.
   Each session captures the model's full turn-by-turn including tool
   calls. Use `jq -c .` to read.

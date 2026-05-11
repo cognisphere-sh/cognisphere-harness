@@ -3,7 +3,7 @@ import { Bot, Brain, User as UserIcon } from "lucide-react";
 import type { AssistantBubble, UserBubble } from "@/lib/session";
 import { splitHarnessMeta } from "@/lib/session";
 import { cn, formatTime } from "@/lib/utils";
-import { LinkifiedText } from "@/components/linkified-text";
+import { MarkdownText } from "@/components/markdown-text";
 import { ToolCallCard } from "@/components/tool-call-card";
 
 interface UserProps {
@@ -29,7 +29,7 @@ export function UserMessageBubble({ agentId, bubble }: UserProps) {
             </details>
           )}
           <div className="rounded-2xl rounded-tr-sm border bg-card px-3 py-2 text-sm shadow-card">
-            <LinkifiedText agentId={agentId} text={body} className="whitespace-pre-wrap" />
+            <MarkdownText agentId={agentId} text={body} />
           </div>
           {bubble.images.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2">
@@ -97,11 +97,7 @@ export function AssistantMessageBubble({ agentId, bubble }: AssistantProps) {
                     "border-primary/15",
                   )}
                 >
-                  <LinkifiedText
-                    agentId={agentId}
-                    text={seg.text}
-                    className="whitespace-pre-wrap"
-                  />
+                  <MarkdownText agentId={agentId} text={seg.text} />
                 </div>
               );
             }

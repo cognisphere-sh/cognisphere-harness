@@ -196,15 +196,6 @@ export class AgentRunner extends EventEmitter {
       priority: payload.priority ?? 0,
       isSilent: payload.isSilent === true,
     });
-    this.opts.db.appendEvent({
-      event: "notify",
-      status: "queued",
-      pluginId: payload.pluginId,
-      notification: payload.metadata?._notification as string | undefined,
-      channelId: payload.channelId,
-      threadId,
-      messageQueueId: id,
-    });
 
     const active = this.active.get(threadId);
     if (
@@ -298,7 +289,6 @@ export class AgentRunner extends EventEmitter {
     log: Logger,
   ): Promise<void> {
     const { threadId } = active;
-    const batchId = `b-${Date.now()}-${threadId}`;
     const sessionDir = join(
       this.opts.rootDir,
       this.opts.harnessId,
@@ -308,14 +298,6 @@ export class AgentRunner extends EventEmitter {
       threadId,
     );
     mkdirSync(sessionDir, { recursive: true });
-
-    this.opts.db.appendEvent({
-      event: "batch_start",
-      status: "in_flight",
-      threadId,
-      batchId,
-      log: `${batch.length} message(s)`,
-    });
 
     let rpc: PiRpcClient | null = null;
     try {
@@ -353,28 +335,12 @@ export class AgentRunner extends EventEmitter {
       await rpc.waitExit();
       clearTimeout(exitTimer);
 
-      const sessionFile = pickLatestSession(sessionDir);
       this.opts.db.markBatchDone([...active.ids, ...active.steerIds]);
-      this.opts.db.appendEvent({
-        event: "batch_end",
-        status: "done",
-        threadId,
-        batchId,
-        sessionFile: sessionFile ?? undefined,
-        log: `done (steers=${active.steerIds.size})`,
-      });
       log.debug({ threadId, batch: batch.length, steers: active.steerIds.size }, "batch done");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (active.cancelled) {
-        this.opts.db.markBatchDone([...active.ids, ...active.steerIds]);
-        this.opts.db.appendEvent({
-          event: "batch_end",
-          status: "done",
-          threadId,
-          batchId,
-          log: "cancelled by user",
-        });
+        this.opts.db.markBatchCancelled([...active.ids, ...active.steerIds]);
         log.info({ threadId }, "batch cancelled");
       } else {
         const stderr = rpc?.stderrSnapshot()?.slice(-512);
@@ -382,22 +348,14 @@ export class AgentRunner extends EventEmitter {
         // Steers that were delivered live to this pi process count as a
         // failed attempt too — otherwise a row that's been steered into N
         // consecutive failing batches never accrues attempts and never
-        // reaches the DLQ. Setting in_flight=0 is a no-op for them (they
-        // were never marked in_flight=1), but attempts++ matters.
+        // reaches a failed status. attempts++ matters even though they
+        // were never in_flight.
         const r = this.opts.db.markBatchFailed(
           [...active.ids, ...active.steerIds],
           errFull,
           this.maxAttempts,
         );
-        this.opts.db.appendEvent({
-          event: "batch_end",
-          status: "failed",
-          threadId,
-          batchId,
-          error: msg,
-          log: `retrying=${r.retrying.length} dead=${r.dead.length}`,
-        });
-        log.error({ err: msg, threadId }, "batch failed");
+        log.error({ err: msg, threadId, retrying: r.retrying.length, dead: r.dead.length }, "batch failed");
       }
     }
   }
@@ -564,15 +522,3 @@ function existsDir(p: string): boolean {
   }
 }
 
-function pickLatestSession(dir: string): string | null {
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
-      .map((e) => e.name)
-      .sort();
-    const last = entries[entries.length - 1];
-    return last ? join(dir, last) : null;
-  } catch {
-    return null;
-  }
-}

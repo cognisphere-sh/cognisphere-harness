@@ -213,8 +213,8 @@ curl -X POST http://127.0.0.1:7331/admin/dr-renu/send \
 
 Inspect events:
 ```bash
-sqlite3 "$ROOT/agents/dr-renu/sessions/.queue.db" \
-  "SELECT id, ts, event, status, log FROM events ORDER BY id DESC LIMIT 20;"
+sqlite3 "$ROOT/agents/dr-renu/sessions/.events.db" \
+  "SELECT id, ts, updated_at, status, plugin_id, thread_id FROM events ORDER BY updated_at DESC LIMIT 20;"
 ```
 
 Inspect the conversation:

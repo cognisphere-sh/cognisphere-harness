@@ -266,29 +266,65 @@ Per-session response:
 Malformed JSONL lines are silently skipped. `threadId` and `sessionId`
 are constrained to `[A-Za-z0-9._:-]+` to prevent path-traversal.
 
-### Queue inspection and DLQ control
+### Events stream
+
+The agent's queue, dead-letter, and audit log are unified into one
+`events` table (one row per logical event). The UI's Events tab reads
+it through these endpoints.
 
 | Method | Path | Effect |
 |---|---|---|
-| GET    | `/api/agents/:id/queue/pending` | List pending message rows |
-| GET    | `/api/agents/:id/queue/dlq`     | List dead-letter rows |
-| GET    | `/api/agents/:id/queue/events`  | Tail audit events |
-| POST   | `/api/agents/:id/queue/dlq/:rowId/requeue` | Move a DLQ row back to `messages` (resets attempts) |
-| DELETE | `/api/agents/:id/queue/dlq/:rowId` | Drop a DLQ row |
+| GET    | `/api/agents/:id/events` | List events with filter / sort / pagination |
+| POST   | `/api/agents/:id/events/:rowId/requeue` | Reset a `status=failed` row back to `queued` (attempts=0, error cleared) |
+| DELETE | `/api/agents/:id/events/:rowId` | Permanently drop a `status=failed` row |
 
-All list endpoints take `?limit=<n>` (default 200, max 1000). Events
-also take `?since=<unixMs>`.
+#### `GET /api/agents/:id/events`
 
-Pending rows are exposed with camelCase keys (`enqueuedAt`, `pluginId`,
-`channelId`, `threadId`, `text`, `priority`, `isSilent`, `inFlight`,
-`attempts`). DLQ rows add `lastError`, `deadAt`. Events come straight
-from the `events` table (snake_case columns).
+Query params (all optional):
 
-Requeue returns `{ ok: true, id: <newId> }` (a new auto-increment id;
-the original is consumed). Delete returns `{ ok: true }`.
+| Param | Value | Default |
+|---|---|---|
+| `status` | comma-separated subset of `queued,in_flight,done,failed,cancelled` | (no filter) |
+| `plugin` | exact `pluginId` match | (no filter) |
+| `search` | substring match against `text` (case-sensitive `LIKE`) | (no filter) |
+| `sortBy` | one of `ts`, `updated_at`, `status`, `plugin_id`, `thread_id` | `updated_at` |
+| `sortDir` | `asc` or `desc` | `desc` |
+| `limit` | int, clamped to [1, 1000] | `200` |
+| `offset` | int, ≥ 0 | `0` |
 
-503 on queue endpoints when the agent has no `AgentDb` open (only
-possible briefly during shutdown).
+Response:
+
+```json
+{
+  "events": [
+    {
+      "id": 17,
+      "ts": 1731000000000,
+      "updatedAt": 1731000004210,
+      "pluginId": "telegram",
+      "channelId": "chat-42",
+      "threadId": "telegram:chat-42",
+      "isSilent": false,
+      "text": "user message body",
+      "metadata": { "_notification": "message" },
+      "status": "done",
+      "priority": 0,
+      "attempts": 0,
+      "error": null
+    }
+  ],
+  "total": 1234
+}
+```
+
+`total` is the count after filters are applied (before paging) so the
+UI can render a pager.
+
+Requeue returns `{ ok: true, id: <rowId> }` — the row id is preserved
+(no new row is created). Delete returns `{ ok: true }`. Both 404 when
+the target row does not exist or is not in `status=failed`. 503 when
+the agent has no `AgentDb` open (only possible briefly during
+shutdown).
 
 ---
 

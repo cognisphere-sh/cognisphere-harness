@@ -121,7 +121,7 @@ beyond the server. No file watcher (no UI to broadcast to).
   sessions/<threadId>/
     <sessionId>.jsonl                 # main thread session(s) (SDK-rolled)
     subagents/<slug>/<task>/<sid>.jsonl  # nested sub-agent sessions
-  sessions/.queue.db                  # SQLite WAL: queue + event log
+  sessions/.events.db                  # SQLite WAL: queue + event log
 ```
 
 Notes:
@@ -531,7 +531,7 @@ inline `path.join` calls.
 
 ### 6.2 Queue (SQLite, WAL, better-sqlite3)
 
-`<agent>/sessions/.queue.db` schema:
+`<agent>/sessions/.events.db` schema:
 
 ```sql
 CREATE TABLE messages (
@@ -977,7 +977,7 @@ Everything is on disk, so `cat`, `ls`, and `grep` work:
 - `agent.json`, `system_prompts/`, `skills/agent/...` — read directly.
 - `<agent>/sessions/<threadId>/<sessionId>.jsonl` — full conversation
   trace, parseable with `jq`.
-- `<agent>/sessions/.queue.db` — open with `sqlite3` for queue and event
+- `<agent>/sessions/.events.db` — open with `sqlite3` for queue and event
   log inspection.
 
 ### 10.3 Editing files
@@ -1017,7 +1017,7 @@ live events — without changing any of the core contracts in this doc.
      name="admin", privileged=true; auto-installs admin + platform plugins)
    - For each <rootDir>/<harnessId>/agents/<agentId>/:
      - Read agent.json
-     - Construct AgentRunner; sweepInFlight() on its queue.db
+     - Construct AgentRunner; sweepInFlight() on its events.db
      - For each plugins/<pluginId>/ dir:
        - Look up pluginId in registry; construct PluginInstanceContext
          (or PrivilegedPluginContext if agent.json.privileged === true)
@@ -1170,7 +1170,7 @@ instance gets a child logger with scope `agent:<id>` /
 ### 13.2 Event log (structured, durable)
 
 Every notify and every batch state-change is appended to a structured event
-log in the agent's `sessions/.queue.db` (same SQLite file as the queue):
+log in the agent's `sessions/.events.db` (same SQLite file as the queue):
 
 ```sql
 CREATE TABLE events (

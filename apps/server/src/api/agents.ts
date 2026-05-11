@@ -23,11 +23,9 @@ import type { ServerConfig } from "../config.js";
  *   POST /api/agents/:id/restart                        — lifecycle (full reload)
  *   GET  /api/agents/:id/sessions                       — list threads + sessions
  *   GET  /api/agents/:id/sessions/:threadId/:sessionId  — raw jsonl entries
- *   GET  /api/agents/:id/queue/pending
- *   GET  /api/agents/:id/queue/dlq
- *   GET  /api/agents/:id/queue/events?since=&limit=
- *   POST /api/agents/:id/queue/dlq/:rowId/requeue
- *   DELETE /api/agents/:id/queue/dlq/:rowId
+ *   GET  /api/agents/:id/events?status=&plugin=&search=&sortBy=&sortDir=&limit=&offset=
+ *   POST /api/agents/:id/events/:rowId/requeue          — re-queue a status=failed row
+ *   DELETE /api/agents/:id/events/:rowId                — discard a status=failed row
  *
  * Mutating chat actions (send/abort) live on /admin/* and predate this
  * router; they are unchanged.
@@ -220,76 +218,91 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     return c.json({ threadId, sessionId, entries });
   });
 
-  r.get("/:id/queue/pending", (c) => {
+  r.get("/:id/events", (c) => {
     const inst = am.get(c.req.param("id"));
     if (!inst) return c.json({ error: "unknown agent" }, 404);
-    if (!inst.db) return c.json({ messages: [] });
-    const limit = clampLimit(c.req.query("limit"), 200, 1000);
+    if (!inst.db) return c.json({ events: [], total: 0 });
+    const q = c.req.query.bind(c.req);
+    const statusesRaw = q("status");
+    const statuses = statusesRaw
+      ? statusesRaw.split(",").map((s) => s.trim()).filter(Boolean)
+      : undefined;
+    const pluginId = q("plugin") || undefined;
+    const search = q("search") || undefined;
+    const sortBy = (q("sortBy") as
+      | "ts"
+      | "updated_at"
+      | "status"
+      | "plugin_id"
+      | "thread_id"
+      | undefined) ?? "updated_at";
+    const sortDir: "asc" | "desc" = q("sortDir") === "asc" ? "asc" : "desc";
+    const limit = clampLimit(q("limit"), 200, 1000);
+    const offsetRaw = Number(q("offset") ?? 0);
+    const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+    const tsFrom = parseMs(q("tsFrom"));
+    const tsTo = parseMs(q("tsTo"));
+    const updatedFrom = parseMs(q("updatedFrom"));
+    const updatedTo = parseMs(q("updatedTo"));
+    const isSilent = parseBool(q("isSilent"));
+
+    const filterOpts = {
+      statuses,
+      pluginId,
+      search,
+      isSilent,
+      tsFrom,
+      tsTo,
+      updatedFrom,
+      updatedTo,
+    };
+    const rows = inst.db.listEvents({
+      ...filterOpts,
+      sortBy,
+      sortDir,
+      limit,
+      offset,
+    });
+    const total = inst.db.countEvents(filterOpts);
     return c.json({
-      messages: inst.db.listPending(limit).map((row) => ({
+      events: rows.map((row) => ({
         id: row.id,
-        enqueuedAt: row.enqueued_at,
+        ts: row.ts,
+        updatedAt: row.updated_at,
         pluginId: row.plugin_id,
         channelId: row.channel_id,
         threadId: row.thread_id,
-        text: row.text,
-        priority: row.priority,
         isSilent: row.is_silent === 1,
-        inFlight: row.in_flight === 1,
-        attempts: row.attempts,
-      })),
-    });
-  });
-
-  r.get("/:id/queue/dlq", (c) => {
-    const inst = am.get(c.req.param("id"));
-    if (!inst) return c.json({ error: "unknown agent" }, 404);
-    if (!inst.db) return c.json({ messages: [] });
-    const limit = clampLimit(c.req.query("limit"), 200, 1000);
-    return c.json({
-      messages: inst.db.listDeadLetter(limit).map((row) => ({
-        id: row.id,
-        enqueuedAt: row.enqueued_at,
-        pluginId: row.plugin_id,
-        channelId: row.channel_id,
-        threadId: row.thread_id,
         text: row.text,
+        metadata: parseMetadata(row.metadata),
+        status: row.status,
         priority: row.priority,
         attempts: row.attempts,
-        lastError: row.last_error,
-        deadAt: row.dead_at,
+        error: row.error,
       })),
+      total,
     });
   });
 
-  r.get("/:id/queue/events", (c) => {
-    const inst = am.get(c.req.param("id"));
-    if (!inst) return c.json({ error: "unknown agent" }, 404);
-    if (!inst.db) return c.json({ events: [] });
-    const since = Number(c.req.query("since") ?? 0);
-    const limit = clampLimit(c.req.query("limit"), 200, 1000);
-    return c.json({ events: inst.db.tailEvents(since || null, limit) });
-  });
-
-  r.post("/:id/queue/dlq/:rowId/requeue", (c) => {
+  r.post("/:id/events/:rowId/requeue", (c) => {
     const inst = am.get(c.req.param("id"));
     if (!inst) return c.json({ error: "unknown agent" }, 404);
     if (!inst.db) return c.json({ error: "agent not initialized" }, 503);
     const rowId = Number(c.req.param("rowId"));
     if (!Number.isFinite(rowId)) return c.json({ error: "bad row id" }, 400);
-    const newId = inst.db.requeueDeadLetter(rowId);
-    if (newId === null) return c.json({ error: "no such row" }, 404);
-    return c.json({ ok: true, id: newId });
+    const id = inst.db.requeueFailed(rowId);
+    if (id === null) return c.json({ error: "no such failed row" }, 404);
+    return c.json({ ok: true, id });
   });
 
-  r.delete("/:id/queue/dlq/:rowId", (c) => {
+  r.delete("/:id/events/:rowId", (c) => {
     const inst = am.get(c.req.param("id"));
     if (!inst) return c.json({ error: "unknown agent" }, 404);
     if (!inst.db) return c.json({ error: "agent not initialized" }, 503);
     const rowId = Number(c.req.param("rowId"));
     if (!Number.isFinite(rowId)) return c.json({ error: "bad row id" }, 400);
-    const ok = inst.db.removeDeadLetter(rowId);
-    if (!ok) return c.json({ error: "no such row" }, 404);
+    const ok = inst.db.removeFailed(rowId);
+    if (!ok) return c.json({ error: "no such failed row" }, 404);
     return c.json({ ok: true });
   });
 
@@ -319,6 +332,31 @@ function pluginPath(
   filename: string,
 ): string {
   return join(agentDir(cfg, agentId), "plugins", pluginId, filename);
+}
+
+function parseMs(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function parseBool(raw: string | undefined): boolean | undefined {
+  if (raw == null || raw === "") return undefined;
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  return undefined;
+}
+
+function parseMetadata(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function readJsonFile(path: string): unknown {

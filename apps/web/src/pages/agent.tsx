@@ -9,11 +9,11 @@ import {
 } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Activity,
   ArrowLeft,
   Bot,
   Copy,
   FolderTree,
-  ListOrdered,
   MessagesSquare,
   Plug,
   Settings,
@@ -26,7 +26,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { FileTree } from "@/components/file-tree";
 import { FileEditor } from "@/components/file-editor";
 import { ChatWindow } from "@/components/chat-window";
-import { QueueTabs } from "@/components/queue-tabs";
+import { EventsTable } from "@/components/events-table";
 import { AgentSettingsPane } from "@/components/agent-settings-pane";
 import {
   LifecycleControls,
@@ -73,13 +73,14 @@ export function AgentPage() {
           <Route path="chat" element={<ChatWindow agentId={id} />} />
           <Route path="files/*" element={<FilesPane agentId={id} />} />
           <Route
-            path="queue"
+            path="events"
             element={
               <div className="h-full p-4 sm:p-6">
-                <QueueTabs agentId={id} />
+                <EventsTable agentId={id} />
               </div>
             }
           />
+          <Route path="queue" element={<Navigate to="../events" replace />} />
           <Route path="plugins" element={<PluginsPane agentId={id} />} />
           <Route path="settings" element={<AgentSettingsPane agentId={id} />} />
           <Route path="*" element={<Navigate to="chat" replace />} />
@@ -94,7 +95,7 @@ function SubTabs({ agentId }: { agentId: string }) {
   const tabs = [
     { to: `/agents/${agentId}/chat`, key: "chat", label: "Chat", icon: MessagesSquare },
     { to: `/agents/${agentId}/files`, key: "files", label: "Files", icon: FolderTree },
-    { to: `/agents/${agentId}/queue`, key: "queue", label: "Queue", icon: ListOrdered },
+    { to: `/agents/${agentId}/events`, key: "events", label: "Events", icon: Activity },
     { to: `/agents/${agentId}/plugins`, key: "plugins", label: "Plugins", icon: Plug },
     { to: `/agents/${agentId}/settings`, key: "settings", label: "Settings", icon: Settings },
   ];

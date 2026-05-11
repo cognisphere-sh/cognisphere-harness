@@ -184,48 +184,42 @@ export interface ThreadRow {
   sessions: SessionRow[];
 }
 
-export interface PendingMessage {
-  id: number;
-  enqueuedAt: number;
-  pluginId: string;
-  channelId: string;
-  threadId: string;
-  text: string;
-  priority: number;
-  isSilent: boolean;
-  inFlight: boolean;
-  attempts: number;
-}
-
-export interface DLQMessage {
-  id: number;
-  enqueuedAt: number;
-  pluginId: string;
-  channelId: string;
-  threadId: string;
-  text: string;
-  priority: number;
-  attempts: number;
-  lastError: string | null;
-  deadAt: number;
-}
+export type EventStatus =
+  | "queued"
+  | "in_flight"
+  | "done"
+  | "failed"
+  | "cancelled";
 
 export interface EventRow {
   id: number;
   ts: number;
-  event: string;
-  agent_id: string;
-  plugin_id: string | null;
-  notification: string | null;
-  channel_id: string | null;
-  thread_id: string | null;
-  batch_id: string | null;
-  status: string;
-  message_queue_id: number | null;
-  session_file: string | null;
-  message_index: number | null;
-  log: string | null;
+  updatedAt: number;
+  pluginId: string;
+  channelId: string;
+  threadId: string;
+  isSilent: boolean;
+  text: string;
+  metadata: Record<string, unknown> | null;
+  status: EventStatus;
+  priority: number;
+  attempts: number;
   error: string | null;
+}
+
+export interface ListEventsParams {
+  status?: EventStatus[];
+  plugin?: string;
+  search?: string;
+  isSilent?: boolean;
+  tsFrom?: number;
+  tsTo?: number;
+  updatedFrom?: number;
+  updatedTo?: number;
+  sortBy?: "ts" | "updated_at" | "status" | "plugin_id" | "thread_id";
+  sortDir?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
 }
 
 /**
@@ -346,16 +340,33 @@ export const endpoints = {
       `/api/agents/${id}/sessions/${encodeURIComponent(threadId)}/${encodeURIComponent(sessionId)}`,
     ),
 
-  listPending: (id: string) =>
-    api.get<{ messages: PendingMessage[] }>(`/api/agents/${id}/queue/pending`),
-  listDLQ: (id: string) =>
-    api.get<{ messages: DLQMessage[] }>(`/api/agents/${id}/queue/dlq`),
-  listEvents: (id: string, since?: number) =>
-    api.get<{ events: EventRow[] }>(`/api/agents/${id}/queue/events`, { since }),
-  requeueDLQ: (id: string, rowId: number) =>
-    api.post<{ ok: true }>(`/api/agents/${id}/queue/dlq/${rowId}/requeue`),
-  deleteDLQ: (id: string, rowId: number) =>
-    api.delete<{ ok: true }>(`/api/agents/${id}/queue/dlq/${rowId}`),
+  listEvents: (id: string, params?: ListEventsParams) =>
+    api.get<{ events: EventRow[]; total: number }>(
+      `/api/agents/${id}/events`,
+      {
+        status: params?.status?.join(","),
+        plugin: params?.plugin,
+        search: params?.search,
+        isSilent:
+          params?.isSilent === undefined
+            ? undefined
+            : params.isSilent
+              ? "true"
+              : "false",
+        tsFrom: params?.tsFrom,
+        tsTo: params?.tsTo,
+        updatedFrom: params?.updatedFrom,
+        updatedTo: params?.updatedTo,
+        sortBy: params?.sortBy,
+        sortDir: params?.sortDir,
+        limit: params?.limit,
+        offset: params?.offset,
+      },
+    ),
+  requeueEvent: (id: string, rowId: number) =>
+    api.post<{ ok: true; id: number }>(`/api/agents/${id}/events/${rowId}/requeue`),
+  discardEvent: (id: string, rowId: number) =>
+    api.delete<{ ok: true }>(`/api/agents/${id}/events/${rowId}`),
 
   sendChat: (id: string, text: string, threadId?: string, channelId?: string) =>
     api.post<{ ok: true }>(`/admin/${id}/send`, { text, threadId, channelId }),

@@ -388,10 +388,10 @@ export class AgentManager {
     }
     inst.agentJson = agentJson;
 
-    // 2. Open the queue db lazily, reuse across restarts.
+    // 2. Open the events db lazily, reuse across restarts.
     mkdirSync(join(dir, "sessions"), { recursive: true });
     if (!inst.db) {
-      inst.db = new AgentDb(join(dir, "sessions", ".queue.db"), inst.id);
+      inst.db = new AgentDb(join(dir, "sessions", ".events.db"));
     }
 
     // 3. Construct a fresh runner with the resolved env snapshot.
