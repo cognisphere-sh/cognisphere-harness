@@ -35,11 +35,13 @@ import { SchemaForm, type JsonSchema } from "@/components/schema-form";
 const CLEAR_SENTINEL = "__CLEAR__";
 
 /**
- * Built-in schema for `agent.json`. The server doesn't declare a config
- * schema for agents (only for plugins), so this lives client-side and
- * drives the per-agent Configuration form. Unknown fields in agent.json
- * (e.g. `secretsSchema`) are preserved through save because the draft is a
- * deep clone of the original — the form only mutates fields it renders.
+ * Built-in schema for `agent.json` excluding `config`. `config` is
+ * rendered from the per-agent `configSchema` declared in agent.json
+ * itself (mirrors plugin manifests' `configSchema`), composed in at
+ * render time by `<AgentConfigBlock>`. Unknown fields in agent.json
+ * (e.g. `secretsSchema`, `configSchema`) are preserved through save
+ * because the draft is a deep clone of the original — the form only
+ * mutates fields it renders.
  */
 const AGENT_CONFIG_SCHEMA: JsonSchema = {
   type: "object",
@@ -91,12 +93,6 @@ const AGENT_CONFIG_SCHEMA: JsonSchema = {
       type: "string",
       enum: ["subprocess"],
       description: "Execution runtime (only `subprocess` in v0).",
-    },
-    config: {
-      type: "object",
-      description:
-        "Non-secret env vars exposed to the pi runtime (e.g. ELEVENLABS_VOICE_ID). Free-form { string: string } map.",
-      additionalProperties: { type: "string" },
     },
   },
 };
@@ -356,22 +352,6 @@ interface AgentModel {
   thinkingLevel?: string;
 }
 
-/**
- * Schema for the non-`model` portion of agent.json. The `model` block is
- * rendered separately by `<ModelPicker>` so provider/model can be live
- * dropdowns sourced from `/api/models`. Everything `model.*` round-trips
- * untouched on save because the draft is a deep clone — we only mutate
- * the keys our two sub-forms own.
- */
-const AGENT_REST_SCHEMA: JsonSchema = {
-  type: "object",
-  properties: Object.fromEntries(
-    Object.entries(AGENT_CONFIG_SCHEMA.properties ?? {}).filter(
-      ([k]) => k !== "model",
-    ),
-  ),
-};
-
 function AgentConfigBlock({
   initial,
   models,
@@ -400,6 +380,31 @@ function AgentConfigBlock({
   const model = (draft.model ?? {}) as AgentModel;
   const setModel = (next: AgentModel) =>
     setDraft((d) => ({ ...d, model: { ...(d.model as object), ...next } }));
+
+  // Compose the rest schema per-render: static fields minus `model`
+  // (rendered separately by ModelPicker), plus `config` whose shape is
+  // declared by `agentJson.configSchema`. Same pattern plugins use —
+  // the manifest's configSchema drives the form. If the agent didn't
+  // declare a configSchema, `config` is omitted entirely (no free-form
+  // fallback; declare a schema if you want a config).
+  const restSchema = useMemo<JsonSchema>(() => {
+    const base = Object.fromEntries(
+      Object.entries(AGENT_CONFIG_SCHEMA.properties ?? {}).filter(
+        ([k]) => k !== "model",
+      ),
+    );
+    const configSchema = (initialClone as Record<string, unknown>)
+      .configSchema as JsonSchema | undefined;
+    if (configSchema) {
+      base.config = {
+        ...configSchema,
+        description:
+          configSchema.description ??
+          "Non-secret env vars exposed to the pi runtime (validated against configSchema in agent.json).",
+      };
+    }
+    return { type: "object", properties: base };
+  }, [initialClone]);
 
   return (
     <div>
@@ -435,7 +440,7 @@ function AgentConfigBlock({
       <div className="grid gap-4">
         <ModelPicker models={models} value={model} onChange={setModel} />
         <SchemaForm
-          schema={AGENT_REST_SCHEMA}
+          schema={restSchema}
           value={draft}
           onChange={(v) => setDraft(v as Record<string, unknown>)}
         />

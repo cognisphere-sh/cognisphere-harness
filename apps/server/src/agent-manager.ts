@@ -764,23 +764,43 @@ function checkRequiredSecrets(
 }
 
 /**
- * Validate and return the env-vars map from `agent.json.config`. Empty if
- * the field is absent. Throws if the field is present but malformed so a
- * typo in agent.json surfaces at start instead of silently dropping values.
+ * Validate `agent.json.config` against `agent.json.configSchema` (ajv
+ * with `useDefaults` so declared defaults backfill missing keys), then
+ * return the env-vars map. Empty if neither is set. The two fields are
+ * tied: declaring `config` without `configSchema` (or vice versa)
+ * throws at start so the operator can't drift the value off its
+ * contract. Empty-string values are dropped from the env so the runtime
+ * sees them as unset.
  */
 function resolveAgentConfigEnv(
   agentJson: AgentJson,
   agentId: string,
 ): Record<string, string> {
-  const raw = agentJson.config;
-  if (raw === undefined) return {};
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  const hasConfig = agentJson.config !== undefined;
+  const hasSchema = agentJson.configSchema !== undefined;
+  if (!hasConfig && !hasSchema) return {};
+  if (hasConfig !== hasSchema) {
     throw new Error(
-      `agent ${agentId}: agent.json "config" must be an object mapping env-var names to string values`,
+      `agent ${agentId}: agent.json "config" and "configSchema" must be set together (got config=${hasConfig}, configSchema=${hasSchema})`,
     );
   }
+  const data = (agentJson.config ?? {}) as Record<string, unknown>;
+  const validate = ajv.compile(agentJson.configSchema!);
+  const ok = validate(data);
+  if (!ok) {
+    const msgs =
+      validate.errors
+        ?.map((e: ErrorObject) => `${e.instancePath || "/"} ${e.message ?? ""}`.trim())
+        .join("; ") ?? "unknown";
+    throw new Error(
+      `agent ${agentId}: agent.json config invalid: ${msgs}`,
+    );
+  }
+  // ajv mutated `data` in place via useDefaults; write the populated
+  // values back so the UI sees the same defaulted shape the runtime did.
+  agentJson.config = data as Record<string, string>;
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(raw)) {
+  for (const [k, v] of Object.entries(data)) {
     if (typeof v !== "string") {
       throw new Error(
         `agent ${agentId}: agent.json config.${k} must be a string (got ${typeof v})`,

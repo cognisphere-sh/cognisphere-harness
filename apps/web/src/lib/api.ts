@@ -128,6 +128,8 @@ export interface AgentDetail {
     maxConcurrentSlots?: number;
     maxAttempts?: number;
     runtime?: string;
+    secretsSchema?: unknown;
+    configSchema?: unknown;
     config?: Record<string, string>;
   } | null;
   installedPlugins: string[];

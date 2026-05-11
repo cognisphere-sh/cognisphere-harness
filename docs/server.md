@@ -561,9 +561,12 @@ in progress", "conflict")`.
    `providerEnv` to merge into the pi child's env.
 3. **Snapshot env secrets.** Call `secrets.resolveAll(agentId)`. This
    throws if any key collides across buckets. Read non-secret env from
-   `agentJson.config` (a flat `Record<string, string>`; empty strings are
-   skipped). Check that no key in either source shadows `providerEnv`
-   or each other (collisions throw). Merge into
+   `agentJson.config` and validate it against `agentJson.configSchema`
+   via ajv (`useDefaults: true` fills in declared defaults in place).
+   The two fields are tied: declaring one without the other throws.
+   Empty strings are skipped from the env (treated as unset). Check
+   that no key shadows `providerEnv` or `resolvedSecrets` (collisions
+   throw). Merge into
    `envSecrets = { ...providerEnv, ...resolvedSecrets, ...agentConfigEnv }`.
 4. **Open the queue db.** Lazy — created on first start, reused across
    stop/start cycles.
@@ -653,9 +656,14 @@ The shared type surface every component imports from. Notable shapes:
 - `AgentJson` — what `agent.json` deserializes to. `model: { provider,
   id, thinkingLevel? }`, `threadIdStrategy`, `maxConcurrentSlots?`,
   `maxAttempts?`, `runtime? = "subprocess"`, optional `secretsSchema`
-  for agent-level secrets, optional `config: Record<string, string>` for
-  non-secret env vars exposed to the pi runtime (merged into env on
-  start; collisions with secrets/provider env throw).
+  for agent-level secrets, optional `configSchema` declaring the shape
+  of `config` (validated with ajv `useDefaults` at start; per-property
+  `type` should be `"string"` since env values are strings), and
+  optional `config: Record<string, string>` for non-secret env vars
+  exposed to the pi runtime (merged into env on start; collisions with
+  secrets/provider env throw). `config` and `configSchema` are tied —
+  setting one without the other fails the start so values can't drift
+  off contract.
 - `AGENT_TOOLS` — frozen list of the 7 built-in pi tools (`read`,
   `bash`, `edit`, `write`, `grep`, `find`, `ls`).
 - `NotifyPayload` — what plugins pass to `ctx.notify()`. `text`,

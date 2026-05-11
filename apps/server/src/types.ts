@@ -28,11 +28,25 @@ export interface AgentJson {
    */
   secretsSchema?: JsonSchema;
   /**
+   * Optional JSON-Schema describing the shape of `config`. Mirrors plugin
+   * `configSchema` from `PluginManifest` and the agent's own
+   * `secretsSchema`: drives ajv validation + `useDefaults` at start, and
+   * the settings UI renders typed inputs (named fields, descriptions,
+   * enums, defaults) instead of a free-form JSON map. Per-property
+   * `type` should be `"string"` (with optional `enum`) — env values are
+   * always strings at the runtime boundary.
+   *
+   * Required when `config` is set. Validation failure (or the schema
+   * being missing while `config` has keys) fails the agent start.
+   */
+  configSchema?: JsonSchema;
+  /**
    * Non-secret agent-level env vars exposed to the pi runtime. Use this
    * for values that aren't sensitive (model ids, voice ids, feature
    * toggles) so they don't end up in `secrets.json`. Keys are flattened
    * into the pi child's env on every spawn alongside agent secrets and
    * provider env; collisions across these three sources throw at start.
+   * Validated against `configSchema` when present.
    */
   config?: Record<string, string>;
 }
