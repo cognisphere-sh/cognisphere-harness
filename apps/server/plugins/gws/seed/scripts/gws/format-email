@@ -1,0 +1,218 @@
+#!/usr/bin/env node
+/**
+ * format-email — read a Gmail `Message` JSON from stdin (as emitted by
+ * `gws gmail users messages get --params '{"userId":"me","id":"<id>","format":"full"}'`),
+ * print the body and an attachment listing in the same shape the gws plugin
+ * delivers in `email_received` notifications.
+ *
+ * Usage:
+ *   gws gmail users messages get --params '...' | scripts/format-email
+ *   gws gmail users messages get --params '...' | scripts/format-email \
+ *     --attachments-dir plugins/gws/inbox/<msgId>
+ *
+ * Flags:
+ *   --attachments-dir DIR  write attachments under DIR/, shelling out to
+ *                          `gws gmail users messages attachments get` for each.
+ *   --timezone TZ          IANA tz name for the TimeStamp line (default: host).
+ *   --no-header            drop the Subject/From/To/TimeStamp block.
+ *
+ * The output shape:
+ *
+ *   Subject: <subject>
+ *   From: <from>
+ *   To: <to>
+ *   TimeStamp: 2026-05-01 09:00:00 EDT
+ *
+ *   <body text>
+ *
+ *   <file1.pdf>[<attachments-dir>/file1.pdf]
+ */
+import { execFile } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { resolve as resolvePath, join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileP = promisify(execFile);
+
+function parseArgs(argv) {
+  const out = { attachmentsDir: null, timezone: null, header: true };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--attachments-dir" || a === "-d") out.attachmentsDir = argv[++i];
+    else if (a === "--timezone") out.timezone = argv[++i];
+    else if (a === "--no-header") out.header = false;
+    else if (a === "--help" || a === "-h") {
+      process.stdout.write(
+        "Usage: <gmail-message-json on stdin> | format-email [options]\n" +
+          "  --attachments-dir DIR  download attachments under DIR/ via `gws`\n" +
+          "  --timezone TZ          IANA tz for the TimeStamp line\n" +
+          "  --no-header            drop the Subject/From/To/TimeStamp block\n",
+      );
+      process.exit(0);
+    } else {
+      process.stderr.write(`format-email: unknown arg '${a}'\n`);
+      process.exit(2);
+    }
+  }
+  return out;
+}
+
+async function readStdin() {
+  let buf = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) buf += chunk;
+  return buf;
+}
+
+function collectHeaders(part) {
+  const m = new Map();
+  for (const h of part.headers ?? []) m.set(h.name.toLowerCase(), h.value);
+  return m;
+}
+
+function walk(part, fn) {
+  fn(part);
+  for (const child of part.parts ?? []) walk(child, fn);
+}
+
+function findFirst(part, pred) {
+  if (pred(part)) return part;
+  for (const child of part.parts ?? []) {
+    const hit = findFirst(child, pred);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function decodeBase64url(s) {
+  return Buffer.from(s, "base64url").toString("utf8");
+}
+
+function stripTags(html) {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function pickTextBody(part) {
+  const plain = findFirst(part, (p) => p.mimeType === "text/plain" && !!p.body?.data);
+  if (plain?.body?.data) return decodeBase64url(plain.body.data);
+  const html = findFirst(part, (p) => p.mimeType === "text/html" && !!p.body?.data);
+  if (html?.body?.data) return stripTags(decodeBase64url(html.body.data));
+  return "";
+}
+
+function collectAttachments(part) {
+  const out = [];
+  walk(part, (p) => {
+    if (p.body?.attachmentId && p.filename) out.push(p);
+  });
+  return out;
+}
+
+function sanitizeFilename(name) {
+  return name.replace(/[\/\\:*?"<>|]+/g, "_").slice(0, 200) || "attachment";
+}
+
+function formatTs(unixMs, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).formatToParts(new Date(unixMs));
+  const get = (t) => parts.find((p) => p.type === t)?.value ?? "";
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  return `${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
+}
+
+async function fetchAttachment(messageId, attachmentId, target) {
+  const params = JSON.stringify({ userId: "me", messageId, id: attachmentId });
+  const { stdout } = await execFileP(
+    "gws",
+    [
+      "gmail",
+      "users",
+      "messages",
+      "attachments",
+      "get",
+      "--params",
+      params,
+    ],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  const att = JSON.parse(stdout);
+  writeFileSync(target, Buffer.from(att.data, "base64url"));
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const raw = await readStdin();
+  if (!raw.trim()) {
+    process.stderr.write("format-email: empty stdin (expected gmail message JSON)\n");
+    process.exit(2);
+  }
+  const msg = JSON.parse(raw);
+  if (!msg.payload) {
+    process.stderr.write("format-email: input has no .payload (not a gmail message?)\n");
+    process.exit(2);
+  }
+
+  const headers = collectHeaders(msg.payload);
+  const tz = args.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const subject = headers.get("subject") ?? "(no subject)";
+  const from = headers.get("from") ?? "(unknown sender)";
+  const to = headers.get("to") ?? "(unknown recipient)";
+  const timestamp = msg.internalDate
+    ? formatTs(Number(msg.internalDate), tz)
+    : (headers.get("date") ?? "(unknown)");
+
+  const lines = [];
+  if (args.header) {
+    lines.push(
+      `Subject: ${subject}`,
+      `From: ${from}`,
+      `To: ${to}`,
+      `TimeStamp: ${timestamp}`,
+      "",
+    );
+  }
+  lines.push(pickTextBody(msg.payload) || "(no plain-text body)");
+
+  const attParts = collectAttachments(msg.payload);
+  const attLines = [];
+  if (attParts.length > 0 && args.attachmentsDir) {
+    const dir = resolvePath(args.attachmentsDir);
+    mkdirSync(dir, { recursive: true });
+    for (const part of attParts) {
+      const filename = sanitizeFilename(part.filename ?? `attachment-${part.partId ?? "0"}`);
+      const target = join(dir, filename);
+      try {
+        await fetchAttachment(msg.id, part.body.attachmentId, target);
+        attLines.push(`${filename}[${args.attachmentsDir.replace(/\/$/, "")}/${filename}]`);
+      } catch (err) {
+        process.stderr.write(`format-email: failed to fetch ${filename}: ${err?.message ?? err}\n`);
+      }
+    }
+  }
+  if (attLines.length > 0) {
+    lines.push("", ...attLines);
+  }
+
+  const out = lines.join("\n");
+  process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+}
+
+main().catch((err) => {
+  process.stderr.write(`format-email: ${err?.message ?? err}\n`);
+  process.exit(1);
+});

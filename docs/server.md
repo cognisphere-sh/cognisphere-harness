@@ -1260,4 +1260,4 @@ Agent-runner subsystem (HTTP API surface omitted — see
 | **subtotal (agent-runner)** | **~3 200** | |
 
 Built-in plugins live in `apps/server/plugins/<id>/`: `admin`,
-`scheduler`, `telegram`, `gmail` (stub).
+`scheduler`, `telegram`, `gws`, `gmail` (stub).
