@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import {
   Link,
   Navigate,
@@ -25,7 +25,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FileTree } from "@/components/file-tree";
-import { FileEditor } from "@/components/file-editor";
+const FileEditor = lazy(() =>
+  import("@/components/file-editor").then((m) => ({ default: m.FileEditor })),
+);
 import { ChatWindow } from "@/components/chat-window";
 import { EventsTable } from "@/components/events-table";
 import { AgentSettingsPane } from "@/components/agent-settings-pane";
@@ -166,7 +168,15 @@ function FilesPane({ agentId }: { agentId: string }) {
               Back to files
             </button>
             <div className="min-h-0 flex-1">
-              <FileEditor agentId={agentId} path={selected} />
+              <Suspense
+                fallback={
+                  <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                    Loading editor…
+                  </div>
+                }
+              >
+                <FileEditor agentId={agentId} path={selected} />
+              </Suspense>
             </div>
           </>
         ) : (
