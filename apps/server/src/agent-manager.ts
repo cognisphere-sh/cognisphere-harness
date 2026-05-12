@@ -340,6 +340,20 @@ export class AgentManager {
     const dir = agentDir(this.cfg, inst.id);
     const installedPluginIds = scanPluginDirs(dir);
     inst.plugins.clear();
+    // Seed every installed plugin as "stopped" so the Settings UI + the
+    // secrets endpoint surface them even if agent validation fails before
+    // step 4 reaches them (e.g. missing agent-level secret aborts early —
+    // operator still needs to see plugin configs/secrets to fix them).
+    // Step 4 overwrites these entries on successful startup.
+    for (const pid of installedPluginIds) {
+      inst.plugins.set(pid, {
+        state: "stopped",
+        instance: null,
+        config: null,
+        error: null,
+        changedAt: Date.now(),
+      });
+    }
 
     // 1. Parse agent.json + agent-secret validation + provider gating +
     //    env-secret resolution. All sources (provider catalog env, agent
@@ -347,14 +361,33 @@ export class AgentManager {
     //    throw so the operator sees the conflict instead of one source
     //    silently overriding another.
     let agentJson: AgentJson;
-    let envSecrets: Record<string, string> = {};
     try {
       const raw = readFileSync(join(dir, "agent.json"), "utf8");
       agentJson = JSON.parse(raw) as AgentJson;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ err, agent: inst.id }, "agent.json parse failed");
+      inst.agentJson = null;
+      inst.state = "failed";
+      inst.error = message;
+      inst.changedAt = Date.now();
+      return inst;
+    }
+    // Expose the parsed spec to the UI immediately so any subsequent
+    // validation failure still surfaces its schemas + config — otherwise
+    // operators can't fix a "missing required secret" because the form
+    // to set it is gated on the agent loading cleanly.
+    inst.agentJson = agentJson;
+
+    let envSecrets: Record<string, string> = {};
+    try {
       if (agentJson.secretsSchema) {
         const declared = Object.keys(agentJson.secretsSchema.properties ?? {});
+        const required = (agentJson.secretsSchema.required ?? []).filter((k) =>
+          declared.includes(k),
+        );
         const resolved = this.secrets.resolve(inst.id, AGENT_BUCKET, declared);
-        checkRequiredSecrets(declared, resolved, `agent ${inst.id}`);
+        checkRequiredSecrets(required, resolved, `agent ${inst.id}`);
       }
       const providerEnv = resolveAndValidateProvider(
         this.models,
@@ -379,14 +412,12 @@ export class AgentManager {
       envSecrets = { ...providerEnv, ...resolvedSecrets, ...agentConfigEnv };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.log.error({ err, agent: inst.id }, "agent spec parse/validate failed");
-      inst.agentJson = null;
+      this.log.error({ err, agent: inst.id }, "agent spec validate failed");
       inst.state = "failed";
       inst.error = message;
       inst.changedAt = Date.now();
       return inst;
     }
-    inst.agentJson = agentJson;
 
     // 2. Open the events db lazily, reuse across restarts.
     mkdirSync(join(dir, "sessions"), { recursive: true });
@@ -530,9 +561,12 @@ export class AgentManager {
     );
 
     const secretKeys = Object.keys(entry.manifest.secretsSchema.properties ?? {});
+    const requiredSecrets = (entry.manifest.secretsSchema.required ?? []).filter(
+      (k) => secretKeys.includes(k),
+    );
     const resolvedSecrets = this.secrets.resolve(inst.id, pluginId, secretKeys);
     checkRequiredSecrets(
-      secretKeys,
+      requiredSecrets,
       resolvedSecrets,
       `plugin ${pluginId} on ${inst.id}`,
     );
@@ -752,19 +786,21 @@ function validateAndDefault(
 }
 
 /**
- * Enforce that every declared secret is populated. v0 contract: all
- * declared secrets are mandatory — there are no optional secrets.
+ * Enforce that every secret in `required` is populated. Keys declared in
+ * `properties` but absent from `required` are optional — they show up in
+ * the settings UI and are exported to env when set, but their absence is
+ * non-fatal.
  *
  * `label` is rendered in the error message — pass `"plugin <pluginId> on
  * <agentId>"` for plugin secrets or `"agent <agentId>"` for agent-level
  * secrets.
  */
 function checkRequiredSecrets(
-  declared: string[],
+  required: string[],
   resolved: Record<string, string>,
   label: string,
 ): void {
-  const missing = declared.filter((k) => !(k in resolved));
+  const missing = required.filter((k) => !(k in resolved));
   if (missing.length > 0) {
     throw new Error(`${label}: missing secrets: ${missing.join(", ")}`);
   }

@@ -242,6 +242,7 @@ compatibility with future settings that *would* need a full restart.
 |---|---|---|
 | GET | `/api/agents/:id/sessions` | List threads under `<agent>/sessions/` and their `.jsonl` files, newest-first. |
 | GET | `/api/agents/:id/sessions/:threadId/:sessionId` | Read the JSONL file as an array of parsed entries. |
+| DELETE | `/api/agents/:id/sessions/:threadId` | Permanently remove a thread — drops every `events` row for the thread, its `threads` row, and the on-disk `<agent>/sessions/<threadId>/` directory (all sessions). Returns `409` if a batch is in-flight; abort it first. |
 
 Session list response:
 
@@ -265,6 +266,16 @@ Per-session response:
 
 Malformed JSONL lines are silently skipped. `threadId` and `sessionId`
 are constrained to `[A-Za-z0-9._:-]+` to prevent path-traversal.
+
+Delete response:
+
+```json
+{ "ok": true, "threadId": "...", "events": 17, "removedDir": true }
+```
+
+`events` is the number of `events` rows deleted; `removedDir` is `false`
+if the on-disk directory did not exist (e.g. a thread that only ever had
+queued events and was deleted before its first batch ran).
 
 ### Events stream
 

@@ -3,6 +3,7 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -197,6 +198,35 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
         (b.sessions[0]?.modified ?? 0) - (a.sessions[0]?.modified ?? 0),
     );
     return c.json({ threads });
+  });
+
+  r.delete("/:id/sessions/:threadId", (c) => {
+    const id = c.req.param("id");
+    const inst = am.get(id);
+    if (!inst) return c.json({ error: "unknown agent" }, 404);
+    const threadId = c.req.param("threadId");
+    if (!isSafeId(threadId)) {
+      return c.json({ error: "invalid thread id" }, 400);
+    }
+    if (inst.runner?.isThreadActive(threadId)) {
+      return c.json(
+        { error: "thread is currently in-flight — abort it first" },
+        409,
+      );
+    }
+    const dbRes = inst.db?.deleteThread(threadId) ?? { events: 0 };
+    const tDir = join(agentDir(cfg, id), "sessions", threadId);
+    let removedDir = false;
+    if (existsSync(tDir)) {
+      rmSync(tDir, { recursive: true, force: true });
+      removedDir = true;
+    }
+    return c.json({
+      ok: true,
+      threadId,
+      events: dbRes.events,
+      removedDir,
+    });
   });
 
   r.get("/:id/sessions/:threadId/:sessionId", (c) => {

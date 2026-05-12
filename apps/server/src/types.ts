@@ -22,9 +22,10 @@ export interface AgentJson {
   /**
    * Optional JSON-Schema describing agent-level secrets (env vars exposed
    * to the pi runtime that aren't owned by any single plugin — e.g. an
-   * agent-wide TTS API key consumed directly by user scripts). Same v0
-   * contract as plugin secrets: every key in `properties` is treated as
-   * required, regardless of `required`.
+   * agent-wide TTS API key consumed directly by user scripts). Only keys
+   * listed in `required` block agent startup when unset; keys in
+   * `properties` but absent from `required` are surfaced in the UI and
+   * exported to env when set, but their absence is non-fatal.
    */
   secretsSchema?: JsonSchema;
   /**

@@ -9,7 +9,9 @@ import {
   Loader2,
   MessagesSquare,
   Paperclip,
+  Plus,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -21,11 +23,19 @@ import {
 } from "@/components/chat-message";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -84,6 +94,17 @@ export function ChatWindow({ agentId }: Props) {
     if (sid) setSelected({ threadId: first.threadId, sessionId: sid });
   }, [threads, selected]);
 
+  // Once a pending new-thread's first message has been processed, the
+  // thread appears in `threads` with a real session id — upgrade the
+  // sentinel "" sessionId so the JSONL panel can load.
+  useEffect(() => {
+    if (!selected || selected.sessionId) return;
+    const t = threads.find((x) => x.threadId === selected.threadId);
+    if (!t) return;
+    const sid = pickThreadSession(t);
+    if (sid) setSelected({ threadId: selected.threadId, sessionId: sid });
+  }, [threads, selected]);
+
   const { data: sessionData } = useQuery({
     queryKey: [
       "session",
@@ -93,7 +114,7 @@ export function ChatWindow({ agentId }: Props) {
     ],
     queryFn: () =>
       endpoints.readSession(agentId, selected!.threadId, selected!.sessionId),
-    enabled: !!selected,
+    enabled: !!selected?.sessionId,
     refetchInterval: 3_000,
   });
 
@@ -109,8 +130,30 @@ export function ChatWindow({ agentId }: Props) {
   const activeSessionId = currentThread
     ? pickThreadSession(currentThread)
     : null;
+  // A "pending" thread is one the user just created via the New Thread
+  // dialog: we hold its id locally, but the server-side thread row
+  // doesn't exist until the first message lands.
+  const isPendingNewThread = !!selected && selected.sessionId === "";
   const isViewingActive =
-    !!selected && !!activeSessionId && selected.sessionId === activeSessionId;
+    isPendingNewThread ||
+    (!!selected && !!activeSessionId && selected.sessionId === activeSessionId);
+
+  const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const [newThreadInput, setNewThreadInput] = useState("");
+  const onCreateThread = () => {
+    const id = newThreadInput.trim();
+    if (!id) {
+      toast.error("thread id required");
+      return;
+    }
+    if (threads.some((t) => t.threadId === id)) {
+      toast.error(`thread "${id}" already exists`);
+      return;
+    }
+    setSelected({ threadId: id, sessionId: "" });
+    setNewThreadInput("");
+    setNewThreadOpen(false);
+  };
 
   const [input, setInput] = useState("");
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
@@ -200,6 +243,33 @@ export function ChatWindow({ agentId }: Props) {
     },
   });
 
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const deleteThread = useMutation({
+    mutationFn: (threadId: string) => endpoints.deleteThread(agentId, threadId),
+    onSuccess: (_r, threadId) => {
+      toast.success(`thread "${threadId}" deleted`);
+      if (selected?.threadId === threadId) setSelected(null);
+      setPendingDelete(null);
+      qc.invalidateQueries({ queryKey: ["threads", agentId] });
+      qc.invalidateQueries({ queryKey: ["events", agentId] });
+      qc.invalidateQueries({ queryKey: ["tree", agentId] });
+    },
+    onError: (e: Error) => toast.error(`delete failed: ${e.message}`),
+  });
+
+  const onDeleteThread = (threadId: string) => {
+    // Pending (server-side empty) thread: just drop it locally.
+    if (
+      selected?.threadId === threadId &&
+      selected.sessionId === "" &&
+      !threads.some((t) => t.threadId === threadId)
+    ) {
+      setSelected(null);
+      return;
+    }
+    setPendingDelete(threadId);
+  };
+
   const onSend = () => {
     const text = input.trim();
     if (!text && stagedFiles.length === 0) return;
@@ -227,7 +297,87 @@ export function ChatWindow({ agentId }: Props) {
         loading={threadsLoading}
         selected={selected}
         onSelect={setSelected}
+        onNewThread={() => setNewThreadOpen(true)}
+        onDeleteThread={onDeleteThread}
+        deletingThreadId={
+          deleteThread.isPending ? deleteThread.variables ?? null : null
+        }
       />
+      <Dialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete thread?</DialogTitle>
+            <DialogDescription>
+              This permanently removes the thread{" "}
+              <code className="rounded bg-muted px-1 font-mono">
+                {pendingDelete}
+              </code>{" "}
+              and all of its sessions, queued events, and history.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                pendingDelete && deleteThread.mutate(pendingDelete)
+              }
+              disabled={deleteThread.isPending}
+            >
+              {deleteThread.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={newThreadOpen} onOpenChange={setNewThreadOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>New thread</DialogTitle>
+            <DialogDescription>
+              Enter an id for the new thread. The thread will be created when
+              you send the first message.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            placeholder="thread id"
+            value={newThreadInput}
+            onChange={(e) => setNewThreadInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onCreateThread();
+              }
+            }}
+          />
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setNewThreadInput("");
+                setNewThreadOpen(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={onCreateThread} disabled={!newThreadInput.trim()}>
+              Create
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col lg:border-l">
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-xs text-muted-foreground">
           <MobileThreadPicker
@@ -260,7 +410,11 @@ export function ChatWindow({ agentId }: Props) {
         >
           {chunks.length === 0 && (
             <div className="grid h-full place-items-center text-sm text-muted-foreground">
-              {selected ? "(empty session)" : "Send a message to start a thread."}
+              {isPendingNewThread
+                ? "Send a message to create this thread."
+                : selected
+                  ? "(empty session)"
+                  : "Send a message to start a thread."}
             </div>
           )}
           {chunks.map((c) => (
@@ -537,54 +691,156 @@ function ThreadList({
   loading,
   selected,
   onSelect,
+  onNewThread,
+  onDeleteThread,
+  deletingThreadId,
 }: {
   threads: ThreadRow[];
   loading: boolean;
   selected: { threadId: string; sessionId: string } | null;
   onSelect: (s: { threadId: string; sessionId: string }) => void;
+  onNewThread: () => void;
+  onDeleteThread: (threadId: string) => void;
+  deletingThreadId: string | null;
 }) {
+  // A selected thread with sessionId === "" is a pending new thread the
+  // user just created — it isn't in `threads` yet, so render it at the
+  // top so the selection has a visible row.
+  const pendingNew =
+    selected &&
+    selected.sessionId === "" &&
+    !threads.some((t) => t.threadId === selected.threadId)
+      ? selected.threadId
+      : null;
   return (
     <div className="hidden h-full min-h-0 flex-col lg:flex">
-      <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        Threads
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Threads
+        </div>
+        <button
+          type="button"
+          onClick={onNewThread}
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="new thread"
+        >
+          <Plus className="size-3.5" />
+          New
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto px-1 pb-2">
         {loading && (
           <div className="px-3 py-1 text-xs text-muted-foreground">loading…</div>
         )}
+        {pendingNew && (
+          <ThreadRow
+            label={pendingNew}
+            sublabel="pending — send a message to create"
+            selected
+            onSelect={null}
+            onDelete={() => onDeleteThread(pendingNew)}
+            deleting={false}
+          />
+        )}
         {threads.map((t) => {
           const sid = pickThreadSession(t);
           const isSel = !!sid && selected?.threadId === t.threadId;
           return (
-            <button
+            <ThreadRow
               key={t.threadId}
-              onClick={() => sid && onSelect({ threadId: t.threadId, sessionId: sid })}
-              disabled={!sid}
-              className={cn(
-                "mb-1 block w-full truncate rounded-md px-3 py-1.5 text-left transition-colors",
-                isSel
-                  ? "bg-primary/10 text-primary"
-                  : "hover:bg-accent text-muted-foreground",
-              )}
-              title={sid ?? "no active session"}
-            >
-              <div className="truncate font-mono text-xs text-foreground/90">
-                {t.threadId}
-              </div>
-              {sid && (
-                <div className="truncate font-mono text-[10px] text-muted-foreground">
-                  {sid.slice(0, 18)}…
-                </div>
-              )}
-            </button>
+              label={t.threadId}
+              sublabel={sid ? `${sid.slice(0, 18)}…` : null}
+              selected={isSel}
+              onSelect={
+                sid
+                  ? () => onSelect({ threadId: t.threadId, sessionId: sid })
+                  : null
+              }
+              onDelete={() => onDeleteThread(t.threadId)}
+              deleting={deletingThreadId === t.threadId}
+            />
           );
         })}
-        {!loading && threads.length === 0 && (
+        {!loading && threads.length === 0 && !pendingNew && (
           <div className="px-3 py-2 text-xs text-muted-foreground">
             No threads yet. Send a message below to start one.
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ThreadRow({
+  label,
+  sublabel,
+  selected,
+  onSelect,
+  onDelete,
+  deleting,
+}: {
+  label: string;
+  sublabel: string | null;
+  selected: boolean;
+  onSelect: (() => void) | null;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "group relative mb-1 flex items-center gap-1 rounded-md transition-colors",
+        selected
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-accent",
+      )}
+    >
+      <button
+        type="button"
+        onClick={onSelect ?? undefined}
+        disabled={!onSelect}
+        className={cn(
+          "min-w-0 flex-1 truncate px-3 py-1.5 text-left",
+          !onSelect && "cursor-default",
+        )}
+        title={sublabel ?? "no active session"}
+      >
+        <div className="truncate font-mono text-xs text-foreground/90">
+          {label}
+        </div>
+        {sublabel && (
+          <div
+            className={cn(
+              "truncate font-mono text-[10px]",
+              selected ? "text-primary/70" : "text-muted-foreground",
+            )}
+          >
+            {sublabel}
+          </div>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        disabled={deleting}
+        aria-label={`delete thread ${label}`}
+        title="Delete thread"
+        className={cn(
+          "mr-1 grid size-6 shrink-0 place-items-center rounded text-muted-foreground/70",
+          "opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          deleting && "opacity-100",
+        )}
+      >
+        {deleting ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="size-3.5" />
+        )}
+      </button>
     </div>
   );
 }

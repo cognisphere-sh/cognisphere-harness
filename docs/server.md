@@ -222,8 +222,10 @@ A plugin manifest declares two JSON Schemas:
 
 - `configSchema` — validated and defaulted against
   `<agent>/plugins/<pid>/config.json` on every plugin start.
-- `secretsSchema` — every key in `properties` is treated as **required**
-  (the v0 contract; ajv `required` array is ignored at this layer).
+- `secretsSchema` — only keys listed in `required` block plugin start
+  when unset. Keys in `properties` but absent from `required` are
+  optional: surfaced in the settings UI, exported to env when set, but
+  their absence is non-fatal.
 
 ### 4.4 SecretsStore — `secrets.ts`
 
@@ -381,6 +383,11 @@ Load-bearing methods:
 - `requeueFailed(id) → id | null`, `removeFailed(id)` — operator-facing
   controls on failed rows. Requeue preserves the row id (just resets
   status/attempts/error). Discard hard-deletes.
+- `deleteThread(threadId) → { events }` — hard-delete every `events` row
+  for a thread and its `threads` row, in one transaction. The HTTP
+  layer that calls this also `rm -r`'s the on-disk session directory,
+  and refuses if `Runner.isThreadActive(threadId)` so the runner can't
+  race with file deletion.
 - `listEvents(opts)` / `countEvents(opts)` — filter/sort/paginated read
   used by the UI's Events tab. `sortBy` is whitelist-validated.
 
@@ -655,8 +662,8 @@ populated, no runner constructed.
    `manifest.configSchema` via ajv (`useDefaults: true` fills in
    defaults in place), throw on schema failure.
 3. Resolve the plugin's declared secret keys from its bucket. Throw if
-   any declared key is missing (v0 contract: all declared secrets are
-   mandatory).
+   any key listed in `secretsSchema.required` is missing; keys declared
+   in `properties` but absent from `required` are optional.
 4. mkdir `state/` and `inbox/` under the plugin dir.
 5. Construct the plugin via `new entry.ctor()`. Build a
    `PluginInstanceContext`:

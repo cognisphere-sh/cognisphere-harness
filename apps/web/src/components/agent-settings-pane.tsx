@@ -243,21 +243,17 @@ function AgentCard({
           onSave={(v) => save.mutate(v)}
           saving={save.isPending}
         />
-        {agentSchema?.properties &&
-          Object.keys(agentSchema.properties).length > 0 && (
-            <>
-              <Separator />
-              <SecretsBlock
-                agentId={agentId}
-                bucketId={secrets.agentBucket}
-                heading="Secrets"
-                icon={<Bot className="size-3.5 text-primary/70" />}
-                schema={agentSchema}
-                existing={agentBucketValues}
-                mask={secrets.mask}
-              />
-            </>
-          )}
+        <Separator />
+        <SecretsBlock
+          agentId={agentId}
+          bucketId={secrets.agentBucket}
+          heading="Secrets"
+          icon={<Bot className="size-3.5 text-primary/70" />}
+          schema={agentSchema ?? { type: "object", properties: {} }}
+          existing={agentBucketValues}
+          mask={secrets.mask}
+          emptyHint="No agent secrets declared. Add a `secretsSchema` block to agent.json to define agent-level secret keys."
+        />
       </div>
     </Card>
   );
@@ -727,6 +723,7 @@ function SecretsBlock({
   schema,
   existing,
   mask,
+  emptyHint,
 }: {
   agentId: string;
   bucketId: string;
@@ -735,6 +732,7 @@ function SecretsBlock({
   schema: JsonSchema;
   existing: Record<string, string>;
   mask: string;
+  emptyHint?: string;
 }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -775,27 +773,31 @@ function SecretsBlock({
         <ShieldCheck className="size-3.5 text-primary/60" />
         {icon}
         <h3 className="text-sm font-medium">{heading}</h3>
-        <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setDraft({})}
-            disabled={!dirty || save.isPending}
-          >
-            <RotateCcw className="size-3.5" /> Reset
-          </Button>
-          <Button size="sm" onClick={onSave} disabled={!dirty || save.isPending}>
-            {save.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Save className="size-4" />
-            )}
-            Save
-          </Button>
-        </div>
+        {keys.length > 0 && (
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDraft({})}
+              disabled={!dirty || save.isPending}
+            >
+              <RotateCcw className="size-3.5" /> Reset
+            </Button>
+            <Button size="sm" onClick={onSave} disabled={!dirty || save.isPending}>
+              {save.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Save className="size-4" />
+              )}
+              Save
+            </Button>
+          </div>
+        )}
       </div>
       {keys.length === 0 ? (
-        <Badge variant="outline">no secrets declared</Badge>
+        <p className="text-xs text-muted-foreground">
+          {emptyHint ?? "No secrets declared."}
+        </p>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {keys.map((k) => (

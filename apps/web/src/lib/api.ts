@@ -350,6 +350,13 @@ export const endpoints = {
     api.get<{ threadId: string; sessionId: string; entries: unknown[] }>(
       `/api/agents/${id}/sessions/${encodeURIComponent(threadId)}/${encodeURIComponent(sessionId)}`,
     ),
+  deleteThread: (id: string, threadId: string) =>
+    api.delete<{
+      ok: true;
+      threadId: string;
+      events: number;
+      removedDir: boolean;
+    }>(`/api/agents/${id}/sessions/${encodeURIComponent(threadId)}`),
 
   listEvents: (id: string, params?: ListEventsParams) =>
     api.get<{ events: EventRow[]; total: number }>(

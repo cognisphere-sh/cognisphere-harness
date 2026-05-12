@@ -253,6 +253,13 @@ export class AgentRunner extends EventEmitter {
     return true;
   }
 
+  /** Whether a batch is currently in-flight on this thread. Used to
+   *  refuse destructive ops (e.g. thread delete) that would race with
+   *  the runner writing to the session jsonl. */
+  isThreadActive(threadId: string): boolean {
+    return this.active.has(threadId);
+  }
+
   // ── internals ─────────────────────────────────────────────
 
   private async workerLoop(idx: number): Promise<void> {

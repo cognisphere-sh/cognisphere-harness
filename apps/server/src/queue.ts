@@ -322,6 +322,24 @@ export class AgentDb {
       .run(threadId, sessionId, Date.now());
   }
 
+  /** Drop all events for a thread and its session-binding row, in one
+   *  transaction. Returns the number of event rows deleted. Caller is
+   *  responsible for ensuring no batch is in-flight for this thread. */
+  deleteThread(threadId: string): { events: number } {
+    let events = 0;
+    const txn = this.db.transaction(() => {
+      const info = this.db
+        .prepare(`DELETE FROM events WHERE thread_id = ?`)
+        .run(threadId);
+      events = info.changes;
+      this.db
+        .prepare(`DELETE FROM threads WHERE thread_id = ?`)
+        .run(threadId);
+    });
+    txn();
+    return { events };
+  }
+
   /** Drop a still-queued row. Refuses if it has already advanced past queued. */
   removeById(id: number): boolean {
     const info = this.db
