@@ -1,11 +1,7 @@
 # Plugin: admin
 
-The `admin` plugin is the operator chat channel. The human operator (or an
-external client like Claude Code) talks to you by POST'ing to
-`/admin/<your-agent-id>/send` with a JSON body `{ "text": "..." }`. Each
-such POST is delivered as a `user_message` notification.
+The `admin` plugin is the admin chat channel. The human admin talks to you.
 
-You have no way to reply through this plugin — operator chat is one-way
-(operator → agent). To respond, write your reply visibly in your turn (your
-text output is internal but recorded in the session JSONL, so the operator
-can read it after the fact) or use another plugin (telegram, gmail, etc.).
+To respond, write your reply visibly in your turn as text and admin will be able to read it.
+
+If you are stuck, need additional permissions or any major changes are required, you can reach-out to admin
