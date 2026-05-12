@@ -78,8 +78,18 @@ else
   warn "cargo (Rust) not found; install Rust (https://rustup.rs) and re-run, or install websearch by hand"
 fi
 
-# ── 4. websearch (Rust binary) ────────────────────────────────────────
-npm install -g agent-browser
-agent-browser install
+# ── 4. agent-browser (npm global) ─────────────────────────────────────
+if command -v agent-browser >/dev/null 2>&1; then
+  log "agent-browser already installed"
+elif command -v npm >/dev/null 2>&1; then
+  log "installing agent-browser via npm..."
+  if npm install -g agent-browser 2>/dev/null; then
+    agent-browser install || warn "agent-browser install (browser deps) failed"
+  else
+    warn "npm install -g agent-browser failed (permission issue? try: sudo npm install -g agent-browser)"
+  fi
+else
+  warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install agent-browser by hand"
+fi
 
 log "done. Restart the server so the runner picks up the new .venv."
