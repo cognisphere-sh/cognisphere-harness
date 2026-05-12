@@ -65,7 +65,16 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-## 5. Keep the Docs in Sync
+## 5. Resolve All Lint & Type Errors Before Declaring Done
+
+**After every change, run `npm run check` and resolve every error and warning.**
+
+- A task is not complete while `npm run typecheck`, `npm run typecheck:web`, `npm run lint`, or `npm run lint:web` reports anything. The single entrypoint is `npm run check` (root) — it runs all four.
+- Warnings count. Fix them, or if intentional, suppress with a targeted `// eslint-disable-next-line <rule>` plus a one-line reason.
+- Don't silently expand a pre-existing breakage. If the check was already failing before your change, fix it or call it out.
+- Auto-fix first (`npm run lint:fix`, `npm run lint:web:fix`), then hand-fix what remains.
+
+## 6. Keep the Docs in Sync
 
 **Project docs are part of the surface area. Update them with the code.**
 

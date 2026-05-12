@@ -89,7 +89,7 @@ export function EventsTable({ agentId }: Props) {
     placeholderData: keepPreviousData,
   });
 
-  const rows = data?.events ?? [];
+  const rows = useMemo(() => data?.events ?? [], [data]);
   const total = data?.total ?? 0;
 
   const pluginOptions = useMemo(() => {

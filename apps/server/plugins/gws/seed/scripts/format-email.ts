@@ -164,5 +164,5 @@ function stripTags(html: string): string {
 }
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[\/\\:*?"<>|]+/g, "_").slice(0, 200) || "attachment";
+  return name.replace(/[/\\:*?"<>|]+/g, "_").slice(0, 200) || "attachment";
 }

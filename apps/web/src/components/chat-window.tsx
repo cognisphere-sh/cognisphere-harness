@@ -51,7 +51,7 @@ export function ChatWindow({ agentId }: Props) {
     refetchInterval: 5_000,
   });
 
-  const threads = threadsData?.threads ?? [];
+  const threads = useMemo(() => threadsData?.threads ?? [], [threadsData]);
   const [selected, setSelected] = useState<{
     threadId: string;
     sessionId: string;

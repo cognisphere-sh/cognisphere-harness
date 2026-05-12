@@ -357,7 +357,7 @@ function hasLabel(m: GmailMessage, label: string): boolean {
 /** Strip characters that would break a directory name; `<Subject>` is used
  *  as the prefix of the harness thread id, which becomes a sessions/ dir. */
 function sanitizeForPath(s: string): string {
-  return s.replace(/[\/\\\0]+/g, "_").slice(0, 120).trim() || "(no subject)";
+  return s.replace(/[/\\\0]+/g, "_").slice(0, 120).trim() || "(no subject)";
 }
 
 function formatTs(unixMs: number, timeZone: string): string {
