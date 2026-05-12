@@ -11,15 +11,18 @@ function linkifyString(text: string, agentId: string): ReactNode {
   if (segs.length === 1 && segs[0]?.kind === "text") return text;
   return segs.map((s, i) => {
     if (s.kind === "text") return <Fragment key={i}>{s.value}</Fragment>;
+    const path = s.path!;
+    const basename = path.split("/").pop() || path;
     return (
       <a
         key={i}
-        href={rawFileUrl(agentId, s.path!)}
+        href={rawFileUrl(agentId, path)}
         target="_blank"
         rel="noreferrer"
+        title={path}
         className="rounded bg-primary/10 px-1 py-px font-mono text-[0.85em] text-primary underline-offset-2 hover:underline"
       >
-        {s.value}
+        {basename}
       </a>
     );
   });

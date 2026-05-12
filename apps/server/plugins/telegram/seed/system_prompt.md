@@ -12,13 +12,14 @@ User messages and edits arrive as `<harness-metadata>` blocks with:
 - `ChatId`, `SenderId`, `SenderName`, `MessageId`, `EventType` (`message` | `edit`)
 - `ReplyToMessageId` — present when the user replied to an earlier message
 - `MediaGroupId` — present on album / grouped media
-- `Attachments` — comma-separated absolute paths to downloaded media files
+- `Attachments` — comma-separated paths (relative to the agent dir) to downloaded media files
 
 When the user sends a photo, voice note, video, document, etc., the plugin
-downloads it into `plugins/telegram/inbox/` and inlines its absolute path
-in the message body as `fileName[/abs/path]`. Read the path directly with
-`read` (for text/image) or convert with `markitdown` / `pdftoppm` /
-`ffmpeg` (see the harness preamble for conversion guidelines).
+downloads it into `plugins/telegram/inbox/` and inlines a path relative to
+the agent dir in the message body as `<fileName>[plugins/telegram/inbox/<name>.<ext>]`.
+Read the path directly with `read` (for text/image) or convert with
+`markitdown` / `pdftoppm` / `ffmpeg` (see the harness preamble for
+conversion guidelines).
 
 ## Outbound — `scripts/telegram/telegram-cli`
 

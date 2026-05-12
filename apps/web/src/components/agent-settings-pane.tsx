@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 import {
   Bot,
   ChevronDown,
@@ -108,6 +109,8 @@ interface Props {
  * endpoints; the user saves piecemeal.
  */
 export function AgentSettingsPane({ agentId }: Props) {
+  const { hash } = useLocation();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const { data: agent } = useQuery({
     queryKey: ["agent", agentId],
     queryFn: () => endpoints.getAgent(agentId),
@@ -121,7 +124,23 @@ export function AgentSettingsPane({ agentId }: Props) {
     queryFn: endpoints.getSecrets,
   });
 
-  if (!agent || !pluginsData || !secrets) {
+  const ready = !!agent && !!pluginsData && !!secrets;
+
+  // Scroll to the hash target once content is rendered. The hash arrives
+  // before the queries resolve, so we wait for `ready` and run inside the
+  // scroll container (the page itself doesn't scroll).
+  useEffect(() => {
+    if (!ready || !hash) return;
+    const id = hash.slice(1);
+    const target = scrollRef.current?.querySelector<HTMLElement>(
+      `[id="${CSS.escape(id)}"]`,
+    );
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [ready, hash]);
+
+  if (!ready) {
     return <div className="p-6 text-sm text-muted-foreground">loading…</div>;
   }
 
@@ -132,23 +151,23 @@ export function AgentSettingsPane({ agentId }: Props) {
           Settings · saves auto-reload the agent if it's running
         </p>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
         <SecurityNote />
         <div className="grid gap-6">
           <AgentCard
             agentId={agentId}
-            agentJson={agent.agentJson}
-            secrets={secrets}
+            agentJson={agent!.agentJson}
+            secrets={secrets!}
           />
-          {pluginsData.plugins.map((p) => (
+          {pluginsData!.plugins.map((p) => (
             <PluginCard
               key={p.pluginId}
               agentId={agentId}
               plugin={p}
-              secrets={secrets}
+              secrets={secrets!}
             />
           ))}
-          {pluginsData.plugins.length === 0 && (
+          {pluginsData!.plugins.length === 0 && (
             <p className="text-sm text-muted-foreground">No plugins installed.</p>
           )}
         </div>
@@ -278,7 +297,7 @@ function PluginCard({
     };
 
   return (
-    <Card>
+    <Card id={`plugin-${plugin.pluginId}`} className="scroll-mt-4">
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
           <Plug className="size-4 text-primary/80" />

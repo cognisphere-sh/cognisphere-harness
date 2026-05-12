@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, extname, join, relative } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   Plugin,
@@ -228,7 +228,7 @@ export default class TelegramPlugin implements Plugin {
     const text =
       attachments.length > 0
         ? `${baseText}${baseText ? "\n\n" : ""}${attachments
-            .map((p) => `fileName[${p}]`)
+            .map((p) => `${basename(p)}[${p}]`)
             .join("\n")}`
         : baseText;
 
@@ -290,7 +290,10 @@ export default class TelegramPlugin implements Plugin {
       if (!res.ok) return null;
       const buf = Buffer.from(await res.arrayBuffer());
       await writeFile(localPath, buf);
-      return localPath;
+      // Return path relative to agentDir so chat shows just the filename
+      // (linkified) and the agent — which runs with cwd=agentDir — can read
+      // it directly.
+      return relative(this.ctx.agentDir, localPath);
     } catch (err) {
       this.ctx.log.error({ err, fileId }, "telegram file download failed");
       return null;

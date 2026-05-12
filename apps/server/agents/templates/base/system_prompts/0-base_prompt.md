@@ -137,7 +137,7 @@ Channel: 12345
 
 ## File attachments
 
-Inputs are text only. When a plugin saves a file from a user (image, doc, audio etc.), it's referenced inline as `fileName[/absolute/path/to/file]`. Use `read` for images and text based files.
+Inputs are text only. When a plugin saves a file from a user (image, doc, audio etc.), it's referenced inline as `<fileName>[relative/path/to/file.ext]` (relative to the agent dir, which is the cwd). Use `read` for images and text based files.
 
 For other formats like pdf, spreadsheets etc. use bash tool to read them in markdown format or convert them to images or text (.txt, .md, .csv etc.) and then use `read`.
 

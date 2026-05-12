@@ -25,10 +25,10 @@ export function UserMessageBubble({ agentId, bubble }: UserProps) {
           {meta && (
             <details className="rounded-md border bg-card/60 px-2 py-1 text-[11px] text-muted-foreground">
               <summary className="cursor-pointer select-none">harness metadata</summary>
-              <pre className="mt-1 whitespace-pre-wrap font-mono">{meta}</pre>
+              <pre className="mt-1 whitespace-pre-wrap font-mono [overflow-wrap:anywhere]">{meta}</pre>
             </details>
           )}
-          <div className="rounded-2xl rounded-tr-sm border bg-card px-3 py-2 text-sm shadow-card">
+          <div className="overflow-hidden rounded-2xl rounded-tr-sm border bg-card px-3 py-2 text-sm shadow-card [overflow-wrap:anywhere]">
             <MarkdownText agentId={agentId} text={body} />
           </div>
           {bubble.images.length > 0 && (
@@ -93,7 +93,7 @@ export function AssistantMessageBubble({ agentId, bubble }: AssistantProps) {
                 <div
                   key={i}
                   className={cn(
-                    "rounded-2xl rounded-tl-sm border bg-primary/5 px-3 py-2 text-sm shadow-card",
+                    "overflow-hidden rounded-2xl rounded-tl-sm border bg-primary/5 px-3 py-2 text-sm shadow-card [overflow-wrap:anywhere]",
                     "border-primary/15",
                   )}
                 >

@@ -880,7 +880,8 @@ Notifications declared: `schedule_fire`.
   (= `<serverBaseUrl>/webhook/<agentId>/telegram`).
 - Inbound message → `ctx.notify("message_received", { text, channelId: chatId })`.
 - Inbound file/photo → save to `<inboxDir>/<file>`; `text` includes
-  `fileName[<absolute-path>]` so the agent can read it.
+  `<fileName>[<agent-relative-path>]` (e.g. `plugins/telegram/inbox/voice_42.ogg`)
+  so the agent — which runs with cwd=agentDir — can read it directly.
 - Outbound: agent calls `scripts/telegram/telegram-cli send --chat <id> --text "..."`.
   The script POSTs to `${PI_WEBHOOK_BASE}/telegram/internal/send`.
   Plugin's `handleHttpRequest` routes `/internal/send` to its outbound code.

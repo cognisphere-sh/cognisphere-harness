@@ -5,6 +5,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useParams,
 } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -179,6 +180,7 @@ function FilesPane({ agentId }: { agentId: string }) {
 }
 
 function PluginsPane({ agentId }: { agentId: string }) {
+  const navigate = useNavigate();
   const { data, isLoading } = useQuery({
     queryKey: ["plugins", agentId],
     queryFn: () => endpoints.listPlugins(agentId),
@@ -189,7 +191,21 @@ function PluginsPane({ agentId }: { agentId: string }) {
   return (
     <div className="grid gap-3 p-4 sm:p-6 md:grid-cols-2 xl:grid-cols-3">
       {data?.plugins.map((p) => (
-        <Card key={p.pluginId}>
+        <Card
+          key={p.pluginId}
+          role="button"
+          tabIndex={0}
+          onClick={() =>
+            navigate(`/agents/${agentId}/settings#plugin-${p.pluginId}`)
+          }
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              navigate(`/agents/${agentId}/settings#plugin-${p.pluginId}`);
+            }
+          }}
+          className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           <CardHeader>
             <div className="flex items-center gap-2">
               <Plug className="size-4 text-primary/80" />
