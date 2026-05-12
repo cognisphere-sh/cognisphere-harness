@@ -161,10 +161,15 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
 
   r.get("/:id/sessions", (c) => {
     const id = c.req.param("id");
-    if (!am.get(id)) return c.json({ error: "unknown agent" }, 404);
+    const inst = am.get(id);
+    if (!inst) return c.json({ error: "unknown agent" }, 404);
     const dir = join(agentDir(cfg, id), "sessions");
     if (!existsSync(dir)) return c.json({ threads: [] });
-    const threads: { threadId: string; sessions: SessionEntry[] }[] = [];
+    const threads: {
+      threadId: string;
+      activeSessionId: string | null;
+      sessions: SessionEntry[];
+    }[] = [];
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       if (!ent.isDirectory()) continue;
       if (ent.name.startsWith(".")) continue;
@@ -181,7 +186,11 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
         });
       }
       sessions.sort((a, b) => b.modified - a.modified);
-      threads.push({ threadId: ent.name, sessions });
+      // The harness owns the canonical session id per thread (.events.db
+      // `threads` table). UI uses this to open the active session directly
+      // instead of guessing from filesystem mtime.
+      const activeSessionId = inst.db?.getThreadSessionId(ent.name) ?? null;
+      threads.push({ threadId: ent.name, activeSessionId, sessions });
     }
     threads.sort(
       (a, b) =>
@@ -279,6 +288,8 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
         priority: row.priority,
         attempts: row.attempts,
         error: row.error,
+        piSessionId: row.pi_session_id,
+        piEntryId: row.pi_entry_id,
       })),
       total,
     });

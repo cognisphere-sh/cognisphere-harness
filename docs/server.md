@@ -158,8 +158,13 @@ Conventions worth knowing:
   (operator/agent-authored) or `<plugin-id>/` (seeded by a plugin install).
 - `system_prompts/*.md` is concatenated lex-sorted to form the system
   prompt sent to pi.
-- `sessions/<ThreadId>/` is owned by pi (`--session-dir`); the harness
-  doesn't write JSONLs there.
+- `sessions/<ThreadId>/` contains exactly one canonical `<sessionId>.jsonl`
+  per thread. The harness owns the filename — `sessionId` is a UUID
+  generated on the thread's first batch and persisted in `.events.db`'s
+  `threads` table — and passes the full path to pi via `--session`. Pi
+  creates the file on its first append and writes the SessionHeader and
+  every entry; the harness only reads the file (post-batch, to capture
+  per-row pi entry ids).
 - `.vertex-sa.json` is materialized on agent start when the provider is
   `google-vertex` (the operator pastes the SA blob into Models settings;
   the runner writes it to disk at 0600 so pi's GCP libraries can read
@@ -309,11 +314,27 @@ credential).
 
 ### 4.6 AgentDb — `queue.ts`
 
-Per-agent SQLite WAL at `<agent>/sessions/.events.db`. One table:
+Per-agent SQLite WAL at `<agent>/sessions/.events.db`. Two tables:
 
 - `events` — every event ever produced by `notify()`. Columns:
   `(id, ts, updated_at, plugin_id, channel_id, thread_id, is_silent,
-  text, metadata, status, priority, attempts, error)`.
+  text, metadata, status, priority, attempts, error, pi_session_id,
+  pi_entry_id)`. The last two link the row to a position in pi's
+  session JSONL (file = `<threadDir>/<pi_session_id>.jsonl`, entry
+  = `pi_entry_id`); both are `NULL` until the row's batch completes.
+  Multiple rows in the same batch share a single `pi_entry_id`
+  (concatenated prompt → one user message); each live-steer row gets
+  its own. New columns are added idempotently via `ALTER TABLE` on
+  open (`PRAGMA table_info` guard), so existing dev DBs survive the
+  upgrade with `NULL` in the new columns.
+- `threads(thread_id PRIMARY KEY, pi_session_id, created_at)` — the
+  canonical pi session id per thread. Populated on the thread's first
+  batch (runner generates a UUID via `randomUUID()` and inserts here);
+  re-read on every subsequent spawn so pi gets the same `--session`
+  path. On agent start, `agent-manager.backfillThreadSessions` scans
+  `<sessions>/<threadId>/` for any pre-existing `.jsonl` and seeds the
+  table with the most-recently-modified one (matches what `--continue`
+  used to pick), so threads from before this change keep continuity.
 
 `status` advances through the lifecycle: `queued` → `in_flight` →
 `done` (success), or back to `queued` on retry, or to `failed` (out
@@ -327,6 +348,11 @@ dev DBs lose their old rows on the next boot — acceptable for v0.
 
 Load-bearing methods:
 
+- `getThreadSessionId(threadId) → string | null`,
+  `setThreadSessionId(threadId, sessionId)` — read/write the
+  `threads` mapping. Setter is `INSERT OR IGNORE` so the binding for a
+  thread is fixed once written; the runner checks for an existing id
+  before generating a new one.
 - `enqueue(args) → id` — inserts a row with `status='queued'`.
 - `peekHighestPriorityThread(exclude: Set<string>) → threadId | null` —
   the worker calls this with the active threads excluded so two workers
@@ -336,12 +362,19 @@ Load-bearing methods:
 - `dequeueBatch(threadId) → BatchMessage[]` — pulls all `status='queued'`
   rows for one thread and flips them to `status='in_flight'` in a single
   transaction.
-- `markBatchDone(ids[])` — sets `status='done'`. Rows stay in place.
-- `markBatchCancelled(ids[])` — terminal cancellation for user abort,
-  plugin-driven cancel, runner stop.
-- `markBatchFailed(ids[], err, maxAttempts) → { retrying[], dead[] }` —
+- `markBatchDone(ids[], sessionId, entryIdByRowId)` — sets
+  `status='done'` and writes `pi_session_id` (one value for the whole
+  batch) plus a per-row `pi_entry_id` from the supplied map. Both
+  use `COALESCE(?, existing)` so a `NULL` argument never clobbers a
+  value written by a prior attempt. Rows stay in place.
+- `markBatchCancelled(ids[], sessionId)` — terminal cancellation for
+  user abort, plugin-driven cancel, runner stop. Records `sessionId`
+  via COALESCE.
+- `markBatchFailed(ids[], err, maxAttempts, sessionId) → { retrying[], dead[] }` —
   bumps attempts; rows past the cap get `status='failed'`, otherwise
-  bounce back to `status='queued'` with `error` populated.
+  bounce back to `status='queued'` with `error` populated. `sessionId`
+  is recorded via COALESCE so the partially-completed pi session is
+  still discoverable from the row.
 - `sweepInFlight(maxAttempts)` — at runner start, every row still
   `status='in_flight'` (from a previous crash) is routed through
   `markBatchFailed`. Crash-mid-batch counts as one attempt.
@@ -416,8 +449,15 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
 7. `Promise.race(agentEnded, rpc.waitExit())` — guards against pi
    crashing before emitting `agent_end`.
 8. On clean end: close stdin, await pi's exit (5s SIGKILL guard),
-   `markBatchDone([...ids, ...steerIds])`, append `batch_end` event
-   with status `done`.
+   then read `<sessionDir>/<sessionId>.jsonl` and slice off any
+   user-message entries appended past the pre-batch snapshot count.
+   Build `entryIdByRowId`: every row in `active.ids` shares the first
+   new entry id (one concatenated prompt → one user message); each
+   `active.steerIds[i]` gets the (i+1)-th. `markBatchDone(ids,
+   sessionId, entryIdByRowId)` writes the link back. If the JSONL has
+   fewer user-message entries than expected (e.g. pi didn't append a
+   steer before agent_end), affected rows' `pi_entry_id` stays NULL
+   and the runner logs a warn.
 9. On crash: `markBatchFailed(ids, errFull, maxAttempts)` — bumps
    attempts, dead-letters past the cap. Stderr tail is appended to the
    error message.
@@ -439,8 +479,8 @@ attempt may have completed partial work.
 Builds argv:
 
 ```
-pi --mode rpc --continue
-   --session-dir <agentDir>/sessions/<threadId>
+pi --mode rpc
+   --session <agentDir>/sessions/<threadId>/<sessionId>.jsonl
    --provider <agentJson.model.provider>
    --model    <agentJson.model.id>
    --thinking <agentJson.model.thinkingLevel ?? "medium">
@@ -451,6 +491,18 @@ pi --mode rpc --continue
    --extension <agentDir>/extensions/<X> ← per first-level entry, only
                                             when entrypoint resolvable
 ```
+
+`--session <path>` instead of `--session-dir … --continue`: the harness
+generates the `sessionId` (UUID) on the thread's first batch, persists it
+in `.events.db`'s `threads` table, and passes the absolute file path on
+every spawn. Pi's `SessionManager.open(path)` tolerates a non-existent
+file (`loadEntriesFromFile` returns `[]`) and creates it on first append,
+so the harness never has to materialize the file or know pi's
+SessionHeader format. `--continue` is dropped because the explicit path
+makes "continue" implicit; `--session-dir` is dropped because pi derives
+the directory from `resolve(path, "..")`. This swap eliminates the
+ambiguity where `--continue` picked the most-recently-modified `.jsonl`,
+which broke under fork / `new_session` / extension-driven session swaps.
 
 The `--no-*` flags suppress pi's default discovery so we control exactly
 what's loaded. The `--skill` / `--extension` asymmetry is per pi:
@@ -495,7 +547,10 @@ ask "is this a new prompt or a steer?". They call `notify()`; the
 runner decides. There is no operator-only steer endpoint — admin is
 just another plugin calling `ctx.notify()`.
 
-Steers add the new row id to `steerIds` *before* dispatching; if the
+`steerIds` is an ordered array (not a `Set`) so that the post-batch
+`pi_entry_id` capture can map each steer to the user-message entry pi
+appended for it (stdin is serial → pi appends in dispatch order).
+Steers push the new row id onto `steerIds` *before* dispatching; if the
 in-flight steer write throws, the id is removed and the row stays
 pending (it'll be picked up in the next batch). If the batch later
 fails, the steer ids are folded into `markBatchFailed` along with the

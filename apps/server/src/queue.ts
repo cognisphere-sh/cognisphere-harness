@@ -11,25 +11,33 @@ import type { BatchMessage } from "./types.js";
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts           INTEGER NOT NULL,
-  updated_at   INTEGER NOT NULL,
-  plugin_id    TEXT NOT NULL,
-  channel_id   TEXT NOT NULL,
-  thread_id    TEXT NOT NULL,
-  is_silent    INTEGER NOT NULL DEFAULT 0,
-  text         TEXT NOT NULL,
-  metadata     TEXT,
-  status       TEXT NOT NULL,
-  priority     INTEGER NOT NULL DEFAULT 0,
-  attempts     INTEGER NOT NULL DEFAULT 0,
-  error        TEXT
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts             INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  plugin_id      TEXT NOT NULL,
+  channel_id     TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  is_silent      INTEGER NOT NULL DEFAULT 0,
+  text           TEXT NOT NULL,
+  metadata       TEXT,
+  status         TEXT NOT NULL,
+  priority       INTEGER NOT NULL DEFAULT 0,
+  attempts       INTEGER NOT NULL DEFAULT 0,
+  error          TEXT,
+  pi_session_id  TEXT,
+  pi_entry_id    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_runnable
   ON events(thread_id, status, is_silent, priority DESC, id);
 CREATE INDEX IF NOT EXISTS idx_events_updated ON events(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_status  ON events(status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_plugin  ON events(plugin_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS threads (
+  thread_id      TEXT PRIMARY KEY,
+  pi_session_id  TEXT NOT NULL,
+  created_at     INTEGER NOT NULL
+);
 `;
 
 export type EventStatus = "queued" | "in_flight" | "done" | "failed" | "cancelled";
@@ -48,6 +56,8 @@ export interface EventRow {
   priority: number;
   attempts: number;
   error: string | null;
+  pi_session_id: string | null;
+  pi_entry_id: string | null;
 }
 
 function rowToMessage(row: EventRow): BatchMessage {
@@ -110,6 +120,18 @@ export class AgentDb {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.db.exec(SCHEMA);
+    this.migrateAddColumn("events", "pi_session_id", "TEXT");
+    this.migrateAddColumn("events", "pi_entry_id", "TEXT");
+  }
+
+  /** Add a column to an existing table if it isn't already there. SQLite has
+   *  no `ADD COLUMN IF NOT EXISTS`, so we check `PRAGMA table_info`. */
+  private migrateAddColumn(table: string, column: string, type: string): void {
+    const cols = this.db
+      .prepare<unknown[], { name: string }>(`PRAGMA table_info(${table})`)
+      .all();
+    if (cols.some((c) => c.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   close(): void {
@@ -182,33 +204,58 @@ export class AgentDb {
     return txn();
   }
 
-  markBatchDone(ids: number[]): void {
+  /**
+   * Mark every id done. `sessionId` (when non-null) is written to all rows;
+   * `entryIdByRowId` writes a per-row pi entry id. The runner derives the
+   * map by reading pi's session JSONL post-batch and matching user-message
+   * entries to the dispatch order (initial concatenated batch → one shared
+   * id; each steer → its own id).
+   */
+  markBatchDone(
+    ids: number[],
+    sessionId: string | null,
+    entryIdByRowId: Map<number, string>,
+  ): void {
     if (ids.length === 0) return;
-    const placeholders = ids.map(() => "?").join(",");
-    this.db
-      .prepare(
-        `UPDATE events SET status = 'done', updated_at = ?
-         WHERE id IN (${placeholders})`,
-      )
-      .run(Date.now(), ...ids);
+    const now = Date.now();
+    const txn = this.db.transaction(() => {
+      const stmt = this.db.prepare(
+        `UPDATE events
+            SET status = 'done',
+                updated_at = ?,
+                pi_session_id = COALESCE(?, pi_session_id),
+                pi_entry_id   = COALESCE(?, pi_entry_id)
+          WHERE id = ?`,
+      );
+      for (const id of ids) {
+        stmt.run(now, sessionId, entryIdByRowId.get(id) ?? null, id);
+      }
+    });
+    txn();
   }
 
-  /** Terminal cancellation (user abort, plugin-driven cancel, runner stop). */
-  markBatchCancelled(ids: number[]): void {
+  /** Terminal cancellation (user abort, plugin-driven cancel, runner stop).
+   *  `sessionId` is recorded so the operator can still link the row to a
+   *  session even when no entry id was captured. */
+  markBatchCancelled(ids: number[], sessionId: string | null): void {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => "?").join(",");
     this.db
       .prepare(
-        `UPDATE events SET status = 'cancelled', updated_at = ?
-         WHERE id IN (${placeholders})`,
+        `UPDATE events
+            SET status = 'cancelled',
+                updated_at = ?,
+                pi_session_id = COALESCE(?, pi_session_id)
+          WHERE id IN (${placeholders})`,
       )
-      .run(Date.now(), ...ids);
+      .run(Date.now(), sessionId, ...ids);
   }
 
   markBatchFailed(
     ids: number[],
     error: string,
     maxAttempts: number,
+    sessionId: string | null,
   ): { retrying: number[]; dead: number[] } {
     if (ids.length === 0) return { retrying: [], dead: [] };
     const retrying: number[] = [];
@@ -227,25 +274,52 @@ export class AgentDb {
           this.db
             .prepare(
               `UPDATE events
-                 SET status = 'failed', attempts = ?, error = ?, updated_at = ?
+                 SET status = 'failed', attempts = ?, error = ?, updated_at = ?,
+                     pi_session_id = COALESCE(?, pi_session_id)
                WHERE id = ?`,
             )
-            .run(next, error, now, r.id);
+            .run(next, error, now, sessionId, r.id);
           dead.push(r.id);
         } else {
           this.db
             .prepare(
               `UPDATE events
-                 SET status = 'queued', attempts = ?, error = ?, updated_at = ?
+                 SET status = 'queued', attempts = ?, error = ?, updated_at = ?,
+                     pi_session_id = COALESCE(?, pi_session_id)
                WHERE id = ?`,
             )
-            .run(next, error, now, r.id);
+            .run(next, error, now, sessionId, r.id);
           retrying.push(r.id);
         }
       }
     });
     txn();
     return { retrying, dead };
+  }
+
+  // ── per-thread session binding ─────────────────────────────
+
+  /** Returns the canonical pi session id for this thread, or null if none
+   *  has been recorded yet (first batch on this thread). */
+  getThreadSessionId(threadId: string): string | null {
+    const row = this.db
+      .prepare<unknown[], { pi_session_id: string }>(
+        `SELECT pi_session_id FROM threads WHERE thread_id = ?`,
+      )
+      .get(threadId);
+    return row?.pi_session_id ?? null;
+  }
+
+  /** Record a thread's canonical session id. INSERT OR IGNORE so a
+   *  concurrent bind never overwrites an existing mapping (the harness
+   *  serializes per-thread anyway, but this is a cheap belt-and-braces). */
+  setThreadSessionId(threadId: string, sessionId: string): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO threads (thread_id, pi_session_id, created_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(threadId, sessionId, Date.now());
   }
 
   /** Drop a still-queued row. Refuses if it has already advanced past queued. */
@@ -264,7 +338,8 @@ export class AgentDb {
       )
       .all();
     if (rows.length === 0) return { retrying: [], dead: [] };
-    return this.markBatchFailed(rows.map((r) => r.id), error, maxAttempts);
+    // sessionId=null preserves any existing pi_session_id via COALESCE.
+    return this.markBatchFailed(rows.map((r) => r.id), error, maxAttempts, null);
   }
 
   countPending(): number {

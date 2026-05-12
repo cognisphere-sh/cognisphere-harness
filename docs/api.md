@@ -310,12 +310,22 @@ Response:
       "status": "done",
       "priority": 0,
       "attempts": 0,
-      "error": null
+      "error": null,
+      "piSessionId": "8f2c4f1e-…",
+      "piEntryId":   "a1b9d2e7-…"
     }
   ],
   "total": 1234
 }
 ```
+
+`piSessionId` and `piEntryId` link the row to a position in pi's session
+JSONL: `<agentDir>/sessions/<threadId>/<piSessionId>.jsonl`, with
+`piEntryId` pointing at the user-message entry inside that file. Both are
+`null` until the row's batch completes (or for rows that failed before pi
+appended an entry). Multiple rows in the same batch share a single
+`piEntryId` (the runner concatenates queued events into one prompt);
+each row added via live steer gets its own `piEntryId`.
 
 `total` is the count after filters are applied (before paging) so the
 UI can render a pager.

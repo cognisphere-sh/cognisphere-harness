@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Ajv, type ErrorObject } from "ajv";
 import type { ServerConfig } from "./config.js";
@@ -392,6 +392,13 @@ export class AgentManager {
     mkdirSync(join(dir, "sessions"), { recursive: true });
     if (!inst.db) {
       inst.db = new AgentDb(join(dir, "sessions", ".events.db"));
+      // One-time backfill: thread directories that already have a session
+      // JSONL on disk (from before the harness owned session ids) need an
+      // entry in `threads` so the runner reuses the existing session
+      // instead of creating a fresh one. We pick the most recently
+      // modified .jsonl in each thread dir — matches what `--continue`
+      // would have selected.
+      backfillThreadSessions(join(dir, "sessions"), inst.db, this.log);
     }
 
     // 3. Construct a fresh runner with the resolved env snapshot.
@@ -810,6 +817,45 @@ function resolveAgentConfigEnv(
     out[k] = v;
   }
   return out;
+}
+
+/**
+ * Walk `<sessionsDir>/<threadId>/` and seed the `threads` table with the
+ * most-recently-modified `<uuid>.jsonl` for any thread that doesn't yet
+ * have a binding. Idempotent (`setThreadSessionId` is INSERT OR IGNORE),
+ * so safe to call on every start. Threads with no JSONL on disk are
+ * skipped — the runner will mint a fresh id on their next batch.
+ */
+function backfillThreadSessions(
+  sessionsDir: string,
+  db: AgentDb,
+  log: Logger,
+): void {
+  if (!existsSync(sessionsDir)) return;
+  for (const ent of readdirSync(sessionsDir, { withFileTypes: true })) {
+    if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
+    const threadId = ent.name;
+    if (db.getThreadSessionId(threadId)) continue;
+    const tDir = join(sessionsDir, threadId);
+    let bestId: string | null = null;
+    let bestMtime = -1;
+    for (const f of readdirSync(tDir, { withFileTypes: true })) {
+      if (!f.isFile() || !f.name.endsWith(".jsonl")) continue;
+      try {
+        const m = statSync(join(tDir, f.name)).mtimeMs;
+        if (m > bestMtime) {
+          bestMtime = m;
+          bestId = f.name.replace(/\.jsonl$/, "");
+        }
+      } catch {
+        /* file vanished between readdir and stat — ignore */
+      }
+    }
+    if (bestId) {
+      db.setThreadSessionId(threadId, bestId);
+      log.info({ threadId, sessionId: bestId }, "backfilled thread session id");
+    }
+  }
 }
 
 /** Typed lookup for the admin plugin's `deliver()`. Null unless the plugin

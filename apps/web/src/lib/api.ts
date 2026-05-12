@@ -181,6 +181,10 @@ export interface SessionRow {
 }
 export interface ThreadRow {
   threadId: string;
+  /** Canonical pi session id for this thread, owned by the harness
+   *  (`.events.db` `threads` table). `null` for threads from before the
+   *  harness owned session ids and that haven't yet had a new batch. */
+  activeSessionId: string | null;
   sessions: SessionRow[];
 }
 
@@ -205,6 +209,13 @@ export interface EventRow {
   priority: number;
   attempts: number;
   error: string | null;
+  /** Pi session this row landed in. `null` until the row's batch completes
+   *  (or when pi never bound a session for this thread). */
+  piSessionId: string | null;
+  /** User-message entry id inside `<piSessionId>.jsonl` for this row. Rows
+   *  that batched together share a single entry id; each live-steer row
+   *  gets its own. `null` when not yet captured. */
+  piEntryId: string | null;
 }
 
 export interface ListEventsParams {

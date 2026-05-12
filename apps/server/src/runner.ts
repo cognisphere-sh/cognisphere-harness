@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -83,7 +84,13 @@ export function buildHarnessMetadata(m: BatchMessage, tz: string): string {
 interface ActiveBatch {
   threadId: string;
   ids: number[];
-  steerIds: Set<number>;
+  /** Order matters: each steer becomes its own user-message entry in pi's
+   *  session, so we map row → entry id by dispatch-order index after the
+   *  batch ends. Set was wrong for this; an array preserves order. */
+  steerIds: number[];
+  /** Canonical pi session id for this thread; assigned in processBatch
+   *  before spawn, used to locate the JSONL post-batch. */
+  sessionId: string;
   phase: "spawning" | "streaming" | "completing" | "exited";
   cancelled: boolean;
   rpc: PiRpcClient | null;
@@ -216,7 +223,7 @@ export class AgentRunner extends EventEmitter {
         attempts: 0,
       };
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
-      active.steerIds.add(id);
+      active.steerIds.push(id);
       try {
         active.rpc.sendSteer(steerText);
         this.opts.log.debug(
@@ -224,7 +231,10 @@ export class AgentRunner extends EventEmitter {
           "steer dispatched",
         );
       } catch (err) {
-        active.steerIds.delete(id);
+        // Pop the id we just pushed. Safe under single-threaded JS because
+        // notify() runs to completion before the next call interleaves.
+        const idx = active.steerIds.lastIndexOf(id);
+        if (idx >= 0) active.steerIds.splice(idx, 1);
         this.opts.log.error({ err, threadId, id }, "steer failed; row kept pending");
       }
       return id;
@@ -260,10 +270,20 @@ export class AgentRunner extends EventEmitter {
       }
       const batch = this.opts.db.dequeueBatch(threadId);
       if (batch.length === 0) continue;
+      // Resolve the thread's canonical session id before spawning. First
+      // batch on a thread → generate a UUID and persist; subsequent batches
+      // pull the same id. We pass `--session <sessionDir>/<sessionId>.jsonl`
+      // to pi (which creates the file on first append).
+      let sessionId = this.opts.db.getThreadSessionId(threadId);
+      if (!sessionId) {
+        sessionId = randomUUID();
+        this.opts.db.setThreadSessionId(threadId, sessionId);
+      }
       const active: ActiveBatch = {
         threadId,
         ids: batch.map((m) => m.id),
-        steerIds: new Set(),
+        steerIds: [],
+        sessionId,
         phase: "spawning",
         cancelled: false,
         rpc: null,
@@ -288,7 +308,7 @@ export class AgentRunner extends EventEmitter {
     batch: BatchMessage[],
     log: Logger,
   ): Promise<void> {
-    const { threadId } = active;
+    const { threadId, sessionId } = active;
     const sessionDir = join(
       this.opts.rootDir,
       this.opts.harnessId,
@@ -298,10 +318,16 @@ export class AgentRunner extends EventEmitter {
       threadId,
     );
     mkdirSync(sessionDir, { recursive: true });
+    const sessionFile = join(sessionDir, `${sessionId}.jsonl`);
+
+    // Snapshot pre-batch user-message count so we can slice off the new
+    // entries pi appends during this batch and map them to row ids.
+    // Returns 0 when the file doesn't yet exist (first batch on this thread).
+    const preBatchUserCount = countUserMessageEntries(sessionFile);
 
     let rpc: PiRpcClient | null = null;
     try {
-      rpc = this.spawnPi(threadId, sessionDir, log);
+      rpc = this.spawnPi(threadId, sessionDir, sessionId, log);
       active.rpc = rpc;
 
       const promptText = batch
@@ -309,7 +335,7 @@ export class AgentRunner extends EventEmitter {
         .join("\n\n");
 
       log.info(
-        { threadId, count: batch.length, plugin: batch[0]!.pluginId },
+        { threadId, sessionId, count: batch.length, plugin: batch[0]!.pluginId },
         "prompt",
       );
 
@@ -335,12 +361,49 @@ export class AgentRunner extends EventEmitter {
       await rpc.waitExit();
       clearTimeout(exitTimer);
 
-      this.opts.db.markBatchDone([...active.ids, ...active.steerIds]);
-      log.debug({ threadId, batch: batch.length, steers: active.steerIds.size }, "batch done");
+      // Read pi's session JSONL post-`agent_end` and map the user-message
+      // entries appended during this batch back to row ids:
+      //   - all rows in active.ids share the first new entry id (one
+      //     concatenated prompt → one user message),
+      //   - active.steerIds[i] gets the (i+1)-th new entry id (each steer
+      //     becomes its own user message; stdin is serial so pi appends
+      //     them in dispatch order).
+      const newEntryIds = readUserEntryIdsAfter(sessionFile, preBatchUserCount);
+      const entryMap = new Map<number, string>();
+      const e0 = newEntryIds[0];
+      if (e0) for (const id of active.ids) entryMap.set(id, e0);
+      active.steerIds.forEach((rowId, i) => {
+        const eid = newEntryIds[i + 1];
+        if (eid) entryMap.set(rowId, eid);
+      });
+      if (!e0 || newEntryIds.length < 1 + active.steerIds.length) {
+        log.warn(
+          {
+            threadId,
+            sessionFile,
+            expected: 1 + active.steerIds.length,
+            got: newEntryIds.length,
+          },
+          "fewer user-message entries than expected; some pi_entry_ids will be NULL",
+        );
+      }
+
+      this.opts.db.markBatchDone(
+        [...active.ids, ...active.steerIds],
+        sessionId,
+        entryMap,
+      );
+      log.debug(
+        { threadId, batch: batch.length, steers: active.steerIds.length },
+        "batch done",
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (active.cancelled) {
-        this.opts.db.markBatchCancelled([...active.ids, ...active.steerIds]);
+        this.opts.db.markBatchCancelled(
+          [...active.ids, ...active.steerIds],
+          sessionId,
+        );
         log.info({ threadId }, "batch cancelled");
       } else {
         const stderr = rpc?.stderrSnapshot()?.slice(-512);
@@ -354,6 +417,7 @@ export class AgentRunner extends EventEmitter {
           [...active.ids, ...active.steerIds],
           errFull,
           this.maxAttempts,
+          sessionId,
         );
         log.error({ err: msg, threadId, retrying: r.retrying.length, dead: r.dead.length }, "batch failed");
       }
@@ -363,6 +427,7 @@ export class AgentRunner extends EventEmitter {
   private spawnPi(
     threadId: string,
     sessionDir: string,
+    sessionId: string,
     log: Logger,
   ): PiRpcClient {
     const agentDir = join(
@@ -373,10 +438,16 @@ export class AgentRunner extends EventEmitter {
     );
     const tools = AGENT_TOOLS.join(",");
     const systemPrompt = assembleSystemPrompt(agentDir, threadId);
+    // We pass `--session <path>` (harness-owned filename = sessionId) so
+    // the harness controls the canonical session per thread. Pi tolerates
+    // a not-yet-existing file (`loadEntriesFromFile` returns []), creates
+    // it on first append, and `SessionManager.open` derives the session
+    // directory from `resolve(path, "..")` so we don't need `--session-dir`.
+    // We drop `--continue` because the explicit path makes "continue" implicit.
+    const sessionFile = join(sessionDir, `${sessionId}.jsonl`);
     const args: string[] = [
       "--mode", "rpc",
-      "--continue",
-      "--session-dir", sessionDir,
+      "--session", sessionFile,
       "--provider", this.opts.agentJson.model.provider,
       "--model", this.opts.agentJson.model.id,
       "--thinking", this.opts.agentJson.model.thinkingLevel ?? "medium",
@@ -517,6 +588,57 @@ function assembleSystemPrompt(agentDir: string, threadId: string): string {
 function existsDir(p: string): boolean {
   try {
     return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pi session JSONL helpers. Each line is one `SessionEntry` (or a
+ * `SessionHeader` first line). We only care about user-message entries —
+ * `{type:"message", id, message:{role:"user", ...}}` — because every batch
+ * (initial concatenated prompt + each steer) becomes exactly one user
+ * message, and pi appends them in dispatch order. Other entry types
+ * (assistant/toolResult messages, compaction, branch_summary, …) are
+ * skipped so they don't shift our index mapping.
+ */
+function countUserMessageEntries(path: string): number {
+  if (!existsSync(path)) return 0;
+  let n = 0;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (isUserMessageLine(line)) n++;
+  }
+  return n;
+}
+
+function readUserEntryIdsAfter(path: string, skip: number): string[] {
+  if (!existsSync(path)) return [];
+  const ids: string[] = [];
+  let seen = 0;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!isUserMessageLine(line)) continue;
+    if (seen++ < skip) continue;
+    try {
+      const parsed = JSON.parse(line) as { id?: string };
+      if (typeof parsed.id === "string") ids.push(parsed.id);
+    } catch {
+      /* malformed — skip; downstream warns when length < expected */
+    }
+  }
+  return ids;
+}
+
+function isUserMessageLine(line: string): boolean {
+  if (!line) return false;
+  // Cheap pre-filter to avoid JSON.parse on every non-message line.
+  if (!line.includes(`"type":"message"`)) return false;
+  if (!line.includes(`"role":"user"`)) return false;
+  try {
+    const e = JSON.parse(line) as {
+      type?: string;
+      message?: { role?: string };
+    };
+    return e.type === "message" && e.message?.role === "user";
   } catch {
     return false;
   }

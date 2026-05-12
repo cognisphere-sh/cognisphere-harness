@@ -5,7 +5,8 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCcw, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, MessagesSquare, RefreshCcw, Trash2, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { endpoints, type EventRow, type EventStatus } from "@/lib/api";
 import { cn, formatTime } from "@/lib/utils";
@@ -191,6 +192,7 @@ export function EventsTable({ agentId }: Props) {
               <Th>Silent</Th>
               <Th>Text</Th>
               <Th>Metadata</Th>
+              <Th>Chat</Th>
               <Th className="text-right">Actions</Th>
             </tr>
           </thead>
@@ -201,7 +203,7 @@ export function EventsTable({ agentId }: Props) {
             {!isLoading && rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={11}
+                  colSpan={12}
                   className="px-3 py-8 text-center text-muted-foreground"
                 >
                   No events match the current filters.
@@ -403,6 +405,20 @@ function Row({ agentId, row }: { agentId: string; row: EventRow }) {
         title={metaStr}
       >
         {metaStr}
+      </td>
+      <td className="whitespace-nowrap px-3 py-1.5">
+        {row.piSessionId && row.piEntryId ? (
+          <Link
+            to={`/agents/${agentId}/chat?thread=${encodeURIComponent(row.threadId)}&session=${encodeURIComponent(row.piSessionId)}&entry=${encodeURIComponent(row.piEntryId)}`}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-primary hover:bg-primary/10"
+            title={`Open in chat\nsession ${row.piSessionId}\nentry ${row.piEntryId}`}
+          >
+            <MessagesSquare className="size-3" />
+            open
+          </Link>
+        ) : (
+          <span className="text-[10px] text-muted-foreground">—</span>
+        )}
       </td>
       <td className="whitespace-nowrap px-3 py-1.5 text-right">
         {row.status === "failed" && (

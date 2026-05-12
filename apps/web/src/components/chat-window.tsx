@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
@@ -38,14 +39,41 @@ export function ChatWindow({ agentId }: Props) {
     sessionId: string;
   } | null>(null);
 
-  // Default selection: first thread, latest session.
+  // Deep-link target from the events tab: `?thread=<>&session=<>&entry=<>`.
+  // We pre-select the thread/session, then scroll the matching entry into
+  // view once the session JSONL loads. Each unique link triggers exactly
+  // one consume (keyed on the param values) so clicking a *different*
+  // event link re-fires; clicking the same one twice doesn't.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkThread = searchParams.get("thread");
+  const linkSession = searchParams.get("session");
+  const linkEntry = searchParams.get("entry");
+  const [highlightEntryId, setHighlightEntryId] = useState<string | null>(null);
+  const lastConsumedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!linkThread || !linkSession) return;
+    const key = `${linkThread}::${linkSession}::${linkEntry ?? ""}`;
+    if (lastConsumedKeyRef.current === key) return;
+    lastConsumedKeyRef.current = key;
+    setSelected({ threadId: linkThread, sessionId: linkSession });
+    if (linkEntry) setHighlightEntryId(linkEntry);
+    // Strip the params so a subsequent thread switch isn't fought.
+    const next = new URLSearchParams(searchParams);
+    next.delete("thread");
+    next.delete("session");
+    next.delete("entry");
+    setSearchParams(next, { replace: true });
+  }, [linkThread, linkSession, linkEntry, searchParams, setSearchParams]);
+
+  // Default selection: first thread, its active (canonical) session.
+  // Falls back to the most-recent on-disk session for legacy threads
+  // that pre-date the harness owning session ids.
   useEffect(() => {
     if (selected) return;
     const first = threads[0];
-    const firstSession = first?.sessions[0];
-    if (first && firstSession) {
-      setSelected({ threadId: first.threadId, sessionId: firstSession.sessionId });
-    }
+    if (!first) return;
+    const sid = first.activeSessionId ?? first.sessions[0]?.sessionId;
+    if (sid) setSelected({ threadId: first.threadId, sessionId: sid });
   }, [threads, selected]);
 
   const { data: sessionData } = useQuery({
@@ -73,11 +101,41 @@ export function ChatWindow({ agentId }: Props) {
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
 
   // Auto-scroll on new messages, but only if we're already near the bottom.
+  // Suppressed while a deep-link target is pending so we don't fight the
+  // entry-id scroll below.
   useEffect(() => {
+    if (highlightEntryId) return;
     if (!pinnedToBottom) return;
     const el = scrollerRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight });
-  }, [chunks.length, pinnedToBottom]);
+  }, [chunks.length, pinnedToBottom, highlightEntryId]);
+
+  // Once the targeted entry is rendered, scroll it into view and flash a
+  // highlight ring. We poll briefly because the bubble may not be in the DOM
+  // on the first effect tick (chunks update right when sessionData arrives,
+  // but child components mount one tick later).
+  useEffect(() => {
+    if (!highlightEntryId) return;
+    if (chunks.length === 0) return;
+    let attempts = 0;
+    const tryScroll = () => {
+      const root = scrollerRef.current;
+      const el = root?.querySelector(
+        `[data-entry-id="${cssEscape(highlightEntryId)}"]`,
+      ) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-primary", "rounded-lg");
+        setTimeout(() => {
+          el.classList.remove("ring-2", "ring-primary", "rounded-lg");
+        }, 2500);
+        setHighlightEntryId(null);
+        return;
+      }
+      if (attempts++ < 20) setTimeout(tryScroll, 100);
+    };
+    tryScroll();
+  }, [chunks, highlightEntryId]);
 
   const onScroll = () => {
     const el = scrollerRef.current;
@@ -177,13 +235,15 @@ export function ChatWindow({ agentId }: Props) {
               {selected ? "(empty session)" : "Send a message to start a thread."}
             </div>
           )}
-          {chunks.map((c) =>
-            c.kind === "user" ? (
-              <UserMessageBubble key={c.id} agentId={agentId} bubble={c} />
-            ) : (
-              <AssistantMessageBubble key={c.id} agentId={agentId} bubble={c} />
-            ),
-          )}
+          {chunks.map((c) => (
+            <div key={c.id} data-entry-id={c.id} className="transition-shadow">
+              {c.kind === "user" ? (
+                <UserMessageBubble agentId={agentId} bubble={c} />
+              ) : (
+                <AssistantMessageBubble agentId={agentId} bubble={c} />
+              )}
+            </div>
+          ))}
         </div>
         <div className="shrink-0 border-t bg-card p-3">
           {stagedFiles.length > 0 && (
@@ -298,10 +358,25 @@ function StagedFileChip({
   );
 }
 
+/** Wrap CSS.escape with a fallback for environments that lack it. */
+function cssEscape(s: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(s);
+  }
+  return s.replace(/["\\]/g, "\\$&");
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Each thread has a single canonical session (the harness-owned
+ *  `activeSessionId`). For legacy threads with no binding yet we fall
+ *  back to the most-recent on-disk session. */
+function pickThreadSession(t: ThreadRow): string | null {
+  return t.activeSessionId ?? t.sessions[0]?.sessionId ?? null;
 }
 
 function MobileThreadPicker({
@@ -314,30 +389,27 @@ function MobileThreadPicker({
   onSelect: (s: { threadId: string; sessionId: string }) => void;
 }) {
   if (threads.length === 0) return null;
-  const value = selected ? `${selected.threadId}::${selected.sessionId}` : "";
+  const value = selected ? selected.threadId : "";
   return (
     <label className="flex min-w-0 flex-1 items-center gap-1.5 lg:hidden">
       <MessagesSquare className="size-4 shrink-0" />
       <select
         value={value}
         onChange={(e) => {
-          const [threadId, sessionId] = e.target.value.split("::");
-          if (threadId && sessionId) onSelect({ threadId, sessionId });
+          const t = threads.find((x) => x.threadId === e.target.value);
+          if (!t) return;
+          const sid = pickThreadSession(t);
+          if (sid) onSelect({ threadId: t.threadId, sessionId: sid });
         }}
         className="min-w-0 flex-1 truncate rounded-md border border-input bg-background px-2 py-1 font-mono text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label="select thread"
       >
         {!selected && <option value="">— pick a thread —</option>}
-        {threads.map((t) =>
-          t.sessions.slice(0, 5).map((s) => (
-            <option
-              key={`${t.threadId}::${s.sessionId}`}
-              value={`${t.threadId}::${s.sessionId}`}
-            >
-              {t.threadId.slice(0, 12)}… / {s.sessionId.slice(0, 10)}…
-            </option>
-          )),
-        )}
+        {threads.map((t) => (
+          <option key={t.threadId} value={t.threadId}>
+            {t.threadId}
+          </option>
+        ))}
       </select>
     </label>
   );
@@ -363,37 +435,33 @@ function ThreadList({
         {loading && (
           <div className="px-3 py-1 text-xs text-muted-foreground">loading…</div>
         )}
-        {threads.map((t) => (
-          <div key={t.threadId} className="mb-2">
-            <div className="px-3 py-1 font-mono text-xs text-foreground/80">
-              {t.threadId}
-            </div>
-            <div className="space-y-0.5">
-              {t.sessions.slice(0, 5).map((s) => {
-                const isSel =
-                  selected?.threadId === t.threadId &&
-                  selected.sessionId === s.sessionId;
-                return (
-                  <button
-                    key={s.sessionId}
-                    onClick={() =>
-                      onSelect({ threadId: t.threadId, sessionId: s.sessionId })
-                    }
-                    className={cn(
-                      "block w-full truncate rounded-md px-3 py-1 text-left text-[11px] font-mono transition-colors",
-                      isSel
-                        ? "bg-primary/10 text-primary"
-                        : "text-muted-foreground hover:bg-accent",
-                    )}
-                    title={s.sessionId}
-                  >
-                    {s.sessionId.slice(0, 18)}…
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+        {threads.map((t) => {
+          const sid = pickThreadSession(t);
+          const isSel = !!sid && selected?.threadId === t.threadId;
+          return (
+            <button
+              key={t.threadId}
+              onClick={() => sid && onSelect({ threadId: t.threadId, sessionId: sid })}
+              disabled={!sid}
+              className={cn(
+                "mb-1 block w-full truncate rounded-md px-3 py-1.5 text-left transition-colors",
+                isSel
+                  ? "bg-primary/10 text-primary"
+                  : "hover:bg-accent text-muted-foreground",
+              )}
+              title={sid ?? "no active session"}
+            >
+              <div className="truncate font-mono text-xs text-foreground/90">
+                {t.threadId}
+              </div>
+              {sid && (
+                <div className="truncate font-mono text-[10px] text-muted-foreground">
+                  {sid.slice(0, 18)}…
+                </div>
+              )}
+            </button>
+          );
+        })}
         {!loading && threads.length === 0 && (
           <div className="px-3 py-2 text-xs text-muted-foreground">
             No threads yet. Send a message below to start one.
