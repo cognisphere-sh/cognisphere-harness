@@ -38,6 +38,11 @@ interface Props {
 }
 
 export function FileTree(props: Props) {
+  const { data: agent } = useQuery({
+    queryKey: ["agent", props.agentId],
+    queryFn: () => endpoints.getAgent(props.agentId),
+    enabled: !!props.agentId,
+  });
   return (
     <div className="flex h-full flex-col text-sm">
       <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -47,7 +52,7 @@ export function FileTree(props: Props) {
         <DirNode
           {...props}
           path=""
-          name="(root)"
+          name={agent?.name ?? props.agentId}
           depth={0}
           defaultOpen
           isRoot

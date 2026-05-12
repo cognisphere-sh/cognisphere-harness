@@ -3,6 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
+  Check,
+  ChevronDown,
   FileText,
   Loader2,
   MessagesSquare,
@@ -18,6 +20,12 @@ import {
   UserMessageBubble,
 } from "@/components/chat-message";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -93,6 +101,16 @@ export function ChatWindow({ agentId }: Props) {
     () => (sessionData ? flattenSession(sessionData.entries) : []),
     [sessionData],
   );
+
+  const currentThread = useMemo(
+    () => threads.find((t) => t.threadId === selected?.threadId) ?? null,
+    [threads, selected?.threadId],
+  );
+  const activeSessionId = currentThread
+    ? pickThreadSession(currentThread)
+    : null;
+  const isViewingActive =
+    !!selected && !!activeSessionId && selected.sessionId === activeSessionId;
 
   const [input, setInput] = useState("");
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
@@ -197,7 +215,10 @@ export function ChatWindow({ agentId }: Props) {
     setStagedFiles((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const canSend = (!!input.trim() || stagedFiles.length > 0) && !send.isPending;
+  const canSend =
+    (!!input.trim() || stagedFiles.length > 0) &&
+    !send.isPending &&
+    isViewingActive;
 
   return (
     <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[minmax(220px,22%)_1fr]">
@@ -219,7 +240,14 @@ export function ChatWindow({ agentId }: Props) {
               <MessagesSquare className="hidden size-4 lg:inline" />
               <code className="min-w-0 truncate">{selected.threadId}</code>
               <span className="text-[10px]">·</span>
-              <code className="min-w-0 truncate">{selected.sessionId}</code>
+              <SessionPicker
+                sessions={currentThread?.sessions ?? []}
+                selectedSessionId={selected.sessionId}
+                activeSessionId={activeSessionId}
+                onSelect={(sid) =>
+                  setSelected({ threadId: selected.threadId, sessionId: sid })
+                }
+              />
             </>
           ) : (
             <span>No session selected</span>
@@ -273,7 +301,7 @@ export function ChatWindow({ agentId }: Props) {
               variant="outline"
               size="icon"
               onClick={() => fileInput.current?.click()}
-              disabled={send.isPending}
+              disabled={send.isPending || !isViewingActive}
               aria-label="attach file"
             >
               <Paperclip className="size-4" />
@@ -281,8 +309,13 @@ export function ChatWindow({ agentId }: Props) {
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Message the agent…"
+              placeholder={
+                isViewingActive
+                  ? "Message the agent…"
+                  : "Archived session — switch to the latest session to send messages"
+              }
               rows={1}
+              disabled={!isViewingActive}
               className={cn("max-h-40 min-h-9 min-w-0 flex-1 resize-none")}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.metaKey) {
@@ -316,8 +349,14 @@ export function ChatWindow({ agentId }: Props) {
             </Button>
           </div>
           <div className="px-1 pt-1 text-[10px] text-muted-foreground">
-            Enter to send · Shift+Enter for newline · 📎 attaches to{" "}
-            <code>plugins/admin/inbox/</code>
+            {isViewingActive ? (
+              <>
+                Enter to send · Shift+Enter for newline · 📎 attaches to{" "}
+                <code>plugins/admin/inbox/</code>
+              </>
+            ) : (
+              <>Read-only — this is an archived session.</>
+            )}
           </div>
         </div>
       </div>
@@ -377,6 +416,84 @@ function formatFileSize(bytes: number): string {
  *  back to the most-recent on-disk session. */
 function pickThreadSession(t: ThreadRow): string | null {
   return t.activeSessionId ?? t.sessions[0]?.sessionId ?? null;
+}
+
+function SessionPicker({
+  sessions,
+  selectedSessionId,
+  activeSessionId,
+  onSelect,
+}: {
+  sessions: { sessionId: string; modified: number }[];
+  selectedSessionId: string;
+  activeSessionId: string | null;
+  onSelect: (sessionId: string) => void;
+}) {
+  // Newest first. The active session is pinned to the top regardless.
+  const sorted = useMemo(() => {
+    const xs = [...sessions].sort((a, b) => b.modified - a.modified);
+    if (!activeSessionId) return xs;
+    const active = xs.find((s) => s.sessionId === activeSessionId);
+    if (!active) return xs;
+    const rest = xs.filter((s) => s.sessionId !== activeSessionId);
+    return [active, ...rest];
+  }, [sessions, activeSessionId]);
+
+  // Legacy threads or threads with a single session: render plain code, no menu.
+  if (sorted.length <= 1) {
+    return <code className="min-w-0 truncate">{selectedSessionId}</code>;
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex min-w-0 items-center gap-1 truncate rounded-md px-1.5 py-0.5 font-mono text-xs",
+            "hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+          aria-label="select session"
+        >
+          <span className="min-w-0 truncate">{selectedSessionId}</span>
+          <ChevronDown className="size-3 shrink-0 opacity-70" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-w-[min(28rem,90vw)]">
+        {sorted.map((s) => {
+          const isSel = s.sessionId === selectedSessionId;
+          const isActive = s.sessionId === activeSessionId;
+          return (
+            <DropdownMenuItem
+              key={s.sessionId}
+              onSelect={() => onSelect(s.sessionId)}
+              className="flex items-start gap-2"
+            >
+              <Check
+                className={cn(
+                  "mt-0.5 size-3.5 shrink-0",
+                  isSel ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <code className="truncate text-xs">{s.sessionId}</code>
+                  {isActive && (
+                    <span className="rounded bg-primary/15 px-1 py-px text-[9px] font-medium uppercase tracking-wider text-primary">
+                      latest
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {new Date(s.modified).toLocaleString()}
+                </div>
+              </div>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function MobileThreadPicker({
