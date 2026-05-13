@@ -358,6 +358,12 @@ export class AgentRunner extends EventEmitter {
       // Race agent_end against pi exit; if pi exits first without emitting
       // agent_end, treat it as a crash.
       await Promise.race([agentEnded, rpc.waitExit()]);
+      // Pi responds to an abort frame by emitting agent_end cleanly, so the
+      // race resolves successfully on user-cancel too. Route to the catch
+      // branch (which sees `active.cancelled`) instead of marking done.
+      if (active.cancelled) {
+        throw new Error("batch aborted");
+      }
       if (!endedCleanly) {
         const stderr = rpc.stderrSnapshot()?.slice(-512) ?? "";
         throw new Error(`pi exited without agent_end. stderr: ${stderr}`);

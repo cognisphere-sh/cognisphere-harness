@@ -468,8 +468,12 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
 9. On crash: `markBatchFailed(ids, errFull, maxAttempts)` — bumps
    attempts, dead-letters past the cap. Stderr tail is appended to the
    error message.
-10. On `abort(threadId)`: same as the crash path but with status `done`
-    and `log: "cancelled by user"` (no retry).
+10. On `abort(threadId)`: the runner sets `active.cancelled = true` and
+    sends an `abort` frame to pi, which responds by emitting `agent_end`
+    cleanly. The race resolves successfully, but the post-race check on
+    `active.cancelled` throws into the catch branch, which calls
+    `markBatchCancelled(ids, sessionId)` — terminal status `cancelled`,
+    no retry, all rows (initial batch + delivered steers) included.
 11. After every batch: emit `batch-completed` so the AgentManager can
     fire a deferred stale-swap if one is pending.
 
