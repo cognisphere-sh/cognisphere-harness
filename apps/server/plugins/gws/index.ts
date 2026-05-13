@@ -13,7 +13,6 @@ import {
   collectHeaders,
   formatEmail,
   type GmailMessage,
-  pickTextBody,
 } from "./seed/scripts/format-email.js";
 
 const execFileP = promisify(execFile);
@@ -22,7 +21,6 @@ const SENT_LABEL = "SENT";
 
 interface GwsConfig {
   pollIntervalSec?: number;
-  invocationTerm?: string;
   gmailQuery?: string;
 }
 
@@ -37,10 +35,10 @@ interface GmailThread {
 
 /**
  * Polls Gmail through the `gws` CLI and emits one notification per inbound
- * message. Invoked messages (first-of-thread, or — when `invocationTerm` is
- * set — body contains `@<term>`) deliver headers + body + attachment paths
- * and wake the agent. Non-invoked messages deliver headers only and are
- * marked `isSilent: true` so they park behind a future invoked message in
+ * message. Messages where the agent's own email is in the `To` header
+ * deliver headers + body + attachment paths and wake the agent. Messages
+ * where the agent is only in `Cc`/`Bcc` deliver headers only and are
+ * marked `isSilent: true` so they park behind a future addressed message in
  * the same harness thread, supplying context without a standalone wake.
  *
  * Threading: the harness thread id is `<Subject> [<gmailThreadId>]` — taken
@@ -61,12 +59,6 @@ export default class GwsPlugin implements Plugin {
           default: 60,
           minimum: 10,
           description: "Seconds between Gmail polls.",
-        },
-        invocationTerm: {
-          type: "string",
-          default: "",
-          description:
-            "Token (without leading `@`) an inbound message body must contain to trigger a full notification. Blank = every inbound message is treated as invoked.",
         },
         gmailQuery: {
           type: "string",
@@ -90,17 +82,17 @@ export default class GwsPlugin implements Plugin {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private pollIntervalMs = 60_000;
-  private invocationTerm = "";
   private gmailQuery = "is:unread in:inbox";
+  private agentEmail = "";
 
   async start(ctx: PluginInstanceContext): Promise<void> {
     this.ctx = ctx;
     const cfg = (ctx.config as GwsConfig | undefined) ?? {};
     this.pollIntervalMs = (cfg.pollIntervalSec ?? 60) * 1000;
-    this.invocationTerm = (cfg.invocationTerm ?? "").trim();
     this.gmailQuery = cfg.gmailQuery ?? "is:unread in:inbox";
 
     await this.verifyAuth();
+    await this.loadAgentEmail();
     this.stopped = false;
 
     // Self-rescheduling poll: schedules the next tick only after the
@@ -142,6 +134,30 @@ export default class GwsPlugin implements Plugin {
       },
       maxBuffer: 64 * 1024 * 1024,
     });
+  }
+
+  /** Look up the authenticated mailbox's primary address via `users.getProfile`.
+   *  The agent's address is what we match against `To`/`Cc`/`Bcc` headers to
+   *  decide whether an inbound message wakes the agent or parks as silent. */
+  private async loadAgentEmail(): Promise<void> {
+    const ctx = this.ctx!;
+    const params = JSON.stringify({ userId: "me" });
+    const { stdout } = await this.runGws([
+      "gmail",
+      "users",
+      "getProfile",
+      "--params",
+      params,
+    ]);
+    const profile = JSON.parse(stdout || "{}") as { emailAddress?: string };
+    const email = (profile.emailAddress ?? "").trim().toLowerCase();
+    if (!email) {
+      throw new Error(
+        "gws users.getProfile returned no emailAddress; cannot determine agent's own address.",
+      );
+    }
+    this.agentEmail = email;
+    ctx.log.info({ agentEmail: email }, "gws agent email resolved");
   }
 
   private async verifyAuth(): Promise<void> {
@@ -265,15 +281,6 @@ export default class GwsPlugin implements Plugin {
       return;
     }
 
-    const term = this.invocationTerm
-      ? `@${this.invocationTerm}`.toLowerCase()
-      : "";
-    const isInvoked = (m: GmailMessage, isThreadFirst: boolean): boolean => {
-      if (isThreadFirst) return true;
-      if (!term) return true; // blank invocationTerm = every message is invoked
-      return pickTextBody(m.payload).toLowerCase().includes(term);
-    };
-
     const unreadToMark: GmailMessage[] = [];
     for (let i = start; i < ordered.length; i++) {
       const m = ordered[i]!;
@@ -293,7 +300,9 @@ export default class GwsPlugin implements Plugin {
         `TimeStamp: ${timestamp}`,
       ].join("\n");
 
-      const invoked = isInvoked(m, i === 0);
+      // Agent address in `To` → wake (full body). Cc/Bcc / not addressed → silent.
+      const toAddresses = extractEmails(to);
+      const invoked = toAddresses.includes(this.agentEmail);
 
       let text = header;
       if (invoked) {
@@ -352,6 +361,14 @@ export default class GwsPlugin implements Plugin {
 
 function hasLabel(m: GmailMessage, label: string): boolean {
   return (m.labelIds ?? []).includes(label);
+}
+
+/** Pull all email addresses out of an RFC-5322 address header. Handles
+ *  `name <addr>`, bare `addr`, quoted display names, and comma-separated
+ *  lists. Returns lowercased addresses for case-insensitive comparison. */
+function extractEmails(header: string): string[] {
+  const matches = header.match(/[\w!#$%&'*+/=?^`{|}~.-]+@[\w.-]+/g) ?? [];
+  return matches.map((e) => e.toLowerCase());
 }
 
 /** Strip characters that would break a directory name; `<Subject>` is used

@@ -9,14 +9,15 @@ calling the `gws` CLI directly — no plugin loopback.
 You receive one `<harness-metadata>` block per email. Two notification
 flavors:
 
-- `email_received` — body present. Wakes you. Sent for the first message of
-  every Gmail thread, and (when the plugin's `invocationTerm` config is
-  set) for any later message whose body contains `@<term>`
-  case-insensitive. When `invocationTerm` is blank, every inbound message
-  is `email_received`.
-- `email_silent` — header-only, `IsSilent: true`. Does **not** wake you on
-  its own; parks in the queue and is delivered as context the next time an
-  `email_received` lands on the same thread.
+- `email_received` — body present. Wakes you. Sent when your own email
+  address is in the `To` header of an inbound message.
+- `email_silent` — header-only, `IsSilent: true`. Sent when you're only on
+  `Cc`/`Bcc` (or not addressed at all on a thread you can see). Does **not**
+  wake you on its own; parks in the queue and is delivered as context the
+  next time an `email_received` lands on the same thread.
+
+Your own address comes from `gws gmail users getProfile --params
+'{"userId":"me"}'` (field `emailAddress`) if you need to introspect it.
 
 Metadata fields per message:
 
@@ -105,11 +106,21 @@ The surface is dynamic — prefer `--help` over guessing:
 
 - **No markdown in email bodies.** Gmail renders plaintext as-is. Use `--html` if you need rich formatting.
 - The text you generate inside a turn is **not** sent. Your turn is internal — you must actually invoke `gws gmail +send` / `gws gmail +reply` / `gws gmail +reply-all` to deliver the reply.
+- **Always end outgoing messages with a signature that reminds the
+  recipient to keep your address in `To:` if they want a reply.** Recipients
+  who reply with you only on `Cc`/`Bcc` will park as silent context and you
+  won't wake to answer them. Example signature line:
+
+  ```
+  — Keep me in To: if you want a reply. Cc/Bcc gets you seen, not answered.
+)
+  ```
+
+  Adapt the wording to the thread's tone, but keep the reminder in every
+  outbound message until the recipient has clearly internalised it.
 
 ## Don't
 
 - Don't echo the inbound body back via reply — they wrote it.
 - Don't re-send to recover from a transient error before checking Sent: `gws gmail users messages list --params '{"userId":"me","q":"in:sent newer_than:1d"}'`.
 - Don't re-attach an inbound attachment unless explicitly asked.
-
-InvocationTerm = Dory
