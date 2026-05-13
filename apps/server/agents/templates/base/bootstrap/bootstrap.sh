@@ -78,7 +78,19 @@ else
   warn "cargo (Rust) not found; install Rust (https://rustup.rs) and re-run, or install websearch by hand"
 fi
 
-# ── 4. agent-browser (npm global) ─────────────────────────────────────
+# ── 4. pi-coding-agent (npm global) ───────────────────────────────────
+# Provides the `pi` binary that the harness runner spawns (`pi --mode rpc`).
+if command -v pi >/dev/null 2>&1; then
+  log "pi-coding-agent already installed"
+elif command -v npm >/dev/null 2>&1; then
+  log "installing @earendil-works/pi-coding-agent via npm..."
+  npm install -g @earendil-works/pi-coding-agent \
+    || warn "npm install -g @earendil-works/pi-coding-agent failed (permission issue? try: sudo npm install -g @earendil-works/pi-coding-agent)"
+else
+  warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install @earendil-works/pi-coding-agent by hand"
+fi
+
+# ── 5. agent-browser (npm global) ─────────────────────────────────────
 if command -v agent-browser >/dev/null 2>&1; then
   log "agent-browser already installed"
 elif command -v npm >/dev/null 2>&1; then

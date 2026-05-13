@@ -110,7 +110,7 @@ export default class TelegramPlugin implements Plugin {
     configSchema: {
       type: "object",
       properties: {
-        pollTimeoutSec: { type: "integer", default: 25, minimum: 1, maximum: 50 },
+        pollTimeoutSec: { type: "integer", default: 25, minimum: 1, maximum: 600 },
         allowedChatIds: {
           type: "array",
           items: { type: "string" },
@@ -228,8 +228,8 @@ export default class TelegramPlugin implements Plugin {
     const text =
       attachments.length > 0
         ? `${baseText}${baseText ? "\n\n" : ""}${attachments
-            .map((p) => `${basename(p)}[${p}]`)
-            .join("\n")}`
+          .map((p) => `${basename(p)}[${p}]`)
+          .join("\n")}`
         : baseText;
 
     this.ctx.notify(isEdit ? "edited" : "message_received", {

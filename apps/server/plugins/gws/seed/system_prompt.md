@@ -61,7 +61,7 @@ gmail users messages get` through `scripts/gws/format-email`:
 ```
 bash gws gmail users messages get \
   --params '{"userId":"me","id":"<MessageId>","format":"full"}' \
-  | scripts/gws/format-email --attachments-dir plugins/gws/inbox/<MessageId>
+  | scripts/gws/format-email --attachments-dir plugins/gws/inbox/<GmailThreadId>
 ```
 
 `scripts/gws/format-email` reads a Gmail `Message` JSON from stdin and
@@ -103,15 +103,13 @@ The surface is dynamic — prefer `--help` over guessing:
 
 ## Outbound rules
 
-- **No markdown in email bodies.** Gmail renders plaintext as-is. Use
-  `--html` if you need rich formatting.
-- The text you generate inside a turn is **not** sent. Your turn is
-  internal — you must actually invoke `gws gmail +send` /
-  `gws gmail +reply` / `gws gmail +reply-all` to deliver the reply.
+- **No markdown in email bodies.** Gmail renders plaintext as-is. Use `--html` if you need rich formatting.
+- The text you generate inside a turn is **not** sent. Your turn is internal — you must actually invoke `gws gmail +send` / `gws gmail +reply` / `gws gmail +reply-all` to deliver the reply.
 
 ## Don't
 
 - Don't echo the inbound body back via reply — they wrote it.
-- Don't re-send to recover from a transient error before checking Sent:
-  `gws gmail users messages list --params '{"userId":"me","q":"in:sent newer_than:1d"}'`.
+- Don't re-send to recover from a transient error before checking Sent: `gws gmail users messages list --params '{"userId":"me","q":"in:sent newer_than:1d"}'`.
 - Don't re-attach an inbound attachment unless explicitly asked.
+
+InvocationTerm = Dory
