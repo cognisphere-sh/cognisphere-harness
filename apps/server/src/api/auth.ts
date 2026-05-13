@@ -4,13 +4,13 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { ServerConfig } from "../config.js";
-import { harnessRoot } from "../config.js";
+import { secretsRoot } from "../config.js";
 import type { Logger } from "../logger.js";
 
 /**
  * File-based static auth for v0.
  *
- * Users live at `<harnessRoot>/users.json`:
+ * Users live at `<harnessRoot>/.secrets/users.json`:
  *   { "users": [ { "username": "admin", "password": "changeme" } ] }
  *
  * Plaintext passwords — same trade-off as `secrets.json` (encryption deferred).
@@ -20,7 +20,7 @@ import type { Logger } from "../logger.js";
  * Sessions are stateless signed cookies: `<payload>.<sig>` where
  * payload = base64url("<username>|<expiresAt>") and sig = base64url(
  * hmac-sha256(secret, payload)). The 32-byte secret is persisted to
- * `<harnessRoot>/session-key` on first boot, so sessions survive
+ * `<harnessRoot>/.secrets/session-key` on first boot, so sessions survive
  * restarts. Logout just clears the cookie; there is no server-side
  * revocation list — deleting `session-key` invalidates every session.
  */
@@ -151,7 +151,7 @@ export class AuthStore {
 }
 
 export function makeAuthStore(cfg: ServerConfig, log: Logger): AuthStore {
-  const root = harnessRoot(cfg);
+  const root = secretsRoot(cfg);
   return new AuthStore(join(root, "users.json"), join(root, "session-key"), log);
 }
 

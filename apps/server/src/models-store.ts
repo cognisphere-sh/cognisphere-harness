@@ -1,5 +1,5 @@
 /**
- * Provider/model configuration backed by `<harnessRoot>/models.json`.
+ * Provider/model configuration backed by `<harnessRoot>/.secrets/models.json`.
  *
  * Shape on disk:
  *   {

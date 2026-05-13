@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { join } from "node:path";
 import type { AgentManager } from "../agent-manager.js";
 import type { ServerConfig } from "../config.js";
-import { harnessRoot } from "../config.js";
+import { secretsRoot } from "../config.js";
 import type { Logger } from "../logger.js";
 import { PROVIDER_CATALOG } from "../models-catalog.js";
 import { ModelsStore } from "../models-store.js";
@@ -60,7 +60,7 @@ export function modelsRouter(
   log: Logger,
 ): Hono {
   const r = new Hono();
-  const path = join(harnessRoot(cfg), "models.json");
+  const path = join(secretsRoot(cfg), "models.json");
   const store = new ModelsStore(path);
 
   r.get("/", (c) => {

@@ -1,8 +1,8 @@
 /**
  * Secrets resolution for agents and their plugins.
  *
- * v0: file-based, plaintext. Read from `<harnessRoot>/secrets.json` at
- * boot (cached per process). Encryption is deferred — see HLD §15.
+ * v0: file-based, plaintext. Read from `<harnessRoot>/.secrets/secrets.json`
+ * at boot (cached per process). Encryption is deferred — see HLD §15.
  *
  * Format (uniform — every entry under `<agentId>` is a bucket):
  *

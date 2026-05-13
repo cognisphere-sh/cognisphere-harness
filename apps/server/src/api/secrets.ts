@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ServerConfig } from "../config.js";
-import { harnessRoot } from "../config.js";
+import { secretsRoot } from "../config.js";
 import type { AgentManager } from "../agent-manager.js";
 import { AGENT_BUCKET } from "../secrets.js";
 import type { Logger } from "../logger.js";
@@ -41,7 +41,7 @@ const MASK = "********";
 
 export function secretsRouter(am: AgentManager, cfg: ServerConfig, log: Logger): Hono {
   const r = new Hono();
-  const path = join(harnessRoot(cfg), "secrets.json");
+  const path = join(secretsRoot(cfg), "secrets.json");
 
   r.get("/", (c) => {
     const data = readSecrets(path);

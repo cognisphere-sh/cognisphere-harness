@@ -79,7 +79,7 @@ not to gauge agent health (use `/api/agents` for that).
 ## 3. Auth routes — `/api/auth/*`
 
 Implemented in `apps/server/src/api/auth.ts`. File-backed user store at
-`<harnessRoot>/users.json`:
+`<harnessRoot>/.secrets/users.json`:
 
 ```json
 { "users": [{ "username": "admin", "password": "changeme" }] }
@@ -88,7 +88,7 @@ Implemented in `apps/server/src/api/auth.ts`. File-backed user store at
 Plaintext passwords, same trade-off as `secrets.json`. On first boot
 the file is created with `admin / changeme` — change it before exposing
 the server. Sessions are stateless signed cookies; the 32-byte HMAC key
-lives at `<harnessRoot>/session-key` and is generated on first boot.
+lives at `<harnessRoot>/.secrets/session-key` and is generated on first boot.
 Deleting that file invalidates every issued cookie.
 
 ### `POST /api/auth/login`
@@ -516,7 +516,7 @@ logged but don't fail the save — the file write already succeeded.
 ## 7. Models — `/api/models`
 
 Implemented in `apps/server/src/api/models.ts`. Reads/writes the global
-`<harnessRoot>/models.json`. Both routes require auth.
+`<harnessRoot>/.secrets/models.json`. Both routes require auth.
 
 The provider catalog (id, displayName, `CredField[]`, default model
 list, optional notes) is fixed in `models-catalog.ts`. Only the

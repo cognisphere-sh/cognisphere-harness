@@ -91,7 +91,7 @@ export function LoginPage() {
               </Button>
               <p className="text-center text-[11px] text-muted-foreground">
                 Default: <code>admin</code> / <code>changeme</code>. Edit{" "}
-                <code>~/.piharness/default/users.json</code> to change.
+                <code>~/.piharness/default/.secrets/users.json</code> to change.
               </p>
             </form>
           </CardContent>

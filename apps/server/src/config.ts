@@ -32,6 +32,15 @@ export function harnessRoot(cfg: ServerConfig): string {
   return join(cfg.rootDir, cfg.harnessId);
 }
 
+/**
+ * Sensitive on-disk files (secrets.json, models.json, users.json,
+ * session-key) live under `<harnessRoot>/.secrets/` so the harness root
+ * can be a checked-in working directory without leaking credentials.
+ */
+export function secretsRoot(cfg: ServerConfig): string {
+  return join(harnessRoot(cfg), ".secrets");
+}
+
 /** Path of the harness-wide settings file (currently just `{ timezone }`). */
 export function harnessJsonFile(cfg: ServerConfig): string {
   return join(harnessRoot(cfg), "harness.json");

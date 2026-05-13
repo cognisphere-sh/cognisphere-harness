@@ -118,8 +118,11 @@ is `<rootDir>/<harnessId>`.
 ```
 <rootDir>/<harnessId>/
 ├── harness.json                  ← harness-wide settings ({ timezone })
-├── secrets.json                  ← plaintext, agent + plugin secret buckets
-├── models.json                   ← per-provider credentials + enabled models
+├── .secrets/                     ← sensitive files; 0600. Keep out of VCS.
+│   ├── secrets.json                  plaintext, agent + plugin secret buckets
+│   ├── models.json                   per-provider credentials + enabled models
+│   ├── users.json                    plaintext login credentials
+│   └── session-key                   32-byte HMAC key for signed session cookies
 ├── plugins/                      ← (optional) user-space plugins; user
 │   └── <plugin-id>/index.ts          plugins shadow built-ins on id collision
 └── agents/
@@ -229,7 +232,7 @@ A plugin manifest declares two JSON Schemas:
 
 ### 4.4 SecretsStore — `secrets.ts`
 
-Backing file: `<harnessRoot>/secrets.json`. Bucketed layout:
+Backing file: `<harnessRoot>/.secrets/secrets.json`. Bucketed layout:
 
 ```json
 {
@@ -278,7 +281,7 @@ ids that agents may select.
   shortlist, and optional `notes`. The `CredField.envVar` is what gets
   injected into the pi child's env at spawn.
 - **Store** (`models-store.ts`): read-through (never cached) against
-  `<harnessRoot>/models.json`. Shape on disk:
+  `<harnessRoot>/.secrets/models.json`. Shape on disk:
 
   ```json
   {
@@ -1004,7 +1007,7 @@ per-agent divergence.
 
 ### 6.11 Secrets in a single JSON file, bucketed, plaintext
 
-**Decision**: `<harnessRoot>/secrets.json`, plain JSON, 0600 perms.
+**Decision**: `<harnessRoot>/.secrets/secrets.json`, plain JSON, 0600 perms.
 Buckets under each agent: `agent` (reserved, for keys declared in
 `agent.json.secretsSchema`) plus one per plugin id.
 
@@ -1121,7 +1124,7 @@ mkdir -p "$ROOT/agents/$ID"/{system_prompts,workspace,sessions,plugins}
 ### 7.2 Editing secrets manually
 
 ```bash
-$EDITOR ~/.piharness/default/secrets.json
+$EDITOR ~/.piharness/default/.secrets/secrets.json
 # {
 #   "dr-renu": {
 #     "agent":    { "ELEVENLABS_API_KEY": "..." },
@@ -1142,7 +1145,7 @@ under the agent flattened — see §6.12).
 ### 7.3 Editing models / provider config manually
 
 ```bash
-$EDITOR ~/.piharness/default/models.json
+$EDITOR ~/.piharness/default/.secrets/models.json
 # {
 #   "providers": {
 #     "anthropic": {

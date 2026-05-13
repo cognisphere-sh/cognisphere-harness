@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync,
 import { join } from "node:path";
 import { Ajv, type ErrorObject } from "ajv";
 import type { ServerConfig } from "./config.js";
-import { agentDir, agentsRoot, harnessRoot } from "./config.js";
+import { agentDir, agentsRoot, secretsRoot } from "./config.js";
 import type { Logger } from "./logger.js";
 import { childLogger } from "./logger.js";
 import type { PluginRegistry } from "./plugin-registry.js";
@@ -102,8 +102,8 @@ export class AgentManager {
     log?: Logger,
   ) {
     this.log = log ?? childLogger("agent-manager");
-    this.secrets = new SecretsStore(join(harnessRoot(cfg), "secrets.json"));
-    this.models = new ModelsStore(join(harnessRoot(cfg), "models.json"));
+    this.secrets = new SecretsStore(join(secretsRoot(cfg), "secrets.json"));
+    this.models = new ModelsStore(join(secretsRoot(cfg), "models.json"));
   }
 
   /**

@@ -198,7 +198,7 @@ export interface ProviderCatalogEntry {
 }
 
 /**
- * Per-provider configuration as written to `<harnessRoot>/models.json`.
+ * Per-provider configuration as written to `<harnessRoot>/.secrets/models.json`.
  * `credentials` keys mirror the catalog entry's `CredField.key`s.
  * Plaintext on disk in v0 (HLD §15); empty/missing values === unset.
  * `enabledModels` is the operator-curated allowlist — agents may only

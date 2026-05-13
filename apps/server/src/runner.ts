@@ -107,7 +107,7 @@ export interface RunnerOpts {
   /**
    * Bare-key → value map of secrets exposed to the pi runtime as env vars.
    * Snapshot at AgentRunner construction; restart the server to pick up
-   * edits to `<harnessRoot>/secrets.json`.
+   * edits to `<harnessRoot>/.secrets/secrets.json`.
    */
   envSecrets?: Record<string, string>;
   log: Logger;
