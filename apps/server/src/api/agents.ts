@@ -356,8 +356,15 @@ interface SessionEntry {
   size: number;
 }
 
+// Thread ids are created by the harness from arbitrary inputs (e.g. email
+// subjects), so they can contain spaces, parens, brackets, and unicode.
+// We only need to ensure the id is a single path segment that can't escape
+// the agent's `sessions/` directory.
 function isSafeId(s: string): boolean {
-  return /^[A-Za-z0-9._:-]+$/.test(s);
+  if (!s || s.length > 256) return false;
+  if (s.startsWith(".")) return false; // blocks ".", "..", and hidden dirs
+  if (s.includes("/") || s.includes("\\") || s.includes("\0")) return false;
+  return true;
 }
 
 function clampLimit(raw: string | undefined, def: number, max: number): number {

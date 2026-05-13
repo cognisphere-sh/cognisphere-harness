@@ -265,7 +265,11 @@ Per-session response:
 ```
 
 Malformed JSONL lines are silently skipped. `threadId` and `sessionId`
-are constrained to `[A-Za-z0-9._:-]+` to prevent path-traversal.
+must each be a single path segment (no `/`, `\`, NUL, leading `.`, or
+length > 256) so they can't escape the agent's `sessions/` directory;
+otherwise any character — including spaces, parens, brackets, and
+unicode — is allowed, since harness-created thread ids reflect external
+inputs like email subjects.
 
 Delete response:
 
@@ -740,8 +744,8 @@ exposed in GET responses, so the client has nothing to send back.
   param falls through to `am.get(id)` which is a Map lookup.
 - Filesystem `path` query params are validated against the agent dir
   (`resolveSafe`).
-- `threadId` / `sessionId` in session-browse routes are constrained
-  to `[A-Za-z0-9._:-]+`.
+- `threadId` / `sessionId` in session-browse routes must be a single
+  path segment: no `/`, `\`, NUL, leading `.`, length ≤ 256.
 
 ### Auto-reload on settings PUTs
 
