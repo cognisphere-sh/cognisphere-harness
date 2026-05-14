@@ -26,6 +26,13 @@ Metadata fields per message:
 - `MessageId: <gmailMessageId>` — the reply target for this email
 - `ThreadId: <gmailThreadId>` — same as `Channel`, present for symmetry
 - `From: <sender>`
+- `ReceivedAt: <YYYY-MM-DD HH:MM:SS TZ>` — when the email landed in the
+  mailbox (Gmail `internalDate`, rendered in the harness timezone). Distinct
+  from the harness-supplied `Timestamp:`, which is when the notification
+  was enqueued — these diverge for backlog runs.
+- `ReceivedAtUtc: <ISO-8601 Z>` — same instant as `ReceivedAt` in UTC ISO
+  form (e.g. `2026-05-01T13:00:00.000Z`). Use this when you need an
+  unambiguous, timezone-free timestamp (sorting, diffing, persistence).
 
 The harness thread id (you'll see it in the assembled prompt footer as
 `ThreadId: …`, and it scopes session JSONLs under `sessions/<threadId>/`)

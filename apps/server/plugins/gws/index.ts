@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access } from "node:fs/promises";
-import { relative } from "node:path";
+import { access, appendFile, readFile } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { promisify } from "node:util";
 
 import type {
@@ -18,10 +18,12 @@ import {
 const execFileP = promisify(execFile);
 const UNREAD_LABEL = "UNREAD";
 const SENT_LABEL = "SENT";
+const LEDGER_FILE = "ingested-threads.jsonl";
 
 interface GwsConfig {
   pollIntervalSec?: number;
   gmailQuery?: string;
+  firstOfThreadOnly?: boolean;
 }
 
 interface GwsSecrets {
@@ -65,6 +67,12 @@ export default class GwsPlugin implements Plugin {
           default: "is:unread in:inbox",
           description: "Gmail search query for the poll loop.",
         },
+        firstOfThreadOnly: {
+          type: "boolean",
+          default: false,
+          description:
+            "Backlog mode: emit every message in matching threads but only wake on the first message of each thread (where messageId == threadId); other messages are delivered silently as context. Skip threads already in state/ingested-threads.jsonl, and append each new threadId to that ledger after emit.",
+        },
       },
       additionalProperties: false,
     },
@@ -83,6 +91,7 @@ export default class GwsPlugin implements Plugin {
   private stopped = false;
   private pollIntervalMs = 60_000;
   private gmailQuery = "is:unread in:inbox";
+  private firstOfThreadOnly = false;
   private agentEmail = "";
 
   async start(ctx: PluginInstanceContext): Promise<void> {
@@ -90,6 +99,7 @@ export default class GwsPlugin implements Plugin {
     const cfg = (ctx.config as GwsConfig | undefined) ?? {};
     this.pollIntervalMs = (cfg.pollIntervalSec ?? 60) * 1000;
     this.gmailQuery = cfg.gmailQuery ?? "is:unread in:inbox";
+    this.firstOfThreadOnly = cfg.firstOfThreadOnly === true;
 
     await this.verifyAuth();
     await this.loadAgentEmail();
@@ -199,29 +209,48 @@ export default class GwsPlugin implements Plugin {
   private async pollOnce(): Promise<void> {
     const ctx = this.ctx;
     if (!ctx) return;
-    const params = JSON.stringify({
-      userId: "me",
-      q: this.gmailQuery,
-      maxResults: 50,
-    });
-    const { stdout } = await this.runGws([
-      "gmail",
-      "users",
-      "messages",
-      "list",
-      "--params",
-      params,
-    ]);
-    const list = JSON.parse(stdout || "{}") as {
-      messages?: Array<{ id: string; threadId: string }>;
-    };
-    const messages = list.messages ?? [];
+
+    // Page through every result of the query — Gmail caps a single list
+    // response at maxResults, so a backlog query covering many days will
+    // otherwise drop everything past the first page.
+    const messages: Array<{ id: string; threadId: string }> = [];
+    let pageToken: string | undefined;
+    do {
+      const params = JSON.stringify({
+        userId: "me",
+        q: this.gmailQuery,
+        maxResults: 50,
+        ...(pageToken ? { pageToken } : {}),
+      });
+      const { stdout } = await this.runGws([
+        "gmail",
+        "users",
+        "messages",
+        "list",
+        "--params",
+        params,
+      ]);
+      const list = JSON.parse(stdout || "{}") as {
+        messages?: Array<{ id: string; threadId: string }>;
+        nextPageToken?: string;
+      };
+      if (list.messages) messages.push(...list.messages);
+      pageToken = list.nextPageToken;
+    } while (pageToken);
+
     if (messages.length === 0) return;
 
-    // A single unread email surfaces once per thread message in the listing —
-    // collapse to unique threads.
+    // Backlog mode: drop any thread already recorded in the ledger; every
+    // remaining thread is dispatched in full, with handleThread deciding
+    // which messages wake the agent.
+    const alreadyIngested = this.firstOfThreadOnly
+      ? await this.readLedger()
+      : null;
     const threadIds = new Set<string>();
-    for (const m of messages) threadIds.add(m.threadId);
+    for (const m of messages) {
+      if (this.firstOfThreadOnly && alreadyIngested!.has(m.threadId)) continue;
+      threadIds.add(m.threadId);
+    }
     for (const tid of threadIds) {
       try {
         await this.handleThread(tid);
@@ -232,6 +261,46 @@ export default class GwsPlugin implements Plugin {
         );
       }
     }
+  }
+
+  private ledgerPath(): string {
+    return join(this.ctx!.stateDir, LEDGER_FILE);
+  }
+
+  private async readLedger(): Promise<Set<string>> {
+    const seen = new Set<string>();
+    let raw: string;
+    try {
+      raw = await readFile(this.ledgerPath(), "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return seen;
+      throw err;
+    }
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const row = JSON.parse(trimmed) as { threadId?: string };
+        if (row.threadId) seen.add(row.threadId);
+      } catch {
+        // tolerate hand-edited junk lines — the user may have annotated
+        this.ctx?.log.warn({ line: trimmed }, "skipping unparseable ledger line");
+      }
+    }
+    return seen;
+  }
+
+  private async appendLedger(
+    threadId: string,
+    subject: string,
+  ): Promise<void> {
+    const entry =
+      JSON.stringify({
+        threadId,
+        subject,
+        ingestedAt: new Date().toISOString().slice(0, 10),
+      }) + "\n";
+    await appendFile(this.ledgerPath(), entry, "utf8");
   }
 
   private async handleThread(threadId: string): Promise<void> {
@@ -261,29 +330,38 @@ export default class GwsPlugin implements Plugin {
     const subject = firstHeaders.get("subject") ?? "(no subject)";
     const threadIdOverride = `${sanitizeForPath(subject)}[${threadId}]`;
 
-    // Boundary = most recent SENT message (an agent reply, or anything sent
-    // from this Gmail account). Everything strictly after it is new and
-    // should be delivered. If there's no SENT message, the whole thread is
-    // new and we deliver from the start.
-    let boundaryIdx = -1;
-    for (let i = ordered.length - 1; i >= 0; i--) {
-      if (hasLabel(ordered[i]!, SENT_LABEL)) {
-        boundaryIdx = i;
-        break;
+    // Backlog mode: deliver every message in the thread, most-recent first
+    // so the chronologically-first message (the only one that wakes the
+    // agent) is emitted last. The ledger append after the loop then lands
+    // immediately after that wake notification.
+    let toEmit: GmailMessage[];
+    if (this.firstOfThreadOnly) {
+      toEmit = [...ordered].reverse();
+    } else {
+      // Boundary = most recent SENT message (an agent reply, or anything sent
+      // from this Gmail account). Everything strictly after it is new and
+      // should be delivered. If there's no SENT message, the whole thread is
+      // new and we deliver from the start.
+      let boundaryIdx = -1;
+      for (let i = ordered.length - 1; i >= 0; i--) {
+        if (hasLabel(ordered[i]!, SENT_LABEL)) {
+          boundaryIdx = i;
+          break;
+        }
       }
-    }
-    const start = boundaryIdx === -1 ? 0 : boundaryIdx + 1;
-    if (start >= ordered.length) {
-      // Nothing new past the boundary — still mark any stray unread to keep
-      // the inbox query loop from re-firing on this thread.
-      const unread = ordered.filter((m) => hasLabel(m, UNREAD_LABEL));
-      if (unread.length > 0) await this.markRead(unread);
-      return;
+      const start = boundaryIdx === -1 ? 0 : boundaryIdx + 1;
+      if (start >= ordered.length) {
+        // Nothing new past the boundary — still mark any stray unread to keep
+        // the inbox query loop from re-firing on this thread.
+        const unread = ordered.filter((m) => hasLabel(m, UNREAD_LABEL));
+        if (unread.length > 0) await this.markRead(unread);
+        return;
+      }
+      toEmit = ordered.slice(start);
     }
 
     const unreadToMark: GmailMessage[] = [];
-    for (let i = start; i < ordered.length; i++) {
-      const m = ordered[i]!;
+    for (const m of toEmit) {
       if (hasLabel(m, UNREAD_LABEL)) unreadToMark.push(m);
 
       const h = collectHeaders(m.payload);
@@ -292,6 +370,9 @@ export default class GwsPlugin implements Plugin {
       const timestamp = m.internalDate
         ? formatTs(Number(m.internalDate), ctx.timezone)
         : (h.get("date") ?? "(unknown)");
+      const timestampUtc = m.internalDate
+        ? new Date(Number(m.internalDate)).toISOString()
+        : "(unknown)";
 
       const header = [
         `Subject: ${subject}`,
@@ -300,9 +381,13 @@ export default class GwsPlugin implements Plugin {
         `TimeStamp: ${timestamp}`,
       ].join("\n");
 
-      // Agent address in `To` → wake (full body). Cc/Bcc / not addressed → silent.
-      const toAddresses = extractEmails(to);
-      const invoked = toAddresses.includes(this.agentEmail);
+      // Backlog mode: only the first message of the thread wakes the agent;
+      // every other message is silent context.
+      // Default mode: agent address in `To` → wake (full body); Cc/Bcc / not
+      // addressed → silent.
+      const invoked = this.firstOfThreadOnly
+        ? m.id === threadId
+        : extractEmails(to).includes(this.agentEmail);
 
       let text = header;
       if (invoked) {
@@ -329,11 +414,24 @@ export default class GwsPlugin implements Plugin {
           MessageId: m.id,
           GmailThreadId: threadId,
           From: from,
+          ReceivedAt: timestamp,
+          ReceivedAtUtc: timestampUtc,
         },
       });
     }
 
     if (unreadToMark.length > 0) await this.markRead(unreadToMark);
+
+    if (this.firstOfThreadOnly) {
+      try {
+        await this.appendLedger(threadId, subject);
+      } catch (err) {
+        ctx.log.warn(
+          { err, threadId },
+          "failed to append to ingested-threads ledger; thread may be re-emitted on the next poll",
+        );
+      }
+    }
   }
 
   private async markRead(messages: GmailMessage[]): Promise<void> {
