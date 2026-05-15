@@ -1,20 +1,60 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ArrowUpDown, MessagesSquare, RefreshCcw, Trash2, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Ban,
+  ChevronDown,
+  MessagesSquare,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { endpoints, type EventRow, type EventStatus } from "@/lib/api";
 import { cn, formatTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const PAGE_SIZE = 100;
+
+// Fixed column widths. Order matches header/body cell order in the table.
+// Total drives the table's `min-width`; overflow scrolls horizontally.
+const COLS = [
+  { key: "select", width: 36 },
+  { key: "actions", width: 56 },
+  { key: "id", width: 64 },
+  { key: "created", width: 130 },
+  { key: "updated", width: 130 },
+  { key: "status", width: 120 },
+  { key: "error", width: 280 },
+  { key: "plugin", width: 96 },
+  { key: "channel", width: 140 },
+  { key: "thread", width: 160 },
+  { key: "silent", width: 48 },
+  { key: "text", width: 280 },
+  { key: "metadata", width: 200 },
+  { key: "chat", width: 80 },
+] as const;
+const COL_TOTAL = COLS.reduce((s, c) => s + c.width, 0);
 
 const STATUSES: EventStatus[] = [
   "queued",
@@ -24,6 +64,12 @@ const STATUSES: EventStatus[] = [
   "cancelled",
 ];
 
+// Statuses an operator can force a row into. `in_flight` is owned by the
+// runner and cannot be set from the UI.
+const SETTABLE_STATUSES: EventStatus[] = ["queued", "done", "failed", "cancelled"];
+
+type SilentFilter = "all" | "silent" | "non_silent";
+
 type SortBy = "ts" | "updated_at" | "status" | "plugin_id" | "thread_id";
 type SortDir = "asc" | "desc";
 
@@ -32,11 +78,12 @@ interface Props {
 }
 
 export function EventsTable({ agentId }: Props) {
+  const qc = useQueryClient();
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [statuses, setStatuses] = useState<EventStatus[]>([]);
   const [plugin, setPlugin] = useState<string>("");
-  const [silentOnly, setSilentOnly] = useState(false);
+  const [silent, setSilent] = useState<SilentFilter>("all");
   const [tsFrom, setTsFrom] = useState<string>("");
   const [tsTo, setTsTo] = useState<string>("");
   const [updatedFrom, setUpdatedFrom] = useState<string>("");
@@ -44,6 +91,7 @@ export function EventsTable({ agentId }: Props) {
   const [sortBy, setSortBy] = useState<SortBy>("updated_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
 
   // debounce the search input by 300ms
   useEffect(() => {
@@ -51,14 +99,15 @@ export function EventsTable({ agentId }: Props) {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  // reset paging when filters/sort change
+  // reset paging + clear selection when filters/sort change
   useEffect(() => {
     setOffset(0);
+    setSelected(new Set());
   }, [
     search,
     statuses,
     plugin,
-    silentOnly,
+    silent,
     tsFrom,
     tsTo,
     updatedFrom,
@@ -67,11 +116,17 @@ export function EventsTable({ agentId }: Props) {
     sortDir,
   ]);
 
+  // also clear selection when paging
+  useEffect(() => {
+    setSelected(new Set());
+  }, [offset]);
+
   const params = {
     status: statuses.length ? statuses : undefined,
     plugin: plugin || undefined,
     search: search || undefined,
-    isSilent: silentOnly ? true : undefined,
+    isSilent:
+      silent === "silent" ? true : silent === "non_silent" ? false : undefined,
     tsFrom: localToMs(tsFrom),
     tsTo: localToMs(tsTo),
     updatedFrom: localToMs(updatedFrom),
@@ -121,6 +176,115 @@ export function EventsTable({ agentId }: Props) {
     setUpdatedTo("");
   };
 
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: ["events", agentId] });
+
+  const toggleRow = (id: number, on: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const pageIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const selectedOnPage = useMemo(
+    () => pageIds.filter((id) => selected.has(id)).length,
+    [pageIds, selected],
+  );
+  const allOnPageSelected =
+    pageIds.length > 0 && selectedOnPage === pageIds.length;
+  const someOnPageSelected = selectedOnPage > 0 && !allOnPageSelected;
+
+  const toggleAllOnPage = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
+  };
+
+  // Rows from the current page that are selected. Bulk actions iterate over
+  // these so we always have the row's status/threadId in hand.
+  const selectedRows = useMemo(
+    () => rows.filter((r) => selected.has(r.id)),
+    [rows, selected],
+  );
+  const selectedInFlight = selectedRows.filter((r) => r.status === "in_flight");
+  const selectedNotInFlight = selectedRows.filter(
+    (r) => r.status !== "in_flight",
+  );
+
+  const bulkSetStatus = useMutation({
+    mutationFn: async (status: EventStatus) => {
+      const targets = selectedNotInFlight.map((r) => r.id);
+      const results = await Promise.allSettled(
+        targets.map((id) => endpoints.setEventStatus(agentId, id, status)),
+      );
+      return {
+        total: targets.length,
+        ok: results.filter((r) => r.status === "fulfilled").length,
+      };
+    },
+    onSuccess: ({ total, ok }, status) => {
+      if (total === 0) toast.message("no eligible rows (in_flight rows skipped)");
+      else if (ok === total) toast.success(`status → ${status} (${ok})`);
+      else toast.warning(`status → ${status} (${ok}/${total})`);
+      setSelected(new Set());
+      invalidate();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const bulkDelete = useMutation({
+    mutationFn: async () => {
+      const targets = selectedNotInFlight.map((r) => r.id);
+      const results = await Promise.allSettled(
+        targets.map((id) => endpoints.discardEvent(agentId, id)),
+      );
+      return {
+        total: targets.length,
+        ok: results.filter((r) => r.status === "fulfilled").length,
+      };
+    },
+    onSuccess: ({ total, ok }) => {
+      if (total === 0) toast.message("no eligible rows (in_flight rows skipped)");
+      else if (ok === total) toast.success(`deleted ${ok}`);
+      else toast.warning(`deleted ${ok}/${total}`);
+      setSelected(new Set());
+      invalidate();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const bulkAbort = useMutation({
+    mutationFn: async () => {
+      const threadIds = [
+        ...new Set(selectedInFlight.map((r) => r.threadId)),
+      ];
+      const results = await Promise.allSettled(
+        threadIds.map((tid) => endpoints.abortChat(agentId, tid)),
+      );
+      return {
+        total: threadIds.length,
+        ok: results.filter((r) => r.status === "fulfilled").length,
+      };
+    },
+    onSuccess: ({ total, ok }) => {
+      if (total === 0) toast.message("no in_flight rows selected");
+      else if (ok === total) toast.success(`abort sent to ${ok} thread${ok === 1 ? "" : "s"}`);
+      else toast.warning(`abort: ${ok}/${total} threads`);
+      setSelected(new Set());
+      invalidate();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <Toolbar
@@ -131,8 +295,8 @@ export function EventsTable({ agentId }: Props) {
         plugin={plugin}
         pluginOptions={pluginOptions}
         onPluginChange={setPlugin}
-        silentOnly={silentOnly}
-        onSilentOnly={setSilentOnly}
+        silent={silent}
+        onSilentChange={setSilent}
       />
 
       <RangeFilters
@@ -148,10 +312,42 @@ export function EventsTable({ agentId }: Props) {
         onClear={clearRanges}
       />
 
+      {selected.size > 0 && (
+        <BulkBar
+          selectedCount={selected.size}
+          inFlightCount={selectedInFlight.length}
+          notInFlightCount={selectedNotInFlight.length}
+          busy={
+            bulkSetStatus.isPending ||
+            bulkDelete.isPending ||
+            bulkAbort.isPending
+          }
+          onSetStatus={(s) => bulkSetStatus.mutate(s)}
+          onAbort={() => bulkAbort.mutate()}
+          onDelete={() => bulkDelete.mutate()}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
       <div className="min-h-0 flex-1 overflow-auto rounded-md border">
-        <table className="w-full min-w-max text-xs">
+        <table className="w-full table-fixed text-xs" style={{ minWidth: COL_TOTAL }}>
+          <colgroup>
+            {COLS.map((c) => (
+              <col key={c.key} style={{ width: c.width }} />
+            ))}
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-card">
             <tr className="border-b text-left">
+              <Th className="text-center">
+                <Checkbox
+                  checked={allOnPageSelected}
+                  indeterminate={someOnPageSelected}
+                  onChange={toggleAllOnPage}
+                  disabled={pageIds.length === 0}
+                  ariaLabel="Select all rows on this page"
+                />
+              </Th>
+              <Th>Actions</Th>
               <Th>#</Th>
               <SortableTh col="ts" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>
                 Created
@@ -172,6 +368,7 @@ export function EventsTable({ agentId }: Props) {
               >
                 Status
               </SortableTh>
+              <Th>Error</Th>
               <SortableTh
                 col="plugin_id"
                 sortBy={sortBy}
@@ -193,17 +390,22 @@ export function EventsTable({ agentId }: Props) {
               <Th>Text</Th>
               <Th>Metadata</Th>
               <Th>Chat</Th>
-              <Th className="text-right">Actions</Th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <Row key={r.id} agentId={agentId} row={r} />
+              <Row
+                key={r.id}
+                agentId={agentId}
+                row={r}
+                selected={selected.has(r.id)}
+                onToggleSelect={(on) => toggleRow(r.id, on)}
+              />
             ))}
             {!isLoading && rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={12}
+                  colSpan={COLS.length}
                   className="px-3 py-8 text-center text-muted-foreground"
                 >
                   No events match the current filters.
@@ -227,8 +429,8 @@ function Toolbar({
   plugin,
   pluginOptions,
   onPluginChange,
-  silentOnly,
-  onSilentOnly,
+  silent,
+  onSilentChange,
 }: {
   searchInput: string;
   onSearchInput: (s: string) => void;
@@ -237,8 +439,8 @@ function Toolbar({
   plugin: string;
   pluginOptions: string[];
   onPluginChange: (p: string) => void;
-  silentOnly: boolean;
-  onSilentOnly: (v: boolean) => void;
+  silent: SilentFilter;
+  onSilentChange: (v: SilentFilter) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -280,15 +482,150 @@ function Toolbar({
           </option>
         ))}
       </select>
-      <label className="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent">
-        <input
-          type="checkbox"
-          className="size-3 accent-primary"
-          checked={silentOnly}
-          onChange={(e) => onSilentOnly(e.target.checked)}
-        />
-        Silent only
-      </label>
+      <select
+        value={silent}
+        onChange={(e) => onSilentChange(e.target.value as SilentFilter)}
+        className="h-8 rounded-md border bg-background px-2 text-xs"
+        title="Silent filter"
+      >
+        <option value="all">silent: any</option>
+        <option value="silent">silent only</option>
+        <option value="non_silent">non-silent only</option>
+      </select>
+    </div>
+  );
+}
+
+function Checkbox({
+  checked,
+  indeterminate,
+  onChange,
+  disabled,
+  ariaLabel,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: (on: boolean) => void;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = !!indeterminate && !checked;
+  }, [indeterminate, checked]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="size-3.5 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-50"
+      checked={checked}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.checked)}
+      onClick={(e) => e.stopPropagation()}
+      aria-label={ariaLabel}
+    />
+  );
+}
+
+function BulkBar({
+  selectedCount,
+  inFlightCount,
+  notInFlightCount,
+  busy,
+  onSetStatus,
+  onAbort,
+  onDelete,
+  onClear,
+}: {
+  selectedCount: number;
+  inFlightCount: number;
+  notInFlightCount: number;
+  busy: boolean;
+  onSetStatus: (s: EventStatus) => void;
+  onAbort: () => void;
+  onDelete: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md border bg-accent/30 px-3 py-1.5 text-xs">
+      <span className="font-medium">
+        {selectedCount} selected
+        {inFlightCount > 0 && (
+          <span className="ml-1 text-[10px] text-muted-foreground">
+            ({inFlightCount} in_flight)
+          </span>
+        )}
+      </span>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1 text-xs"
+            disabled={busy || notInFlightCount === 0}
+            title={
+              notInFlightCount === 0
+                ? "No eligible (non-in_flight) rows"
+                : "Set status for non-in_flight rows"
+            }
+          >
+            Set status
+            <ChevronDown className="size-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-[8rem]">
+          {SETTABLE_STATUSES.map((s) => (
+            <DropdownMenuItem
+              key={s}
+              onSelect={() => onSetStatus(s)}
+              className="text-xs"
+            >
+              <StatusBadge status={s} />
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 gap-1 text-xs text-warning hover:text-warning"
+        disabled={busy || inFlightCount === 0}
+        onClick={onAbort}
+        title={
+          inFlightCount === 0
+            ? "No in_flight rows selected"
+            : `Abort ${inFlightCount} in_flight row${inFlightCount === 1 ? "" : "s"} (dedup by thread)`
+        }
+      >
+        <Ban className="size-3" /> Abort
+      </Button>
+
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 gap-1 text-xs text-destructive hover:text-destructive"
+        disabled={busy || notInFlightCount === 0}
+        onClick={onDelete}
+        title={
+          notInFlightCount === 0
+            ? "No eligible (non-in_flight) rows"
+            : `Delete ${notInFlightCount} row${notInFlightCount === 1 ? "" : "s"}`
+        }
+      >
+        <Trash2 className="size-3" /> Delete
+      </Button>
+
+      <Button
+        size="sm"
+        variant="ghost"
+        className="ml-auto h-7 px-2 text-xs"
+        onClick={onClear}
+        disabled={busy}
+      >
+        Clear
+      </Button>
     </div>
   );
 }
@@ -345,29 +682,84 @@ function SortableTh({
   );
 }
 
-function Row({ agentId, row }: { agentId: string; row: EventRow }) {
+function Row({
+  agentId,
+  row,
+  selected,
+  onToggleSelect,
+}: {
+  agentId: string;
+  row: EventRow;
+  selected: boolean;
+  onToggleSelect: (on: boolean) => void;
+}) {
   const qc = useQueryClient();
-  const requeue = useMutation({
-    mutationFn: () => endpoints.requeueEvent(agentId, row.id),
-    onSuccess: () => {
-      toast.success("requeued");
-      qc.invalidateQueries({ queryKey: ["events", agentId] });
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: ["events", agentId] });
+  const setStatus = useMutation({
+    mutationFn: (next: EventStatus) =>
+      endpoints.setEventStatus(agentId, row.id, next),
+    onSuccess: (_d, next) => {
+      toast.success(next === "queued" ? "requeued" : `status → ${next}`);
+      invalidate();
     },
     onError: (e) => toast.error((e as Error).message),
   });
   const discard = useMutation({
     mutationFn: () => endpoints.discardEvent(agentId, row.id),
     onSuccess: () => {
-      toast.success("discarded");
-      qc.invalidateQueries({ queryKey: ["events", agentId] });
+      toast.success("deleted");
+      invalidate();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+  const abort = useMutation({
+    mutationFn: () => endpoints.abortChat(agentId, row.threadId),
+    onSuccess: (r) => {
+      if (r.ok) toast.info("abort sent");
+      else toast.message("nothing in flight");
+      invalidate();
     },
     onError: (e) => toast.error((e as Error).message),
   });
 
   const metaStr = row.metadata ? JSON.stringify(row.metadata) : "";
+  const locked = row.status === "in_flight";
 
   return (
     <tr className="border-b last:border-b-0 hover:bg-accent/50">
+      <td className="whitespace-nowrap px-3 py-1.5 text-center">
+        <Checkbox
+          checked={selected}
+          onChange={(on) => onToggleSelect(on)}
+          ariaLabel={`Select row ${row.id}`}
+        />
+      </td>
+      <td className="whitespace-nowrap px-3 py-1.5">
+        {locked ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-1.5 text-warning"
+            onClick={() => abort.mutate()}
+            disabled={abort.isPending}
+            title="Abort this batch"
+          >
+            <Ban className="size-3" />
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-1.5 text-destructive"
+            onClick={() => discard.mutate()}
+            disabled={discard.isPending}
+            title="Delete row"
+          >
+            <Trash2 className="size-3" />
+          </Button>
+        )}
+      </td>
       <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
         {row.id}
       </td>
@@ -378,33 +770,41 @@ function Row({ agentId, row }: { agentId: string; row: EventRow }) {
         {formatTime(row.updatedAt)}
       </td>
       <td className="whitespace-nowrap px-3 py-1.5">
-        <StatusBadge status={row.status} />
+        <StatusControl
+          status={row.status}
+          disabled={locked || setStatus.isPending}
+          onChange={(next) => {
+            if (next !== row.status) setStatus.mutate(next);
+          }}
+        />
         {row.attempts > 0 && (
           <span className="ml-1 text-[10px] text-muted-foreground">
             ·{row.attempts}
           </span>
         )}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-[11px]">
-        {row.pluginId}
+      <td className="px-3 py-1.5">
+        <TruncatedCell text={row.error}>
+          <ErrorCell error={row.error} />
+        </TruncatedCell>
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        {row.channelId}
+      <td className="px-3 py-1.5 font-mono text-[11px]">
+        <TruncatedCell text={row.pluginId}>{row.pluginId}</TruncatedCell>
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        {row.threadId}
+      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <TruncatedCell text={row.channelId}>{row.channelId}</TruncatedCell>
+      </td>
+      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <TruncatedCell text={row.threadId}>{row.threadId}</TruncatedCell>
       </td>
       <td className="px-3 py-1.5 text-center text-muted-foreground">
         {row.isSilent ? "•" : ""}
       </td>
-      <td className="max-w-[24ch] truncate px-3 py-1.5" title={row.text}>
-        {row.text}
+      <td className="px-3 py-1.5">
+        <TruncatedCell text={row.text}>{row.text}</TruncatedCell>
       </td>
-      <td
-        className="max-w-[24ch] truncate px-3 py-1.5 font-mono text-[10px] text-muted-foreground"
-        title={metaStr}
-      >
-        {metaStr}
+      <td className="px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
+        <TruncatedCell text={metaStr}>{metaStr}</TruncatedCell>
       </td>
       <td className="whitespace-nowrap px-3 py-1.5">
         {row.piSessionId && row.piEntryId ? (
@@ -420,32 +820,6 @@ function Row({ agentId, row }: { agentId: string; row: EventRow }) {
           <span className="text-[10px] text-muted-foreground">—</span>
         )}
       </td>
-      <td className="whitespace-nowrap px-3 py-1.5 text-right">
-        {row.status === "failed" && (
-          <div className="inline-flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-1.5"
-              onClick={() => requeue.mutate()}
-              disabled={requeue.isPending}
-              title="Requeue"
-            >
-              <RefreshCcw className="size-3" />
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-1.5 text-destructive"
-              onClick={() => discard.mutate()}
-              disabled={discard.isPending}
-              title="Discard"
-            >
-              <Trash2 className="size-3" />
-            </Button>
-          </div>
-        )}
-      </td>
     </tr>
   );
 }
@@ -453,6 +827,97 @@ function Row({ agentId, row }: { agentId: string; row: EventRow }) {
 function StatusBadge({ status }: { status: EventStatus }) {
   const variant = statusVariant(status);
   return <Badge variant={variant}>{status}</Badge>;
+}
+
+/** Render `error` with its leading `[reason]` tag (runner convention) as a
+ *  small badge, and the remainder of the message truncated next to it.
+ *  Full text is shown in the cell's wrapping <TruncatedCell> tooltip. */
+function ErrorCell({ error }: { error: string | null }) {
+  if (!error) return <span className="text-[10px] text-muted-foreground">—</span>;
+  const m = /^\[([^\]]+)\]\s*(.*)$/.exec(error);
+  const reason = m ? m[1] : null;
+  const rest = m ? m[2] : error;
+  return (
+    <div className="flex items-center gap-1.5 overflow-hidden">
+      {reason && (
+        <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+          {reason}
+        </Badge>
+      )}
+      <span className="truncate text-[11px] text-muted-foreground">{rest}</span>
+    </div>
+  );
+}
+
+/**
+ * Wraps a truncated cell with a radix tooltip that shows the full text on
+ * hover. `title` no longer needed on the <td>. Empty/null `text` renders
+ * children plainly without a tooltip.
+ */
+function TruncatedCell({
+  text,
+  className,
+  children,
+}: {
+  text: string | null | undefined;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (!text) return <div className={cn("truncate", className)}>{children}</div>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className={cn("truncate", className)}>{children}</div>
+      </TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        align="start"
+        className="max-w-[60ch] whitespace-pre-wrap break-words"
+      >
+        {text}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function StatusControl({
+  status,
+  disabled,
+  onChange,
+}: {
+  status: EventStatus;
+  disabled: boolean;
+  onChange: (next: EventStatus) => void;
+}) {
+  if (disabled) {
+    return <StatusBadge status={status} />;
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-0.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title="Change status"
+        >
+          <StatusBadge status={status} />
+          <ChevronDown className="size-3 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[8rem]">
+        {SETTABLE_STATUSES.map((s) => (
+          <DropdownMenuItem
+            key={s}
+            disabled={s === status}
+            onSelect={() => onChange(s)}
+            className="text-xs"
+          >
+            <StatusBadge status={s} />
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function statusVariant(

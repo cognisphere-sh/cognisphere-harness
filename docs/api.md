@@ -291,7 +291,8 @@ it through these endpoints.
 |---|---|---|
 | GET    | `/api/agents/:id/events` | List events with filter / sort / pagination |
 | POST   | `/api/agents/:id/events/:rowId/requeue` | Reset a `status=failed` row back to `queued` (attempts=0, error cleared) |
-| DELETE | `/api/agents/:id/events/:rowId` | Permanently drop a `status=failed` row |
+| POST   | `/api/agents/:id/events/:rowId/status` | Force a non-in-flight row to a new status (`queued`, `done`, `failed`, `cancelled`) |
+| DELETE | `/api/agents/:id/events/:rowId` | Permanently drop a non-in-flight row |
 
 #### `GET /api/agents/:id/events`
 
@@ -302,6 +303,9 @@ Query params (all optional):
 | `status` | comma-separated subset of `queued,in_flight,done,failed,cancelled` | (no filter) |
 | `plugin` | exact `pluginId` match | (no filter) |
 | `search` | substring match against `text` (case-sensitive `LIKE`) | (no filter) |
+| `isSilent` | `true` (silent only) or `false` (non-silent only); omit for both | (no filter) |
+| `tsFrom`, `tsTo` | epoch ms, filter on row `ts` | (no filter) |
+| `updatedFrom`, `updatedTo` | epoch ms, filter on row `updated_at` | (no filter) |
 | `sortBy` | one of `ts`, `updated_at`, `status`, `plugin_id`, `thread_id` | `updated_at` |
 | `sortDir` | `asc` or `desc` | `desc` |
 | `limit` | int, clamped to [1, 1000] | `200` |
@@ -346,10 +350,18 @@ each row added via live steer gets its own `piEntryId`.
 UI can render a pager.
 
 Requeue returns `{ ok: true, id: <rowId> }` — the row id is preserved
-(no new row is created). Delete returns `{ ok: true }`. Both 404 when
-the target row does not exist or is not in `status=failed`. 503 when
-the agent has no `AgentDb` open (only possible briefly during
-shutdown).
+(no new row is created). It 404s if the target row does not exist or is
+not in `status=failed`.
+
+Status-set takes `{ "status": "queued" | "done" | "failed" | "cancelled" }`
+and returns `{ ok: true, status }`. Setting `queued` resets `attempts`
+and clears `error` (same effect as requeue). `in_flight` cannot be set
+from the UI — it belongs to the runner.
+
+Delete returns `{ ok: true }`. Both delete and status-set 409 when the
+target row is currently `in_flight` (abort the batch first), 404 when
+the row does not exist. 503 when the agent has no `AgentDb` open (only
+possible briefly during shutdown).
 
 ---
 

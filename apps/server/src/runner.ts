@@ -145,6 +145,14 @@ export class AgentRunner extends EventEmitter {
     this.signalAll();
   }
 
+  /** Wake idle workers to re-check the queue. Used by HTTP paths that
+   *  mutate row status directly (requeue, force status) without going
+   *  through `notify()`. Safe to call on a stopped runner — no-op. */
+  wake(): void {
+    if (this.status !== "running") return;
+    this.signalAll();
+  }
+
   constructor(opts: RunnerOpts) {
     super();
     this.opts = opts;
@@ -366,13 +374,29 @@ export class AgentRunner extends EventEmitter {
       }
       if (!endedCleanly) {
         const stderr = rpc.stderrSnapshot()?.slice(-512) ?? "";
-        throw new Error(`pi exited without agent_end. stderr: ${stderr}`);
+        throw new Error(`[crash] pi exited without agent_end. stderr: ${stderr}`);
       }
       active.phase = "completing";
       rpc.endStdin();
       const exitTimer = setTimeout(() => rpc!.kill("SIGKILL"), 5000);
       await rpc.waitExit();
       clearTimeout(exitTimer);
+
+      // Pi emits `agent_end` whenever its agent loop terminates — including
+      // when the loop exited because the model call returned an error (e.g.
+      // a 400 usage-limit response). In that case the final assistant entry
+      // in the session JSONL carries `stopReason: "error"` with an
+      // `errorMessage`. Surface it as a batch failure instead of marking the
+      // rows done.
+      const finalOutcome = readFinalAssistantOutcomeAfter(
+        sessionFile,
+        preBatchUserCount,
+      );
+      if (finalOutcome?.stopReason === "error") {
+        throw new Error(
+          `[agent_error] pi ended with stopReason=error: ${finalOutcome.errorMessage ?? "(no errorMessage)"}`,
+        );
+      }
 
       // Read pi's session JSONL post-`agent_end` and map the user-message
       // entries appended during this batch back to row ids:
@@ -420,7 +444,8 @@ export class AgentRunner extends EventEmitter {
         log.info({ threadId }, "batch cancelled");
       } else {
         const stderr = rpc?.stderrSnapshot()?.slice(-512);
-        const errFull = stderr ? `${msg}\n--stderr--\n${stderr}` : msg;
+        const tagged = msg.startsWith("[") ? msg : `[runner_error] ${msg}`;
+        const errFull = stderr ? `${tagged}\n--stderr--\n${stderr}` : tagged;
         // Steers that were delivered live to this pi process count as a
         // failed attempt too — otherwise a row that's been steered into N
         // consecutive failing batches never accrues attempts and never
@@ -639,6 +664,52 @@ function readUserEntryIdsAfter(path: string, skip: number): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Find the last assistant message entry appended after the first
+ * {skipUserMsgs} user messages and return its `stopReason` / `errorMessage`.
+ * Pi sets `stopReason: "error"` on the final assistant entry when its agent
+ * loop bailed out due to a model/API error (the loop still terminates and
+ * pi still emits `agent_end`, so the RPC handshake completes cleanly).
+ */
+function readFinalAssistantOutcomeAfter(
+  path: string,
+  skipUserMsgs: number,
+): { stopReason?: string; errorMessage?: string } | null {
+  if (!existsSync(path)) return null;
+  let userSeen = 0;
+  let last: { stopReason?: string; errorMessage?: string } | null = null;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!line || !line.includes(`"type":"message"`)) continue;
+    let parsed: {
+      type?: string;
+      message?: {
+        role?: string;
+        stopReason?: string;
+        errorMessage?: string;
+      };
+    };
+    try {
+      parsed = JSON.parse(line) as typeof parsed;
+    } catch {
+      continue;
+    }
+    if (parsed.type !== "message") continue;
+    const role = parsed.message?.role;
+    if (role === "user") {
+      userSeen++;
+      continue;
+    }
+    if (userSeen <= skipUserMsgs) continue;
+    if (role === "assistant") {
+      last = {
+        stopReason: parsed.message?.stopReason,
+        errorMessage: parsed.message?.errorMessage,
+      };
+    }
+  }
+  return last;
 }
 
 function isUserMessageLine(line: string): boolean {

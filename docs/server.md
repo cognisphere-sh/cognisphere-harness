@@ -442,7 +442,11 @@ export interface RunnerOpts {
 ```
 
 Public API: `start()`, `stop()`, `notify(payload)`, `abort(threadId)`,
-`pauseDequeue()`, `activeCount` (getter), and a `batch-completed` event.
+`pauseDequeue()`, `wake()`, `activeCount` (getter), and a
+`batch-completed` event. `wake()` is for HTTP paths that flip a row to
+`queued` directly in the DB (requeue, force status) — they must call it
+or idle workers will sit in `waitForWork()` until something else
+signals.
 
 Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
 1)`):
@@ -459,18 +463,24 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
 7. `Promise.race(agentEnded, rpc.waitExit())` — guards against pi
    crashing before emitting `agent_end`.
 8. On clean end: close stdin, await pi's exit (5s SIGKILL guard),
-   then read `<sessionDir>/<sessionId>.jsonl` and slice off any
-   user-message entries appended past the pre-batch snapshot count.
-   Build `entryIdByRowId`: every row in `active.ids` shares the first
-   new entry id (one concatenated prompt → one user message); each
-   `active.steerIds[i]` gets the (i+1)-th. `markBatchDone(ids,
-   sessionId, entryIdByRowId)` writes the link back. If the JSONL has
-   fewer user-message entries than expected (e.g. pi didn't append a
-   steer before agent_end), affected rows' `pi_entry_id` stays NULL
-   and the runner logs a warn.
-9. On crash: `markBatchFailed(ids, errFull, maxAttempts)` — bumps
-   attempts, dead-letters past the cap. Stderr tail is appended to the
-   error message.
+   then inspect the session JSONL. First, scan for the final assistant
+   entry appended during this batch — if its `message.stopReason ===
+   "error"` (the agent loop bailed out on a model/API error but pi
+   still emitted `agent_end`), throw with the entry's `errorMessage`
+   so the catch branch routes the rows through `markBatchFailed`.
+   Otherwise, slice off any user-message entries appended past the
+   pre-batch snapshot count and build `entryIdByRowId`: every row in
+   `active.ids` shares the first new entry id (one concatenated prompt
+   → one user message); each `active.steerIds[i]` gets the (i+1)-th.
+   `markBatchDone(ids, sessionId, entryIdByRowId)` writes the link
+   back. If the JSONL has fewer user-message entries than expected
+   (e.g. pi didn't append a steer before agent_end), affected rows'
+   `pi_entry_id` stays NULL and the runner logs a warn.
+9. On crash or pi-side error (no `agent_end`, or `agent_end` followed
+   by a `stopReason: "error"` final entry): `markBatchFailed(ids,
+   errFull, maxAttempts)` — bumps attempts, dead-letters past the cap.
+   Stderr tail is appended to the error message for the
+   no-`agent_end` path.
 10. On `abort(threadId)`: the runner sets `active.cancelled = true` and
     sends an `abort` frame to pi, which responds by emitting `agent_end`
     cleanly. The race resolves successfully, but the post-race check on
@@ -806,6 +816,22 @@ The `pi` child crashing mid-batch (no `agent_end`) is detected by the
 `Promise.race(agentEnded, rpc.waitExit())` — if `waitExit` resolves
 first, the worker throws `pi exited without agent_end. stderr: ...`,
 which goes through `markBatchFailed`. Same retry loop.
+
+Pi-side errors that don't crash the process — e.g. the model returning
+a 400 (rate-limit, usage-cap, content policy) — are different: pi's
+agent loop catches the error, writes a final assistant entry with
+`message.stopReason: "error"` and `message.errorMessage`, then emits
+`agent_end` cleanly. After `waitExit`, the worker re-reads the session
+JSONL and inspects the last assistant entry appended during the batch;
+if its `stopReason === "error"`, it throws so the batch routes through
+`markBatchFailed` instead of `markBatchDone`. Same retry loop as
+crashes.
+
+Both failure paths prefix the `error` text with a short tag so the
+category is recoverable without re-parsing pi state:
+`[crash] ...` (no `agent_end`), `[agent_error] ...` (pi
+`stopReason=error`), `[runner_error] ...` (everything else, e.g. an
+unexpected harness-side exception).
 
 ### 5.4 Boot sequence
 

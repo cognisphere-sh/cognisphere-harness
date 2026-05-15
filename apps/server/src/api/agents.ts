@@ -26,7 +26,8 @@ import type { ServerConfig } from "../config.js";
  *   GET  /api/agents/:id/sessions/:threadId/:sessionId  — raw jsonl entries
  *   GET  /api/agents/:id/events?status=&plugin=&search=&sortBy=&sortDir=&limit=&offset=
  *   POST /api/agents/:id/events/:rowId/requeue          — re-queue a status=failed row
- *   DELETE /api/agents/:id/events/:rowId                — discard a status=failed row
+ *   POST /api/agents/:id/events/:rowId/status           — force status of a non-in-flight row
+ *   DELETE /api/agents/:id/events/:rowId                — discard a non-in-flight row
  *
  * Mutating chat actions (send/abort) live on /admin/* and predate this
  * router; they are unchanged.
@@ -333,6 +334,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     if (!Number.isFinite(rowId)) return c.json({ error: "bad row id" }, 400);
     const id = inst.db.requeueFailed(rowId);
     if (id === null) return c.json({ error: "no such failed row" }, 404);
+    inst.runner?.wake();
     return c.json({ ok: true, id });
   });
 
@@ -342,9 +344,38 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     if (!inst.db) return c.json({ error: "agent not initialized" }, 503);
     const rowId = Number(c.req.param("rowId"));
     if (!Number.isFinite(rowId)) return c.json({ error: "bad row id" }, 400);
-    const ok = inst.db.removeFailed(rowId);
-    if (!ok) return c.json({ error: "no such failed row" }, 404);
+    const res = inst.db.removeAny(rowId);
+    if (res === "not_found") return c.json({ error: "no such row" }, 404);
+    if (res === "in_flight")
+      return c.json({ error: "row is in_flight; abort batch first" }, 409);
     return c.json({ ok: true });
+  });
+
+  r.post("/:id/events/:rowId/status", async (c) => {
+    const inst = am.get(c.req.param("id"));
+    if (!inst) return c.json({ error: "unknown agent" }, 404);
+    if (!inst.db) return c.json({ error: "agent not initialized" }, 503);
+    const rowId = Number(c.req.param("rowId"));
+    if (!Number.isFinite(rowId)) return c.json({ error: "bad row id" }, 400);
+    const body = await c.req
+      .json<{ status?: string }>()
+      .catch(() => ({}) as { status?: string });
+    const next = body.status;
+    if (
+      next !== "queued" &&
+      next !== "done" &&
+      next !== "failed" &&
+      next !== "cancelled"
+    ) {
+      return c.json({ error: "bad status" }, 400);
+    }
+    const res = inst.db.setStatus(rowId, next);
+    if (res === "not_found") return c.json({ error: "no such row" }, 404);
+    if (res === "in_flight")
+      return c.json({ error: "row is in_flight; abort batch first" }, 409);
+    if (res === "bad_status") return c.json({ error: "bad status" }, 400);
+    if (next === "queued") inst.runner?.wake();
+    return c.json({ ok: true, status: next });
   });
 
   return r;

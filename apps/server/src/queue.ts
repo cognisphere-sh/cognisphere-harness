@@ -357,7 +357,7 @@ export class AgentDb {
       .all();
     if (rows.length === 0) return { retrying: [], dead: [] };
     // sessionId=null preserves any existing pi_session_id via COALESCE.
-    return this.markBatchFailed(rows.map((r) => r.id), error, maxAttempts, null);
+    return this.markBatchFailed(rows.map((r) => r.id), `[crash] ${error}`, maxAttempts, null);
   }
 
   countPending(): number {
@@ -389,6 +389,61 @@ export class AgentDb {
       .prepare(`DELETE FROM events WHERE id = ? AND status = 'failed'`)
       .run(id);
     return info.changes > 0;
+  }
+
+  /**
+   * Permanently delete any row that is not currently in_flight. Refuses
+   * in_flight to avoid racing the runner mid-batch — abort the batch first.
+   * Returns 'ok' on success, 'not_found' if no such row, 'in_flight' if the
+   * row is owned by the runner.
+   */
+  removeAny(id: number): "ok" | "not_found" | "in_flight" {
+    const cur = this.db
+      .prepare<unknown[], { status: EventStatus }>(
+        `SELECT status FROM events WHERE id = ?`,
+      )
+      .get(id);
+    if (!cur) return "not_found";
+    if (cur.status === "in_flight") return "in_flight";
+    const info = this.db
+      .prepare(`DELETE FROM events WHERE id = ? AND status != 'in_flight'`)
+      .run(id);
+    return info.changes > 0 ? "ok" : "not_found";
+  }
+
+  /**
+   * Force a row to a new status. Refuses to touch rows currently in_flight
+   * and refuses to set status to in_flight — both transitions belong to the
+   * runner. When forcing back to 'queued', attempts/error are reset like
+   * requeueFailed does.
+   */
+  setStatus(
+    id: number,
+    next: EventStatus,
+  ): "ok" | "not_found" | "in_flight" | "bad_status" {
+    if (next === "in_flight") return "bad_status";
+    const cur = this.db
+      .prepare<unknown[], { status: EventStatus }>(
+        `SELECT status FROM events WHERE id = ?`,
+      )
+      .get(id);
+    if (!cur) return "not_found";
+    if (cur.status === "in_flight") return "in_flight";
+    const now = Date.now();
+    if (next === "queued") {
+      this.db
+        .prepare(
+          `UPDATE events
+             SET status = 'queued', attempts = 0, error = NULL, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(now, id);
+    } else {
+      this.db
+        .prepare(`UPDATE events SET status = ?, updated_at = ? WHERE id = ?`)
+        .run(next, now, id);
+    }
+    return "ok";
   }
 
   // ── reads ─────────────────────────────────────────────────

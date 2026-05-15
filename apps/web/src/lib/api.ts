@@ -385,6 +385,11 @@ export const endpoints = {
     api.post<{ ok: true; id: number }>(`/api/agents/${id}/events/${rowId}/requeue`),
   discardEvent: (id: string, rowId: number) =>
     api.delete<{ ok: true }>(`/api/agents/${id}/events/${rowId}`),
+  setEventStatus: (id: string, rowId: number, status: EventStatus) =>
+    api.post<{ ok: true; status: EventStatus }>(
+      `/api/agents/${id}/events/${rowId}/status`,
+      { status },
+    ),
 
   sendChat: (id: string, text: string, threadId?: string, channelId?: string) =>
     api.post<{ ok: true }>(`/admin/${id}/send`, { text, threadId, channelId }),
