@@ -19,6 +19,7 @@
     "check:web": "npm --prefix apps/web run check"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.75.3",
     "@hono/node-server": "^1.13.7",
     "ajv": "^8.17.1",
     "better-sqlite3": "^11.7.0",
