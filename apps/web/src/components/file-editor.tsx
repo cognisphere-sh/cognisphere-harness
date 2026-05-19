@@ -6,13 +6,18 @@ import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { Code2, Download, Eye, FileWarning, Loader2, Save } from "lucide-react";
+import { Code2, Download, Eye, FileWarning, Loader2, MessagesSquare, Save } from "lucide-react";
 import { toast } from "sonner";
 import { endpoints, rawFileUrl, ApiError } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { cn, formatBytes } from "@/lib/utils";
 import { MarkdownText } from "@/components/markdown-text";
+import { flattenSession } from "@/lib/session";
+import {
+  AssistantMessageBubble,
+  UserMessageBubble,
+} from "@/components/chat-message";
 
 interface Props {
   agentId: string;
@@ -105,8 +110,12 @@ export function FileEditor({ agentId, path }: Props) {
                     : "text-muted-foreground hover:bg-accent",
                 )}
               >
-                <Eye className="size-3.5" />
-                Preview
+                {previewKind === "jsonl" ? (
+                  <MessagesSquare className="size-3.5" />
+                ) : (
+                  <Eye className="size-3.5" />
+                )}
+                {previewKind === "jsonl" ? "Chat" : "Preview"}
               </button>
               <button
                 type="button"
@@ -119,7 +128,7 @@ export function FileEditor({ agentId, path }: Props) {
                 )}
               >
                 <Code2 className="size-3.5" />
-                Code
+                {previewKind === "jsonl" ? "Raw" : "Code"}
               </button>
             </div>
           )}
@@ -176,13 +185,14 @@ export function FileEditor({ agentId, path }: Props) {
   );
 }
 
-type PreviewKind = "html" | "md" | "csv";
+type PreviewKind = "html" | "md" | "csv" | "jsonl";
 
 function previewKindFor(path: string): PreviewKind | null {
   const lower = path.toLowerCase();
   if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "md";
   if (lower.endsWith(".csv")) return "csv";
+  if (lower.endsWith(".jsonl")) return "jsonl";
   return null;
 }
 
@@ -212,7 +222,75 @@ function FilePreview({
       </div>
     );
   }
+  if (kind === "jsonl") {
+    return <JsonlChatPreview content={content} agentId={agentId} />;
+  }
   return <CsvPreview content={content} />;
+}
+
+function JsonlChatPreview({
+  content,
+  agentId,
+}: {
+  content: string;
+  agentId: string;
+}) {
+  const { chunks, parseErrors, totalLines } = useMemo(() => {
+    const entries: unknown[] = [];
+    let parseErrors = 0;
+    let totalLines = 0;
+    for (const raw of content.split("\n")) {
+      const line = raw.trim();
+      if (!line) continue;
+      totalLines++;
+      try {
+        entries.push(JSON.parse(line));
+      } catch {
+        parseErrors++;
+      }
+    }
+    return { chunks: flattenSession(entries), parseErrors, totalLines };
+  }, [content]);
+
+  if (totalLines === 0) {
+    return (
+      <div className="grid h-full place-items-center text-sm text-muted-foreground">
+        empty
+      </div>
+    );
+  }
+
+  if (chunks.length === 0) {
+    return (
+      <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
+        <div>
+          <div>No chat messages found in this file.</div>
+          <div className="mt-1 text-xs">
+            Switch to <span className="font-medium">Raw</span> to view the JSONL contents.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full space-y-4 overflow-y-auto p-4">
+      {parseErrors > 0 && (
+        <div className="rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
+          Skipped {parseErrors} unparseable line{parseErrors === 1 ? "" : "s"}.
+        </div>
+      )}
+      {chunks.map((c) => (
+        <div key={c.id}>
+          {c.kind === "user" ? (
+            <UserMessageBubble agentId={agentId} bubble={c} />
+          ) : (
+            <AssistantMessageBubble agentId={agentId} bubble={c} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function CsvPreview({ content }: { content: string }) {
