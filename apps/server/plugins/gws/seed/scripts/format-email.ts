@@ -61,7 +61,7 @@ export async function formatEmail(
   msg: GmailMessage,
   opts: FormatEmailOptions,
 ): Promise<FormattedEmail> {
-  const body = pickTextBody(msg.payload);
+  const body = stripQuotedHistory(pickTextBody(msg.payload));
   const attParts = collectAttachments(msg.payload);
   const attachments: FormattedAttachment[] = [];
 
@@ -108,6 +108,27 @@ export function collectHeaders(part: GmailPart): Map<string, string> {
   const m = new Map<string, string>();
   for (const h of part.headers ?? []) m.set(h.name.toLowerCase(), h.value);
   return m;
+}
+
+/** Trim quoted/forwarded thread history from a reply body, leaving only the
+ *  latest message (plus its signature). Truncates at the earliest of several
+ *  well-known boundary markers emitted by Gmail, Apple Mail, and Outlook. If
+ *  no marker matches, the body is returned unchanged. */
+export function stripQuotedHistory(body: string): string {
+  const markers: RegExp[] = [
+    /\nBegin forwarded message:/i,
+    /\n-{2,}\s*Forwarded message\s*-{2,}/i,
+    /\nOn [^\n]{1,300}wrote:[ \t]*\n/,
+    /\nFrom: [^\n]{1,300}\nSent: /i,
+    /\nFrom: [^\n]{1,300}\nDate: [^\n]{1,300}\nSubject: /i,
+    /\n_{5,}\s*\nFrom: /i,
+  ];
+  let cut = body.length;
+  for (const re of markers) {
+    const m = body.match(re);
+    if (m && m.index !== undefined && m.index < cut) cut = m.index;
+  }
+  return body.slice(0, cut).trimEnd();
 }
 
 export function pickTextBody(part: GmailPart): string {
