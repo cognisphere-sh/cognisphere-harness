@@ -115,10 +115,14 @@ export function collectHeaders(part: GmailPart): Map<string, string> {
  *  well-known boundary markers emitted by Gmail, Apple Mail, and Outlook. If
  *  no marker matches, the body is returned unchanged. */
 export function stripQuotedHistory(body: string): string {
+  // Normalize CRLF/CR to LF first: Gmail bodies arrive with `\r\n`, which
+  // defeats markers anchored on a trailing `\n` (the `\r` sits between
+  // `wrote:` and the newline).
+  body = body.replace(/\r\n?/g, "\n");
   const markers: RegExp[] = [
     /\nBegin forwarded message:/i,
     /\n-{2,}\s*Forwarded message\s*-{2,}/i,
-    /\nOn [^\n]{1,300}wrote:[ \t]*\n/,
+    /\nOn [\s\S]{1,300}?wrote:[ \t]*\n/,
     /\nFrom: [^\n]{1,300}\nSent: /i,
     /\nFrom: [^\n]{1,300}\nDate: [^\n]{1,300}\nSubject: /i,
     /\n_{5,}\s*\nFrom: /i,
