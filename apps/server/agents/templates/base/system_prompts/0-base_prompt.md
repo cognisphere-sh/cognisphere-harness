@@ -92,7 +92,15 @@ This chat session is a continuation of the most recent session jsonl for this th
 
 - This thread's session dir: `sessions/<ThreadId>/`
 - If you are invoked as a sub-agent, then session dir will be `sessions/<ParentThreadId>/subagents/<subagent-id>`
-- To recall past info, prefer your workspace notes; fall back to grepping the session JSONLs only as a last resort.
+- To recall past info, prefer your workspace notes; fall back to reading the session JSONLs only as a last resort.
+
+When you do need to read a session transcript, use the `session-reader` script rather than reading the raw JSONL — it renders messages as markdown and lets you pull just the slice you need so you don't flood your context:
+
+```bash
+bash scripts/agent/session-reader <session-dir-or-file> [options]
+```
+
+Pass a session dir or a single `.jsonl` file. Default output is one markdown block per message (role + content); default fields are `type,message.role,content`. Useful options: `--fields` (custom dotted fields), `--from-index` / `--from-message` / `--n` (paginate), `--role` / `--tool` / `--failed-tools` / `--search` / `--regex` (filter), `--max-chars` (truncate big tool outputs), `--stats` (token/cost/shape summary), `--json`. Run `bash scripts/agent/session-reader --help` for the full list.
 
 # Plugins
 

@@ -1,0 +1,442 @@
+#!/usr/bin/env node
+/**
+ * session-reader — read agent session JSONL transcripts in a structured,
+ * readable (markdown) form, with filtering and pagination so you can pull
+ * just the slice you need instead of dumping a whole multi-MB session into
+ * context.
+ *
+ * Session JSONL layout (one JSON object per line):
+ *   - top-level `type`: "session" | "model_change" | "thinking_level_change" | "message"
+ *   - message records carry `message.role`: "user" | "assistant" | "toolResult"
+ *   - assistant/user `message.content[]` blocks: text | thinking | toolCall
+ *   - toolResult messages carry `toolName`, `isError`, `content[].text`
+ *
+ * See `session-reader --help` for the full option list.
+ */
+import { argv, exit, stderr, stdout } from "node:process";
+import { readFileSync, statSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+// ---------------------------------------------------------------------------
+// arg parsing — supports `--flag value`, `--flag=value`, repeatable flags,
+// boolean flags, and one positional <path>.
+// ---------------------------------------------------------------------------
+const BOOL_FLAGS = new Set([
+  "failed-tools",
+  "no-thinking",
+  "include-meta",
+  "json",
+  "stats",
+  "help",
+]);
+
+function parseArgs(args) {
+  const flags = {};
+  const positionals = [];
+  for (let i = 0; i < args.length; i++) {
+    let a = args[i];
+    if (a.startsWith("--")) {
+      let key = a.slice(2);
+      let val;
+      const eq = key.indexOf("=");
+      if (eq !== -1) {
+        val = key.slice(eq + 1);
+        key = key.slice(0, eq);
+      } else if (BOOL_FLAGS.has(key)) {
+        val = true;
+      } else {
+        val = args[i + 1] ?? "";
+        i++;
+      }
+      if (key in flags) {
+        flags[key] = Array.isArray(flags[key]) ? [...flags[key], val] : [flags[key], val];
+      } else {
+        flags[key] = val;
+      }
+    } else {
+      positionals.push(a);
+    }
+  }
+  return { flags, positionals };
+}
+
+// comma-split a flag that may also have been repeated; returns lowercased set
+function asList(v, { lower = false } = {}) {
+  if (v == null) return [];
+  const arr = Array.isArray(v) ? v : [v];
+  const out = [];
+  for (const item of arr) {
+    for (const piece of String(item).split(",")) {
+      const t = piece.trim();
+      if (t) out.push(lower ? t.toLowerCase() : t);
+    }
+  }
+  return out;
+}
+
+const HELP = `session-reader — read agent session JSONL transcripts as markdown.
+
+USAGE
+  session-reader <path> [options]
+  session-reader --path <path> [options]
+
+PATH
+  A .jsonl session file, or a session directory. If a directory is given (no
+  specific session file), the most recently modified *.jsonl in it is read —
+  i.e. the latest session for that thread. Pass a specific <uuid>.jsonl to
+  read an older session. Examples:
+    sessions/<ThreadId>/                  (reads the latest session file)
+    sessions/<ThreadId>/subagents/<subAgentId>/
+    sessions/<ThreadId>/<uuid>.jsonl      (reads that exact session)
+
+WHAT IT EMITS
+  By default, one markdown block per message record showing role + content.
+  Content blocks render as:
+    text       -> the text
+    thinking   -> under a "thinking:" label (suppress with --no-thinking)
+    toolCall   -> the tool name + pretty-printed arguments
+    toolResult -> the tool name, an [ERROR] marker if it failed, + result text
+  Each rendered message is prefixed with [#<index>] — its stable 0-based
+  position in the file, so you can paginate with --from-index.
+
+FIELDS
+  --fields <a,b,c>   Comma list of fields to surface per message.
+                     Default: type,message.role,content
+                     "content" triggers the content-block rendering above;
+                     "message.role" sets the heading role. Any other dotted
+                     path (e.g. timestamp, message.stopReason,
+                     message.usage.totalTokens, message.model) is shown as a
+                     small metadata line under the heading.
+
+SCOPE
+  By default only type=="message" records are considered.
+  --type <a,b>       Keep only these top-level types (e.g. message,model_change).
+  --include-meta     Keep non-message records too (session/model_change/etc).
+
+PAGINATION (applied after scope, before content filters)
+  --from-index <N>   Start at message whose stable index >= N (0-based).
+  --from-message <text> Start at the first message whose rendered content
+                     contains <text> (case-insensitive substring, inclusive).
+  --n <count>        Return at most <count> records from the start point.
+
+FILTERS (applied to the paginated window)
+  --role <r,r>       Keep only these roles: user | assistant | toolResult.
+  --tool <name,...>  Keep messages that call OR return the named tool(s).
+  --failed-tools     Keep only failed tool results (isError == true).
+  --search <kw,...>  Keep messages whose rendered content contains any keyword
+                     (case-insensitive substring). Repeatable; multiple = OR.
+  --regex <pattern>  Like --search but a JS regexp (case-insensitive).
+
+OUTPUT
+  --max-chars <N>    Truncate each rendered content block to N chars (0 = no
+                     limit, the default). Useful to skim huge tool outputs.
+  --json             Emit the matched raw records as a JSON array (ignores
+                     markdown rendering and --fields/--max-chars).
+  --stats            Print a summary instead of the transcript: record counts
+                     by type, message counts by role, failed-tool count, and
+                     total tokens / cost.
+  --help             Show this help.
+
+EXAMPLES
+  # Last-resort context recall: skim the whole thread, capped block sizes
+  session-reader sessions/<ThreadId>/ --max-chars 800
+
+  # Just the failed tool calls (debugging a run)
+  session-reader sessions/<ThreadId>/ --failed-tools
+
+  # Messages 20..29 only
+  session-reader sessions/<ThreadId>/ --from-index 20 --n 10
+
+  # Everywhere a candidate id or keyword shows up
+  session-reader sessions/<ThreadId>/ --search "candidate 8041,poolStrength"
+
+  # Every bash invocation + its result
+  session-reader sessions/<ThreadId>/ --tool bash
+
+  # Token / cost / shape summary
+  session-reader sessions/<ThreadId>/ --stats
+
+  # Custom fields (no content), as an index of the conversation
+  session-reader sessions/<ThreadId>/ --fields "message.role,timestamp,message.stopReason"
+`;
+
+// ---------------------------------------------------------------------------
+// loading
+// ---------------------------------------------------------------------------
+function collectJsonlFiles(path) {
+  let st;
+  try {
+    st = statSync(path);
+  } catch {
+    stderr.write(`session-reader: path not found: ${path}\n`);
+    exit(1);
+  }
+  if (st.isFile()) return [path];
+  if (st.isDirectory()) {
+    const files = readdirSync(path)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => join(path, f));
+    if (files.length === 0) {
+      stderr.write(`session-reader: no .jsonl files in directory: ${path}\n`);
+      exit(1);
+    }
+    // no specific session file given -> read only the latest (newest mtime)
+    files.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    return [files[0]];
+  }
+  stderr.write(`session-reader: not a file or directory: ${path}\n`);
+  exit(1);
+}
+
+function loadRecords(path) {
+  const records = [];
+  for (const file of collectJsonlFiles(path)) {
+    const lines = readFileSync(file, "utf8").split("\n");
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        records.push(JSON.parse(t));
+      } catch {
+        stderr.write(`session-reader: skipping unparseable line in ${file}\n`);
+      }
+    }
+  }
+  // stable 0-based index in file/concatenation order
+  records.forEach((r, i) => (r.__index = i));
+  return records;
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+function getPath(obj, dotted) {
+  return dotted.split(".").reduce((acc, k) => (acc == null ? acc : acc[k]), obj);
+}
+
+function contentBlocks(rec) {
+  return Array.isArray(rec?.message?.content) ? rec.message.content : [];
+}
+
+// Render the textual payload of a message (used for --search and markdown).
+function renderContent(rec, { noThinking, maxChars }) {
+  const msg = rec.message ?? {};
+  const out = [];
+  const clip = (s) => {
+    s = String(s ?? "");
+    return maxChars > 0 && s.length > maxChars
+      ? s.slice(0, maxChars) + `\n…[truncated ${s.length - maxChars} chars]`
+      : s;
+  };
+
+  if (msg.role === "toolResult") {
+    const text = (msg.content ?? []).map((b) => b.text ?? "").join("");
+    const err = msg.isError ? " [ERROR]" : "";
+    out.push(`**📤 toolResult \`${msg.toolName || "?"}\`**${err}`);
+    out.push("```\n" + clip(text) + "\n```");
+    return out.join("\n");
+  }
+
+  for (const b of contentBlocks(rec)) {
+    if (b.type === "text") {
+      if ((b.text ?? "").trim()) out.push(clip(b.text));
+    } else if (b.type === "thinking") {
+      if (noThinking) continue;
+      out.push("**🧠 thinking:**\n" + clip(b.thinking));
+    } else if (b.type === "toolCall") {
+      const args = (() => {
+        try {
+          return JSON.stringify(b.arguments ?? {}, null, 2);
+        } catch {
+          return String(b.arguments);
+        }
+      })();
+      out.push(`**🔧 toolCall \`${b.name}\`** \`${b.id ?? ""}\`\n` + "```json\n" + clip(args) + "\n```");
+    }
+  }
+  return out.join("\n\n");
+}
+
+// raw searchable text (ignores truncation / labels) for filters
+function searchableText(rec) {
+  const msg = rec.message ?? {};
+  if (msg.role === "toolResult") {
+    return [msg.toolName, ...(msg.content ?? []).map((b) => b.text ?? "")].join("\n");
+  }
+  return contentBlocks(rec)
+    .map((b) => {
+      if (b.type === "text") return b.text ?? "";
+      if (b.type === "thinking") return b.thinking ?? "";
+      if (b.type === "toolCall") {
+        let a = "";
+        try {
+          a = JSON.stringify(b.arguments ?? {});
+        } catch {
+          a = String(b.arguments);
+        }
+        return `${b.name} ${a}`;
+      }
+      return "";
+    })
+    .join("\n");
+}
+
+function toolsInRecord(rec) {
+  const msg = rec.message ?? {};
+  const names = new Set();
+  if (msg.role === "toolResult" && msg.toolName) names.add(msg.toolName);
+  for (const b of contentBlocks(rec)) {
+    if (b.type === "toolCall" && b.name) names.add(b.name);
+  }
+  return names;
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+const { flags, positionals } = parseArgs(argv.slice(2));
+
+if (flags.help || (positionals.length === 0 && !flags.path)) {
+  stdout.write(HELP);
+  exit(flags.help ? 0 : 1);
+}
+
+const path = flags.path ?? positionals[0];
+let records = loadRecords(path);
+
+// --- scope: which top-level types ---
+const typeFilter = asList(flags.type, { lower: true });
+if (typeFilter.length > 0) {
+  records = records.filter((r) => typeFilter.includes(String(r.type).toLowerCase()));
+} else if (!flags["include-meta"]) {
+  records = records.filter((r) => r.type === "message");
+}
+
+// --- stats mode short-circuits ---
+if (flags.stats) {
+  const byType = {};
+  const byRole = {};
+  let failed = 0;
+  let tokens = 0;
+  let cost = 0;
+  // recompute over full file for accurate stats, ignoring scope filters
+  const all = loadRecords(path);
+  for (const r of all) {
+    byType[r.type] = (byType[r.type] ?? 0) + 1;
+    if (r.type === "message") {
+      const role = r.message?.role ?? "?";
+      byRole[role] = (byRole[role] ?? 0) + 1;
+      if (r.message?.role === "toolResult" && r.message?.isError) failed++;
+      if (r.message?.usage) {
+        tokens += r.message.usage.totalTokens ?? 0;
+        cost += r.message.usage.cost?.total ?? 0;
+      }
+    }
+  }
+  const lines = [];
+  lines.push(`# Session stats — ${path}`);
+  lines.push(`\nRecords: ${all.length}`);
+  lines.push(`\n## By type`);
+  for (const [k, v] of Object.entries(byType)) lines.push(`- ${k}: ${v}`);
+  lines.push(`\n## Messages by role`);
+  for (const [k, v] of Object.entries(byRole)) lines.push(`- ${k}: ${v}`);
+  lines.push(`\nFailed tool results: ${failed}`);
+  lines.push(`Total tokens: ${tokens.toLocaleString()}`);
+  lines.push(`Total cost: $${cost.toFixed(4)}`);
+  stdout.write(lines.join("\n") + "\n");
+  exit(0);
+}
+
+// --- pagination anchor (over scoped records) ---
+if (flags["from-message"] != null) {
+  const needle = String(flags["from-message"]).toLowerCase();
+  const idx = records.findIndex((r) => searchableText(r).toLowerCase().includes(needle));
+  if (idx === -1) {
+    stderr.write(`session-reader: --from-message text not found in any message: ${flags["from-message"]}\n`);
+    exit(1);
+  }
+  records = records.slice(idx);
+}
+if (flags["from-index"] != null) {
+  const from = Number(flags["from-index"]);
+  records = records.filter((r) => r.__index >= from);
+}
+if (flags.n != null) {
+  records = records.slice(0, Number(flags.n));
+}
+
+// --- content filters ---
+const roleFilter = asList(flags.role, { lower: true });
+if (roleFilter.length > 0) {
+  records = records.filter((r) => roleFilter.includes(String(r.message?.role).toLowerCase()));
+}
+
+const toolFilter = asList(flags.tool, { lower: true });
+if (toolFilter.length > 0) {
+  records = records.filter((r) => {
+    const names = [...toolsInRecord(r)].map((n) => n.toLowerCase());
+    return names.some((n) => toolFilter.includes(n));
+  });
+}
+
+if (flags["failed-tools"]) {
+  records = records.filter((r) => r.message?.role === "toolResult" && r.message?.isError === true);
+}
+
+const keywords = asList(flags.search).map((k) => k.toLowerCase());
+if (keywords.length > 0) {
+  records = records.filter((r) => {
+    const text = searchableText(r).toLowerCase();
+    return keywords.some((k) => text.includes(k));
+  });
+}
+if (flags.regex != null) {
+  let re;
+  try {
+    re = new RegExp(String(flags.regex), "i");
+  } catch (e) {
+    stderr.write(`session-reader: bad --regex: ${e.message}\n`);
+    exit(1);
+  }
+  records = records.filter((r) => re.test(searchableText(r)));
+}
+
+// --- output ---
+if (flags.json) {
+  const clean = records.map(({ __index, ...rest }) => ({ index: __index, ...rest }));
+  stdout.write(JSON.stringify(clean, null, 2) + "\n");
+  exit(0);
+}
+
+const fields = flags.fields
+  ? asList(flags.fields)
+  : ["type", "message.role", "content"];
+const showContent = fields.includes("content");
+const metaFields = fields.filter((f) => f !== "content" && f !== "message.role");
+const maxChars = flags["max-chars"] != null ? Number(flags["max-chars"]) : 0;
+const noThinking = !!flags["no-thinking"];
+
+if (records.length === 0) {
+  stdout.write("_(no records matched)_\n");
+  exit(0);
+}
+
+const blocks = [];
+for (const rec of records) {
+  const role = rec.message?.role ?? rec.type ?? "?";
+  blocks.push(`## [#${rec.__index}] ${role}`);
+
+  const metaLines = [];
+  for (const f of metaFields) {
+    const v = getPath(rec, f);
+    if (v === undefined) continue;
+    metaLines.push(`- ${f}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+  }
+  if (metaLines.length) blocks.push(metaLines.join("\n"));
+
+  if (showContent) {
+    const body = renderContent(rec, { noThinking, maxChars });
+    if (body.trim()) blocks.push(body);
+  }
+}
+stdout.write(blocks.join("\n\n") + "\n");
