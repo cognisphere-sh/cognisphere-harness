@@ -15,6 +15,16 @@ import { argv, exit } from "node:process";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
+// Decode literal escape sequences (\n, \t, \r) that arrive as backslash+letter
+// when callers pass them inside shell double-quotes. Without this, Telegram
+// renders "\n" as visible text instead of a line break.
+function decodeEscapes(s) {
+  if (typeof s !== "string") return s;
+  return s.replace(/\\([ntr\\])/g, (_, ch) =>
+    ch === "n" ? "\n" : ch === "t" ? "\t" : ch === "r" ? "\r" : "\\",
+  );
+}
+
 function parseFlags(args) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -72,7 +82,7 @@ async function main() {
 
   switch (cmd) {
     case "send-message": {
-      const body = { chat_id: flags["chat-id"], text: flags.text };
+      const body = { chat_id: flags["chat-id"], text: decodeEscapes(flags.text) };
       if (flags["reply-to"]) {
         body.reply_parameters = { message_id: Number(flags["reply-to"]) };
       }
@@ -109,7 +119,7 @@ async function main() {
       const form = new FormData();
       form.set("chat_id", chatId);
       form.set(entry.field, blob, basename(filePath));
-      if (flags.caption) form.set("caption", flags.caption);
+      if (flags.caption) form.set("caption", decodeEscapes(flags.caption));
       if (flags["reply-to"]) {
         form.set(
           "reply_parameters",
@@ -125,7 +135,7 @@ async function main() {
       const body = {
         chat_id: flags["chat-id"],
         message_id: Number(flags["message-id"]),
-        text: flags.text,
+        text: decodeEscapes(flags.text),
       };
       if (flags["parse-mode"]) body.parse_mode = flags["parse-mode"];
       await tg("editMessageText", body);
