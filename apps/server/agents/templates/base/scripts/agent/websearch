@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Thin wrapper around the `websearch` CLI (xynehq/websearch — a Rust binary
+# installed by bootstrap.sh to ~/.cargo/bin).
+#
+# Why this exists: sub-agent subprocesses (`pi -p ...`) don't reliably inherit
+# ~/.cargo/bin on PATH, so a bare `websearch ...` call 127s with
+# "command not found". Calling this stable path resolves the real binary
+# regardless of how PATH is set in the (sub-)agent. See bootstrap/bootstrap.sh.
+#
+# Usage is identical to the underlying CLI — all args are forwarded verbatim:
+#   scripts/agent/websearch "south indian filter coffee ratio"
+#   scripts/agent/websearch --help
+set -euo pipefail
+
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+# Prefer a real `websearch` on PATH (but never recurse into this wrapper),
+# then fall back to the known install locations.
+bin="$(command -v websearch 2>/dev/null || true)"
+if [ -z "$bin" ] || [ "$bin" = "$self" ]; then
+  bin=""
+  for cand in "$HOME/.cargo/bin/websearch" "/root/.cargo/bin/websearch" "/usr/local/bin/websearch"; do
+    if [ -x "$cand" ]; then bin="$cand"; break; fi
+  done
+fi
+
+if [ -z "$bin" ]; then
+  echo "websearch: binary not found on PATH or ~/.cargo/bin — run: bash bootstrap/bootstrap.sh" >&2
+  exit 127
+fi
+
+exec "$bin" "$@"

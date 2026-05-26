@@ -151,11 +151,11 @@ For other formats like pdf, spreadsheets etc. use bash tool to read them in mark
 
 PDF (scanned): Use `pdftoppm -png input.pdf <output_path>/<output_prefix>` to convert the PDF to images.
 
-pptx, docx, xlsx, audio (mp3, wav, etc.), PDF (pure text based, not image based) etc: Use `markitdown path-to-file` read file as markdown or use `markitdown path-to-file -o path-to-output.md` to save file as markdown.
+pptx, docx, xlsx, audio (mp3, wav, etc.), PDF (pure text based, not image based) etc: Use `scripts/agent/markitdown path-to-file` read file as markdown or use `scripts/agent/markitdown path-to-file -o path-to-output.md` to save file as markdown.
 
-- For unsupported audio files (e.g: .ogg) or video files, first use ffmpeg to convert them to mp3 and then use markitdown.
+- For unsupported audio files (e.g: .ogg) or video files, first use ffmpeg to convert them to mp3 and then use `scripts/agent/markitdown`.
 
-- Use `pdftoppm -help` and `markitdown --help` to see all available options for pdf to image and markitdown conversions.
+- Use `pdftoppm -help` and `scripts/agent/markitdown --help` to see all available options for pdf to image and markitdown conversions.
 
 # Communication model
 
@@ -180,27 +180,29 @@ Your cwd is `{{AgentDir}}`. All relative paths resolve from here:
 
 # Web Search and Web Based Fetching:
 
-- For websearch use websearch cli using bash tool. e.g: 'websearch "south indian filter coffee ratio"' Note that "\" is used to escape the double quotes in the search query.
-- websearch will give you list of relevant web urls and snippet, use `markitdown https://<url>` to read url content. The url must contain 'http://' or 'https://', else it will throw an error. e.g: `markitdown https://github.com/microsoft/markitdown`
-- Use websearch --help to know more about websearch cli.
+Always invoke these via the `scripts/agent/` wrappers (relative to your cwd), not the bare binary names. The wrappers resolve the real binary even when PATH doesn't include `~/.cargo/bin` / the npm global bin / the venv — which is the case inside sub-agent subprocesses, where a bare `websearch` 127s with "command not found".
+
+- For websearch use `scripts/agent/websearch` using bash tool. e.g: 'scripts/agent/websearch "south indian filter coffee ratio"' Note that "\" is used to escape the double quotes in the search query.
+- websearch will give you list of relevant web urls and snippet, use `scripts/agent/markitdown https://<url>` to read url content. The url must contain 'http://' or 'https://', else it will throw an error. e.g: `scripts/agent/markitdown https://github.com/microsoft/markitdown`
+- Use `scripts/agent/websearch --help` to know more about websearch cli.
 
 # Browser Based Tasks:
 
-To execute browser based tasks like surfing web-page, filling forms, extracting and submitting data from/to forms etc. use `agent-browser`.
+To execute browser based tasks like surfing web-page, filling forms, extracting and submitting data from/to forms etc. use `scripts/agent/agent-browser` (the wrapper — same PATH reasoning as above).
 
 `agent-browser` is a CLI that controls a real Chromium browser instance over CDP. Every command is a separate process; state lives in the browser daemon and is keyed by a session name. Always pass `--json` for machine-readable output and parse it with `jq`.
 
 ## Examples:
 
-agent-browser open example.com
-agent-browser snapshot # Get accessibility tree with refs
-agent-browser click @e2 # Click by ref from snapshot
-agent-browser fill @e3 "test@example.com" # Fill by ref
-agent-browser get text @e1 # Get text by ref
-agent-browser screenshot page.png
-agent-browser close
+scripts/agent/agent-browser open example.com
+scripts/agent/agent-browser snapshot # Get accessibility tree with refs
+scripts/agent/agent-browser click @e2 # Click by ref from snapshot
+scripts/agent/agent-browser fill @e3 "test@example.com" # Fill by ref
+scripts/agent/agent-browser get text @e1 # Get text by ref
+scripts/agent/agent-browser screenshot page.png
+scripts/agent/agent-browser close
 
-For more details, run `agent-browser --help`.
+For more details, run `scripts/agent/agent-browser --help`.
 You can read latest documentation by running the following command:
 `curl https://raw.githubusercontent.com/vercel-labs/agent-browser/main/README.md`
 The documentation could be very long, use sub-agents (if available) to fetch the exact content you want.

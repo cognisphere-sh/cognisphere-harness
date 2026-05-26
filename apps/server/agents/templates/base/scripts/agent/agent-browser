@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Thin wrapper around the `agent-browser` CLI (vercel-labs/agent-browser —
+# installed by bootstrap.sh as an npm global to ~/.npm-global/bin).
+#
+# Why this exists: sub-agent subprocesses (`pi -p ...`) don't reliably inherit
+# the npm global bin dir on PATH, so a bare `agent-browser ...` call 127s.
+# Calling this stable path resolves the real binary regardless of PATH.
+# See bootstrap/bootstrap.sh.
+#
+# Usage is identical to the underlying CLI — all args are forwarded verbatim:
+#   scripts/agent/agent-browser open example.com
+#   scripts/agent/agent-browser --help
+set -euo pipefail
+
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+bin="$(command -v agent-browser 2>/dev/null || true)"
+if [ -z "$bin" ] || [ "$bin" = "$self" ]; then
+  bin=""
+  for cand in \
+    "$HOME/.npm-global/bin/agent-browser" \
+    "/root/.npm-global/bin/agent-browser" \
+    "/usr/local/bin/agent-browser" \
+    "/usr/lib/node_modules/.bin/agent-browser"; do
+    if [ -x "$cand" ]; then bin="$cand"; break; fi
+  done
+fi
+
+if [ -z "$bin" ]; then
+  echo "agent-browser: binary not found on PATH or npm global bin — run: bash bootstrap/bootstrap.sh" >&2
+  exit 127
+fi
+
+exec "$bin" "$@"
