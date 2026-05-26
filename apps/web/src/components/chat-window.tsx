@@ -10,6 +10,7 @@ import {
   MessagesSquare,
   Paperclip,
   Plus,
+  Search,
   Square,
   Trash2,
   X,
@@ -703,6 +704,7 @@ function ThreadList({
   onDeleteThread: (threadId: string) => void;
   deletingThreadId: string | null;
 }) {
+  const [query, setQuery] = useState("");
   // A selected thread with sessionId === "" is a pending new thread the
   // user just created — it isn't in `threads` yet, so render it at the
   // top so the selection has a visible row.
@@ -712,6 +714,11 @@ function ThreadList({
     !threads.some((t) => t.threadId === selected.threadId)
       ? selected.threadId
       : null;
+  const filteredThreads = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return threads;
+    return threads.filter((t) => t.threadId.toLowerCase().includes(q));
+  }, [threads, query]);
   return (
     <div className="hidden h-full min-h-0 flex-col lg:flex">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
@@ -728,6 +735,19 @@ function ThreadList({
           New
         </button>
       </div>
+      <div className="px-3 pb-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search threads…"
+            aria-label="search threads"
+            className="h-8 pl-8 text-xs"
+          />
+        </div>
+      </div>
       <div className="flex-1 overflow-y-auto px-1 pb-2">
         {loading && (
           <div className="px-3 py-1 text-xs text-muted-foreground">loading…</div>
@@ -742,7 +762,7 @@ function ThreadList({
             deleting={false}
           />
         )}
-        {threads.map((t) => {
+        {filteredThreads.map((t) => {
           const sid = pickThreadSession(t);
           const isSel = !!sid && selected?.threadId === t.threadId;
           return (
@@ -764,6 +784,11 @@ function ThreadList({
         {!loading && threads.length === 0 && !pendingNew && (
           <div className="px-3 py-2 text-xs text-muted-foreground">
             No threads yet. Send a message below to start one.
+          </div>
+        )}
+        {!loading && threads.length > 0 && filteredThreads.length === 0 && (
+          <div className="px-3 py-2 text-xs text-muted-foreground">
+            No threads match “{query.trim()}”.
           </div>
         )}
       </div>
