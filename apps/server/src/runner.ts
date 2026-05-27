@@ -234,6 +234,10 @@ export class AgentRunner extends EventEmitter {
       active.steerIds.push(id);
       try {
         active.rpc.sendSteer(steerText);
+        // The row was enqueued as 'queued' but dequeueBatch never saw it;
+        // advance it to in_flight now that it's live in the streaming batch
+        // so the DB/UI reflect that it's being processed, not still waiting.
+        this.opts.db.markInFlight([id]);
         this.opts.log.debug(
           { threadId, id, plugin: payload.pluginId },
           "steer dispatched",

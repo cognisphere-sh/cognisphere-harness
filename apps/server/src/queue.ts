@@ -205,6 +205,25 @@ export class AgentDb {
   }
 
   /**
+   * Advance specific rows to `in_flight` by id. Used when a row is steered
+   * into an already-streaming batch: `dequeueBatch` never sees it (it was
+   * enqueued after the batch was dequeued), so the runner calls this once the
+   * steer is successfully dispatched to the live pi — keeping the steered row's
+   * status consistent with the rest of the in-flight batch instead of leaving
+   * it stuck at `queued`.
+   */
+  markInFlight(ids: number[]): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => "?").join(",");
+    this.db
+      .prepare(
+        `UPDATE events SET status = 'in_flight', updated_at = ?
+           WHERE id IN (${placeholders}) AND status = 'queued'`,
+      )
+      .run(Date.now(), ...ids);
+  }
+
+  /**
    * Mark every id done. `sessionId` (when non-null) is written to all rows;
    * `entryIdByRowId` writes a per-row pi entry id. The runner derives the
    * map by reading pi's session JSONL post-batch and matching user-message
