@@ -260,7 +260,8 @@ Session list response:
       "tokens": 12345,
       "contextWindow": 200000,
       "model": "anthropic/claude-sonnet-4-6"
-    }
+    },
+    "totalCost": 0.4231
   }
 ]}
 ```
@@ -271,6 +272,17 @@ jsonl: the most-recent non-aborted assistant message's context tokens
 the model's context window from pi-ai's registry. `null` when no
 assistant message exists yet (or it's older than the tail window);
 `contextWindow` is `null` for model ids not in the registry.
+
+`totalCost` is the sum of `usage.cost.total` across every assistant
+message in every session file in the thread (main agent + every
+sub-agent dir under `subagents/`). Per-file totals are cached by
+`(path, mtimeMs)` so unchanged jsonls aren't re-parsed on each 5s
+poll. `0` when no assistant messages have landed yet, **`null` while
+the per-file cache is warming** for that thread — the threads list
+only reads from the cache on the hot path; cold entries trigger a
+background warm-up (single setImmediate per thread) and the next
+poll returns the real number. This keeps page-open fast on agents
+with hundreds of session files.
 
 Per-session response:
 

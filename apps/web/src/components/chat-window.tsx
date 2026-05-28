@@ -1195,6 +1195,7 @@ function ThreadList({
             label={pendingNew}
             sublabel="pending — send a message to create"
             lastContext={null}
+            totalCost={0}
             selected
             onSelect={null}
             onDelete={() => onDeleteThread(pendingNew)}
@@ -1210,6 +1211,7 @@ function ThreadList({
               label={t.threadId}
               sublabel={sid ? `${sid.slice(0, 18)}…` : null}
               lastContext={t.lastContext}
+              totalCost={t.totalCost}
               selected={isSel}
               onSelect={
                 sid
@@ -1240,6 +1242,7 @@ function ThreadRow({
   label,
   sublabel,
   lastContext,
+  totalCost,
   selected,
   onSelect,
   onDelete,
@@ -1248,6 +1251,9 @@ function ThreadRow({
   label: string;
   sublabel: string | null;
   lastContext: LastContextInfo | null;
+  /** Sum of cost.total across main + every sub-agent jsonl, `0` when
+   *  nothing has spent yet, `null` while the server cache is warming. */
+  totalCost: number | null;
   selected: boolean;
   onSelect: (() => void) | null;
   onDelete: () => void;
@@ -1285,9 +1291,17 @@ function ThreadRow({
             {sublabel}
           </div>
         )}
-        {lastContext && (
-          <div className="mt-0.5">
-            <ContextScale info={lastContext} />
+        {(lastContext || (totalCost != null && totalCost > 0)) && (
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            {lastContext && <ContextScale info={lastContext} />}
+            {totalCost != null && totalCost > 0 && (
+              <span
+                className="font-mono text-[10px] tabular-nums text-muted-foreground"
+                title="Total spend across main agent + all sub-agents"
+              >
+                {formatCost(totalCost)}
+              </span>
+            )}
           </div>
         )}
       </button>

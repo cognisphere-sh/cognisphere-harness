@@ -198,6 +198,11 @@ export interface ThreadRow {
    *  active session jsonl. `null` if no assistant message has landed
    *  yet (or it's older than the tail window). */
   lastContext: LastContextInfo | null;
+  /** Sum of `cost.total` across every assistant message in every
+   *  session file in this thread — main agent and every sub-agent.
+   *  `null` while the per-file cost cache is warming for this thread
+   *  (large agents take a few polls to fill). */
+  totalCost: number | null;
 }
 
 export interface UsageModelRow {

@@ -178,6 +178,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       activeSessionId: string | null;
       sessions: SessionEntry[];
       lastContext: LastContextInfo | null;
+      totalCost: number | null;
     }[] = [];
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       if (!ent.isDirectory()) continue;
@@ -206,11 +207,22 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       const lastContext = lastSessionId
         ? readLastAssistantUsage(join(tDir, `${lastSessionId}.jsonl`))
         : null;
+      // Sum cost.total across every assistant message in every session
+      // file (main + each sub-agent) so the sidebar can show running
+      // spend per thread. We *only* read the mtime cache here — if any
+      // file is cold, return `null` and schedule a background warm-up;
+      // otherwise the first /sessions call after a fresh boot would
+      // block on parsing every jsonl in the agent (which can be 1000+
+      // files for a long-running agent). The sidebar polls every 5s,
+      // so costs populate within a few ticks instead of stalling page
+      // load.
+      const totalCost = getThreadTotalCostFast(tDir);
       threads.push({
         threadId: ent.name,
         activeSessionId,
         sessions,
         lastContext,
+        totalCost,
       });
     }
     threads.sort(
@@ -682,6 +694,144 @@ function readLastAssistantUsage(filePath: string): LastContextInfo | null {
 function numField(obj: Record<string, unknown>, key: string): number {
   const v = obj[key];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** Fast path for the threads-list endpoint: walk the thread's jsonls
+ *  and sum from the mtime cache only. If any file is uncached (cold
+ *  boot, new file, file mutated since last read), return `null` and
+ *  schedule a background warm-up so the next poll returns the real
+ *  number. Keeps page-open instant on large agents (1k+ session
+ *  files). */
+function getThreadTotalCostFast(threadDir: string): number | null {
+  let total = 0;
+  let cold = false;
+  const tryFile = (filePath: string): void => {
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(filePath).mtimeMs;
+    } catch {
+      return;
+    }
+    const hit = fileTotalCostCache.get(filePath);
+    if (hit && hit.mtimeMs === mtimeMs) {
+      total += hit.cost;
+    } else {
+      cold = true;
+    }
+  };
+  for (const f of readdirSync(threadDir, { withFileTypes: true })) {
+    if (f.isFile() && f.name.endsWith(".jsonl")) {
+      tryFile(join(threadDir, f.name));
+    }
+  }
+  const subRoot = join(threadDir, "subagents");
+  if (existsSync(subRoot)) {
+    for (const sub of readdirSync(subRoot, { withFileTypes: true })) {
+      if (!sub.isDirectory() || sub.name.startsWith(".")) continue;
+      const subDir = join(subRoot, sub.name);
+      for (const f of readdirSync(subDir, { withFileTypes: true })) {
+        if (f.isFile() && f.name.endsWith(".jsonl")) {
+          tryFile(join(subDir, f.name));
+        }
+      }
+    }
+  }
+  if (cold) {
+    scheduleThreadCostWarmup(threadDir);
+    return null;
+  }
+  return total;
+}
+
+// In-flight warm-ups. One setImmediate per thread keeps the queue
+// from being double-scheduled across rapid polls while still
+// processing every uncached thread eventually.
+const warmingThreadDirs = new Set<string>();
+
+function scheduleThreadCostWarmup(threadDir: string): void {
+  if (warmingThreadDirs.has(threadDir)) return;
+  warmingThreadDirs.add(threadDir);
+  setImmediate(() => {
+    try {
+      sumThreadTotalCost(threadDir);
+    } catch {
+      // ignore — next poll will re-trigger if the dir is still readable
+    } finally {
+      warmingThreadDirs.delete(threadDir);
+    }
+  });
+}
+
+/** Sum `cost.total` across every assistant message in every jsonl
+ *  under the thread directory (main agent + every sub-agent dir).
+ *  Synchronous — only call off the request hot-path (e.g. from the
+ *  background warm-up triggered by `getThreadTotalCostFast`). */
+function sumThreadTotalCost(threadDir: string): number {
+  let total = 0;
+  for (const f of readdirSync(threadDir, { withFileTypes: true })) {
+    if (f.isFile() && f.name.endsWith(".jsonl")) {
+      total += sumFileTotalCostCached(join(threadDir, f.name));
+    }
+  }
+  const subRoot = join(threadDir, "subagents");
+  if (!existsSync(subRoot)) return total;
+  for (const sub of readdirSync(subRoot, { withFileTypes: true })) {
+    if (!sub.isDirectory() || sub.name.startsWith(".")) continue;
+    const subDir = join(subRoot, sub.name);
+    for (const f of readdirSync(subDir, { withFileTypes: true })) {
+      if (f.isFile() && f.name.endsWith(".jsonl")) {
+        total += sumFileTotalCostCached(join(subDir, f.name));
+      }
+    }
+  }
+  return total;
+}
+
+// Process-lifetime cache: a jsonl's per-file total cost rarely changes
+// between polls (most threads are idle), and re-parsing every line of
+// every session file on every 5s sidebar poll would be wasteful. Key
+// by absolute path + mtime so any append invalidates the entry.
+const fileTotalCostCache = new Map<string, { mtimeMs: number; cost: number }>();
+
+function sumFileTotalCostCached(filePath: string): number {
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
+  const hit = fileTotalCostCache.get(filePath);
+  if (hit && hit.mtimeMs === mtimeMs) return hit.cost;
+  const cost = sumFileTotalCost(filePath);
+  fileTotalCostCache.set(filePath, { mtimeMs, cost });
+  return cost;
+}
+
+function sumFileTotalCost(filePath: string): number {
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(entry) || entry.type !== "message") continue;
+    const msg = (entry as { message?: unknown }).message;
+    if (!isPlainObject(msg) || msg.role !== "assistant") continue;
+    const usage = msg.usage;
+    if (!isPlainObject(usage)) continue;
+    const cost = isPlainObject(usage.cost) ? usage.cost : undefined;
+    if (cost) total += numField(cost, "total");
+  }
+  return total;
 }
 
 function aggToRows(agg: Map<string, ModelUsageAgg>): ModelUsageAgg[] {
