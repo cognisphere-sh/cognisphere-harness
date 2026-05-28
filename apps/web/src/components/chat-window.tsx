@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
+  BarChart3,
   Check,
   ChevronDown,
   FileText,
@@ -16,7 +17,12 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { endpoints, type ThreadRow } from "@/lib/api";
+import {
+  endpoints,
+  type LastContextInfo,
+  type ThreadRow,
+  type UsageAgent,
+} from "@/lib/api";
 import { flattenSession } from "@/lib/session";
 import {
   AssistantMessageBubble,
@@ -161,6 +167,10 @@ export function ChatWindow({ agentId }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  // Toggles the right-hand panel between the message stream and the
+  // per-thread usage breakdown. Both panes stay mounted (display:none
+  // toggle) so the chat scroll position survives a round-trip.
+  const [panelTab, setPanelTab] = useState<"messages" | "usage">("messages");
 
   // Auto-scroll on new messages, but only if we're already near the bottom.
   // Suppressed while a deep-link target is pending so we don't fight the
@@ -403,11 +413,28 @@ export function ChatWindow({ agentId }: Props) {
           ) : (
             <span>No session selected</span>
           )}
+          <div className="ml-auto inline-flex gap-1">
+            <PanelTab
+              active={panelTab === "messages"}
+              onClick={() => setPanelTab("messages")}
+              icon={MessagesSquare}
+              label="Messages"
+            />
+            <PanelTab
+              active={panelTab === "usage"}
+              onClick={() => setPanelTab("usage")}
+              icon={BarChart3}
+              label="Usage"
+            />
+          </div>
         </div>
         <div
           ref={scrollerRef}
           onScroll={onScroll}
-          className="flex-1 space-y-4 overflow-y-auto p-4"
+          className={cn(
+            "flex-1 space-y-4 overflow-y-auto p-4",
+            panelTab !== "messages" && "hidden",
+          )}
         >
           {chunks.length === 0 && (
             <div className="grid h-full place-items-center text-sm text-muted-foreground">
@@ -428,7 +455,20 @@ export function ChatWindow({ agentId }: Props) {
             </div>
           ))}
         </div>
-        <div className="shrink-0 border-t bg-card p-3">
+        <div
+          className={cn(
+            "flex-1 overflow-y-auto",
+            panelTab !== "usage" && "hidden",
+          )}
+        >
+          <UsagePanel agentId={agentId} threadId={selected?.threadId ?? null} />
+        </div>
+        <div
+          className={cn(
+            "shrink-0 border-t bg-card p-3",
+            panelTab !== "messages" && "hidden",
+          )}
+        >
           {stagedFiles.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2">
               {stagedFiles.map((f, i) => (
@@ -517,6 +557,404 @@ export function ChatWindow({ agentId }: Props) {
       </div>
     </div>
   );
+}
+
+function PanelTab({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: typeof MessagesSquare;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+        active
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+      )}
+      aria-pressed={active}
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </button>
+  );
+}
+
+function UsagePanel({
+  agentId,
+  threadId,
+}: {
+  agentId: string;
+  threadId: string | null;
+}) {
+  // `enabled` keeps us from firing a request for a pending new thread
+  // (sessionId === "" and no server-side row yet). The 5s refetch
+  // matches the threads list cadence so totals creep up live.
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["usage", agentId, threadId],
+    queryFn: () => endpoints.readUsage(agentId, threadId as string),
+    enabled: !!threadId,
+    refetchInterval: 5_000,
+  });
+  if (!threadId) {
+    return (
+      <div className="grid h-full place-items-center p-6 text-sm text-muted-foreground">
+        Select a thread to see usage.
+      </div>
+    );
+  }
+  if (isLoading && !data) {
+    return (
+      <div className="grid h-full place-items-center p-6 text-sm text-muted-foreground">
+        Loading usage…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="p-6 text-sm text-destructive">
+        Failed to load usage: {(error as Error).message}
+      </div>
+    );
+  }
+  if (!data) return null;
+  const empty =
+    data.main.models.length === 0 &&
+    data.subagents.every((s) => s.models.length === 0);
+  if (empty) {
+    return (
+      <div className="grid h-full place-items-center p-6 text-sm text-muted-foreground">
+        No usage recorded yet for this thread.
+      </div>
+    );
+  }
+  const allAgents: UsageAgent[] = [data.main, ...data.subagents];
+  return (
+    <div className="space-y-6 p-4 sm:p-6">
+      <OverallTable agents={allAgents} />
+      <UsageAgentSection title="Main agent" agent={data.main} />
+      {data.subagents.map((s) => (
+        <UsageAgentSection
+          key={s.agent}
+          title={`Sub-agent: ${s.agent}`}
+          agent={s}
+        />
+      ))}
+    </div>
+  );
+}
+
+function UsageAgentSection({
+  title,
+  agent,
+}: {
+  title: string;
+  agent: UsageAgent;
+}) {
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </h3>
+        <ContextScale info={agent.lastContext} />
+      </div>
+      <UsageTable agent={agent} />
+    </section>
+  );
+}
+
+/** Horizontal "temperature" bar showing how much of the model's
+ *  context window the last assistant message used. Renders nothing when
+ *  no usage has landed yet. When the model id isn't in pi-ai's
+ *  registry (custom ids), the bar stays neutral and we just print the
+ *  token count without a denominator. */
+function ContextScale({ info }: { info: LastContextInfo | null }) {
+  if (!info || info.tokens <= 0) return null;
+  const { tokens, contextWindow, model } = info;
+  const pct = contextWindow
+    ? Math.min(100, (tokens / contextWindow) * 100)
+    : null;
+  const colorClass =
+    pct === null
+      ? "bg-muted-foreground/40"
+      : pct < 50
+        ? "bg-emerald-500/80"
+        : pct < 75
+          ? "bg-amber-500/80"
+          : "bg-red-500/80";
+  const label = contextWindow
+    ? `${formatTokensShort(tokens)} / ${formatTokensShort(contextWindow)}`
+    : formatTokensShort(tokens);
+  const titleAttr = model ? `${label} — ${model}` : label;
+  return (
+    <div
+      className="inline-flex items-center gap-1.5"
+      title={titleAttr}
+      aria-label={`context usage ${titleAttr}`}
+    >
+      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn("h-full transition-all", colorClass)}
+          style={{
+            width: pct === null ? "100%" : `${Math.max(2, pct)}%`,
+          }}
+        />
+      </div>
+      <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function formatTokensShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** Sum every model row of an agent into one synthetic row. Used both for
+ *  the per-table footer ("Total") and for the per-agent rows in the
+ *  overall table at the top. */
+function sumAgent(agent: UsageAgent): {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalCost: number;
+  costInput: number;
+  costOutput: number;
+  costCacheRead: number;
+  costCacheWrite: number;
+} {
+  const acc = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalCost: 0,
+    costInput: 0,
+    costOutput: 0,
+    costCacheRead: 0,
+    costCacheWrite: 0,
+  };
+  for (const m of agent.models) {
+    acc.input += m.input;
+    acc.output += m.output;
+    acc.cacheRead += m.cacheRead;
+    acc.cacheWrite += m.cacheWrite;
+    acc.totalCost += m.cost.total;
+    acc.costInput += m.cost.input;
+    acc.costOutput += m.cost.output;
+    acc.costCacheRead += m.cost.cacheRead;
+    acc.costCacheWrite += m.cost.cacheWrite;
+  }
+  return acc;
+}
+
+function UsageTable({ agent }: { agent: UsageAgent }) {
+  if (agent.models.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+        no recorded model usage
+      </div>
+    );
+  }
+  const totals = sumAgent(agent);
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-xs">
+        <thead className="bg-muted/40 text-muted-foreground">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Agent</th>
+            <th className="px-3 py-2 font-medium">Model</th>
+            <th className="px-3 py-2 text-right font-medium">Input</th>
+            <th className="px-3 py-2 text-right font-medium">Output</th>
+            <th className="px-3 py-2 text-right font-medium">Cache Write</th>
+            <th className="px-3 py-2 text-right font-medium">Cache Read</th>
+            <th className="px-3 py-2 text-right font-medium">Total Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {agent.models.map((m) => (
+            <tr
+              key={`${m.provider}/${m.model}`}
+              className="border-t align-top"
+            >
+              <td className="px-3 py-2 font-mono">{agent.agent}</td>
+              <td className="px-3 py-2 font-mono">
+                {m.provider ? `${m.provider}/${m.model}` : m.model}
+              </td>
+              <TokensCostCell tokens={m.input} cost={m.cost.input} />
+              <TokensCostCell tokens={m.output} cost={m.cost.output} />
+              <TokensCostCell
+                tokens={m.cacheWrite}
+                cost={m.cost.cacheWrite}
+              />
+              <TokensCostCell tokens={m.cacheRead} cost={m.cost.cacheRead} />
+              <CostCell cost={m.cost.total} />
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="border-t bg-muted/20 font-medium">
+            <td className="px-3 py-2" colSpan={2}>
+              Total
+            </td>
+            <TokensCostCell tokens={totals.input} cost={totals.costInput} />
+            <TokensCostCell tokens={totals.output} cost={totals.costOutput} />
+            <TokensCostCell
+              tokens={totals.cacheWrite}
+              cost={totals.costCacheWrite}
+            />
+            <TokensCostCell
+              tokens={totals.cacheRead}
+              cost={totals.costCacheRead}
+            />
+            <CostCell cost={totals.totalCost} />
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+/** Summary table at the top of the Usage panel: one row per agent
+ *  (main + each sub-agent), no per-model breakdown, plus a grand-total
+ *  footer row. */
+function OverallTable({ agents }: { agents: UsageAgent[] }) {
+  const perAgent = agents.map((a) => ({ agent: a, sum: sumAgent(a) }));
+  const grand = perAgent.reduce(
+    (acc, { sum }) => ({
+      input: acc.input + sum.input,
+      output: acc.output + sum.output,
+      cacheRead: acc.cacheRead + sum.cacheRead,
+      cacheWrite: acc.cacheWrite + sum.cacheWrite,
+      totalCost: acc.totalCost + sum.totalCost,
+      costInput: acc.costInput + sum.costInput,
+      costOutput: acc.costOutput + sum.costOutput,
+      costCacheRead: acc.costCacheRead + sum.costCacheRead,
+      costCacheWrite: acc.costCacheWrite + sum.costCacheWrite,
+    }),
+    {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalCost: 0,
+      costInput: 0,
+      costOutput: 0,
+      costCacheRead: 0,
+      costCacheWrite: 0,
+    },
+  );
+  return (
+    <section>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Overall
+      </h3>
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full text-xs">
+          <thead className="bg-muted/40 text-muted-foreground">
+            <tr className="text-left">
+              <th className="px-3 py-2 font-medium">Agent</th>
+              <th className="px-3 py-2 text-right font-medium">Input</th>
+              <th className="px-3 py-2 text-right font-medium">Output</th>
+              <th className="px-3 py-2 text-right font-medium">Cache Write</th>
+              <th className="px-3 py-2 text-right font-medium">Cache Read</th>
+              <th className="px-3 py-2 text-right font-medium">Total Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {perAgent.map(({ agent, sum }) => (
+              <tr key={agent.agent} className="border-t align-top">
+                <td className="px-3 py-2 font-mono">{agent.agent}</td>
+                <TokensCostCell tokens={sum.input} cost={sum.costInput} />
+                <TokensCostCell tokens={sum.output} cost={sum.costOutput} />
+                <TokensCostCell
+                  tokens={sum.cacheWrite}
+                  cost={sum.costCacheWrite}
+                />
+                <TokensCostCell
+                  tokens={sum.cacheRead}
+                  cost={sum.costCacheRead}
+                />
+                <CostCell cost={sum.totalCost} />
+              </tr>
+            ))}
+          </tbody>
+          {perAgent.length > 1 && (
+            <tfoot>
+              <tr className="border-t bg-muted/20 font-medium">
+                <td className="px-3 py-2">Total</td>
+                <TokensCostCell tokens={grand.input} cost={grand.costInput} />
+                <TokensCostCell
+                  tokens={grand.output}
+                  cost={grand.costOutput}
+                />
+                <TokensCostCell
+                  tokens={grand.cacheWrite}
+                  cost={grand.costCacheWrite}
+                />
+                <TokensCostCell
+                  tokens={grand.cacheRead}
+                  cost={grand.costCacheRead}
+                />
+                <CostCell cost={grand.totalCost} />
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function TokensCostCell({
+  tokens,
+  cost,
+}: {
+  tokens: number;
+  cost: number;
+}) {
+  return (
+    <td className="whitespace-nowrap px-3 py-2 text-right font-mono">
+      <div>{formatTokens(tokens)}</div>
+      <div className="text-[10px] text-muted-foreground">
+        {formatCost(cost)}
+      </div>
+    </td>
+  );
+}
+
+/** Cost-only cell for the Total Cost column — no companion token count. */
+function CostCell({ cost }: { cost: number }) {
+  return (
+    <td className="whitespace-nowrap px-3 py-2 text-right font-mono">
+      {formatCost(cost)}
+    </td>
+  );
+}
+
+function formatTokens(n: number): string {
+  return n.toLocaleString();
+}
+
+function formatCost(n: number): string {
+  if (n === 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
 }
 
 function StagedFileChip({
@@ -756,6 +1194,7 @@ function ThreadList({
           <ThreadRow
             label={pendingNew}
             sublabel="pending — send a message to create"
+            lastContext={null}
             selected
             onSelect={null}
             onDelete={() => onDeleteThread(pendingNew)}
@@ -770,6 +1209,7 @@ function ThreadList({
               key={t.threadId}
               label={t.threadId}
               sublabel={sid ? `${sid.slice(0, 18)}…` : null}
+              lastContext={t.lastContext}
               selected={isSel}
               onSelect={
                 sid
@@ -799,6 +1239,7 @@ function ThreadList({
 function ThreadRow({
   label,
   sublabel,
+  lastContext,
   selected,
   onSelect,
   onDelete,
@@ -806,6 +1247,7 @@ function ThreadRow({
 }: {
   label: string;
   sublabel: string | null;
+  lastContext: LastContextInfo | null;
   selected: boolean;
   onSelect: (() => void) | null;
   onDelete: () => void;
@@ -841,6 +1283,11 @@ function ThreadRow({
             )}
           >
             {sublabel}
+          </div>
+        )}
+        {lastContext && (
+          <div className="mt-0.5">
+            <ContextScale info={lastContext} />
           </div>
         )}
       </button>

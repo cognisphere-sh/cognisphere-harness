@@ -179,6 +179,14 @@ export interface SessionRow {
   modified: number;
   size: number;
 }
+export interface LastContextInfo {
+  /** Token count of the most recent non-aborted assistant message. */
+  tokens: number;
+  /** Model context window from pi-ai's registry, or `null` for custom ids. */
+  contextWindow: number | null;
+  /** `<provider>/<model>` label for the tooltip. */
+  model: string;
+}
 export interface ThreadRow {
   threadId: string;
   /** Canonical pi session id for this thread, owned by the harness
@@ -186,6 +194,37 @@ export interface ThreadRow {
    *  harness owned session ids and that haven't yet had a new batch. */
   activeSessionId: string | null;
   sessions: SessionRow[];
+  /** Last main-agent assistant usage in this thread, tail-read off the
+   *  active session jsonl. `null` if no assistant message has landed
+   *  yet (or it's older than the tail window). */
+  lastContext: LastContextInfo | null;
+}
+
+export interface UsageModelRow {
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}
+export interface UsageAgent {
+  /** "main" for the thread's top-level agent; sub-agent id otherwise. */
+  agent: string;
+  models: UsageModelRow[];
+  lastContext: LastContextInfo | null;
+}
+export interface ThreadUsage {
+  threadId: string;
+  main: UsageAgent;
+  subagents: UsageAgent[];
 }
 
 export type EventStatus =
@@ -357,6 +396,10 @@ export const endpoints = {
       events: number;
       removedDir: boolean;
     }>(`/api/agents/${id}/sessions/${encodeURIComponent(threadId)}`),
+  readUsage: (id: string, threadId: string) =>
+    api.get<ThreadUsage>(
+      `/api/agents/${id}/sessions/${encodeURIComponent(threadId)}/usage`,
+    ),
 
   listEvents: (id: string, params?: ListEventsParams) =>
     api.get<{ events: EventRow[]; total: number }>(

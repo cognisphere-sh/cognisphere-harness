@@ -1,13 +1,18 @@
 import { Hono } from "hono";
 import {
+  closeSync,
   existsSync,
+  fstatSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { getModel } from "@earendil-works/pi-ai";
 import type { AgentManager } from "../agent-manager.js";
 import { LifecycleError } from "../agent-manager.js";
 import { agentDir } from "../config.js";
@@ -24,6 +29,7 @@ import type { ServerConfig } from "../config.js";
  *   POST /api/agents/:id/restart                        — lifecycle (full reload)
  *   GET  /api/agents/:id/sessions                       — list threads + sessions
  *   GET  /api/agents/:id/sessions/:threadId/:sessionId  — raw jsonl entries
+ *   GET  /api/agents/:id/sessions/:threadId/usage       — per-(agent, model) token/cost totals
  *   GET  /api/agents/:id/events?status=&plugin=&search=&sortBy=&sortDir=&limit=&offset=
  *   POST /api/agents/:id/events/:rowId/requeue          — re-queue a status=failed row
  *   POST /api/agents/:id/events/:rowId/status           — force status of a non-in-flight row
@@ -171,6 +177,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       threadId: string;
       activeSessionId: string | null;
       sessions: SessionEntry[];
+      lastContext: LastContextInfo | null;
     }[] = [];
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       if (!ent.isDirectory()) continue;
@@ -192,7 +199,19 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       // `threads` table). UI uses this to open the active session directly
       // instead of guessing from filesystem mtime.
       const activeSessionId = inst.db?.getThreadSessionId(ent.name) ?? null;
-      threads.push({ threadId: ent.name, activeSessionId, sessions });
+      // Pull the last assistant usage off the active session (or newest
+      // on-disk session if no canonical id yet) for the sidebar scale.
+      // Tail-read keeps this cheap even for large jsonls.
+      const lastSessionId = activeSessionId ?? sessions[0]?.sessionId ?? null;
+      const lastContext = lastSessionId
+        ? readLastAssistantUsage(join(tDir, `${lastSessionId}.jsonl`))
+        : null;
+      threads.push({
+        threadId: ent.name,
+        activeSessionId,
+        sessions,
+        lastContext,
+      });
     }
     threads.sort(
       (a, b) =>
@@ -227,6 +246,52 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       threadId,
       events: dbRes.events,
       removedDir,
+    });
+  });
+
+  r.get("/:id/sessions/:threadId/usage", (c) => {
+    const id = c.req.param("id");
+    if (!am.get(id)) return c.json({ error: "unknown agent" }, 404);
+    const threadId = c.req.param("threadId");
+    if (!isSafeId(threadId)) {
+      return c.json({ error: "invalid thread id" }, 400);
+    }
+    const tDir = join(agentDir(cfg, id), "sessions", threadId);
+    if (!existsSync(tDir)) {
+      return c.json({ threadId, main: emptyAgentUsage("main"), subagents: [] });
+    }
+
+    // Main agent: aggregate every *.jsonl directly under the thread dir.
+    // (Compaction creates new sessions in the same dir; we sum them all.)
+    const mainState = newAgentState();
+    for (const f of readdirSync(tDir, { withFileTypes: true })) {
+      if (!f.isFile() || !f.name.endsWith(".jsonl")) continue;
+      aggregateAgentFile(join(tDir, f.name), mainState);
+    }
+
+    // Sub-agents: one entry per `subagents/<subAgentId>/` directory, summing
+    // every *.jsonl inside it (sub-agents can be continued with `-c`, which
+    // appends to the same file or creates new sessions in the same dir).
+    const subagents: AgentUsage[] = [];
+    const subRoot = join(tDir, "subagents");
+    if (existsSync(subRoot)) {
+      for (const ent of readdirSync(subRoot, { withFileTypes: true })) {
+        if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
+        const subDir = join(subRoot, ent.name);
+        const subState = newAgentState();
+        for (const f of readdirSync(subDir, { withFileTypes: true })) {
+          if (!f.isFile() || !f.name.endsWith(".jsonl")) continue;
+          aggregateAgentFile(join(subDir, f.name), subState);
+        }
+        subagents.push(stateToAgentUsage(ent.name, subState));
+      }
+      subagents.sort((a, b) => a.agent.localeCompare(b.agent));
+    }
+
+    return c.json({
+      threadId,
+      main: stateToAgentUsage("main", mainState),
+      subagents,
     });
   });
 
@@ -385,6 +450,245 @@ interface SessionEntry {
   sessionId: string;
   modified: number;
   size: number;
+}
+
+// ── usage aggregation ─────────────────────────────────────────────
+// Each `assistant` jsonl entry carries a `usage` block (tokens + cost)
+// computed by pi-ai. We sum across every assistant message in every
+// session file, keyed by `<provider>/<model>` so a model change mid-
+// session yields one row per distinct model. We also track the
+// most-recent non-aborted assistant message so the UI can render a
+// "context window in use" scale next to the agent header.
+
+interface ModelUsageAgg {
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}
+
+interface LastContextInfo {
+  tokens: number;
+  /** `null` when the model isn't in pi-ai's registry (e.g. a custom id). */
+  contextWindow: number | null;
+  model: string;
+}
+
+interface AgentUsage {
+  agent: string;
+  models: ModelUsageAgg[];
+  lastContext: LastContextInfo | null;
+}
+
+interface AgentState {
+  models: Map<string, ModelUsageAgg>;
+  /** Highest-timestamp non-aborted assistant message seen so far. */
+  latest: { ts: number; tokens: number; provider: string; model: string } | null;
+}
+
+function newAgentState(): AgentState {
+  return { models: new Map(), latest: null };
+}
+
+function emptyAgentUsage(name: string): AgentUsage {
+  return { agent: name, models: [], lastContext: null };
+}
+
+function stateToAgentUsage(name: string, state: AgentState): AgentUsage {
+  const latest = state.latest;
+  return {
+    agent: name,
+    models: aggToRows(state.models),
+    lastContext: latest
+      ? {
+          tokens: latest.tokens,
+          contextWindow: getContextWindow(latest.provider, latest.model),
+          model: latest.provider
+            ? `${latest.provider}/${latest.model}`
+            : latest.model,
+        }
+      : null,
+  };
+}
+
+function aggregateAgentFile(filePath: string, state: AgentState): void {
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch {
+    return;
+  }
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(entry) || entry.type !== "message") continue;
+    const msg = (entry as { message?: unknown }).message;
+    if (!isPlainObject(msg) || msg.role !== "assistant") continue;
+    const usage = msg.usage;
+    if (!isPlainObject(usage)) continue;
+    const provider = typeof msg.provider === "string" ? msg.provider : "";
+    const model = typeof msg.model === "string" ? msg.model : "";
+    const key = `${provider}/${model}`;
+    const row = state.models.get(key) ?? {
+      provider,
+      model,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    row.input += numField(usage, "input");
+    row.output += numField(usage, "output");
+    row.cacheRead += numField(usage, "cacheRead");
+    row.cacheWrite += numField(usage, "cacheWrite");
+    const cost = isPlainObject(usage.cost) ? usage.cost : undefined;
+    if (cost) {
+      row.cost.input += numField(cost, "input");
+      row.cost.output += numField(cost, "output");
+      row.cost.cacheRead += numField(cost, "cacheRead");
+      row.cost.cacheWrite += numField(cost, "cacheWrite");
+      row.cost.total += numField(cost, "total");
+    }
+    state.models.set(key, row);
+
+    // Track latest (excluding aborted / error — they don't reflect real
+    // context). Mirrors pi-coding-agent's getLastAssistantUsage.
+    const stop = msg.stopReason;
+    if (stop === "aborted" || stop === "error") continue;
+    const ts = entryTimestamp(entry, msg);
+    if (!state.latest || ts > state.latest.ts) {
+      const tokens = lastUsageTokens(usage);
+      if (tokens > 0) state.latest = { ts, tokens, provider, model };
+    }
+  }
+}
+
+function entryTimestamp(
+  entry: Record<string, unknown>,
+  msg: Record<string, unknown>,
+): number {
+  // Prefer the message's epoch-ms timestamp; fall back to the entry's
+  // ISO string. Either may be absent on very old sessions.
+  const mt = msg.timestamp;
+  if (typeof mt === "number" && Number.isFinite(mt)) return mt;
+  const et = entry.timestamp;
+  if (typeof et === "string") {
+    const parsed = Date.parse(et);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function lastUsageTokens(usage: Record<string, unknown>): number {
+  // Mirrors pi-coding-agent's `calculateContextTokens`: prefer the
+  // native `totalTokens` field, fall back to the per-bucket sum.
+  const total = numField(usage, "totalTokens");
+  if (total > 0) return total;
+  return (
+    numField(usage, "input") +
+    numField(usage, "output") +
+    numField(usage, "cacheRead") +
+    numField(usage, "cacheWrite")
+  );
+}
+
+function getContextWindow(provider: string, modelId: string): number | null {
+  if (!provider || !modelId) return null;
+  // pi-ai's `getModel` is generic over a literal model-id union; we cast
+  // to a dynamic signature since the runtime impl is just a Map lookup
+  // that returns undefined on miss.
+  const fn = getModel as unknown as (
+    p: string,
+    m: string,
+  ) => { contextWindow?: number } | undefined;
+  return fn(provider, modelId)?.contextWindow ?? null;
+}
+
+/** Tail-read just the last ~128 KiB of a session jsonl and pull out
+ *  the most-recent non-aborted assistant usage. Used by the threads
+ *  list, which polls every 5s and can't afford to slurp every session
+ *  file in full. Returns null if no assistant message lives within
+ *  the tail window. */
+function readLastAssistantUsage(filePath: string): LastContextInfo | null {
+  let fd: number;
+  try {
+    fd = openSync(filePath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const st = fstatSync(fd);
+    const TAIL = 128 * 1024;
+    const start = Math.max(0, st.size - TAIL);
+    const len = st.size - start;
+    if (len === 0) return null;
+    const buf = Buffer.alloc(len);
+    readSync(fd, buf, 0, len, start);
+    let text = buf.toString("utf8");
+    // If we mid-read into a line, the leading partial line is garbage —
+    // drop everything before the first newline.
+    if (start > 0) {
+      const nl = text.indexOf("\n");
+      if (nl >= 0) text = text.slice(nl + 1);
+    }
+    const lines = text.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line) continue;
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isPlainObject(entry) || entry.type !== "message") continue;
+      const msg = (entry as { message?: unknown }).message;
+      if (!isPlainObject(msg) || msg.role !== "assistant") continue;
+      const stop = msg.stopReason;
+      if (stop === "aborted" || stop === "error") continue;
+      const usage = msg.usage;
+      if (!isPlainObject(usage)) continue;
+      const tokens = lastUsageTokens(usage);
+      if (tokens <= 0) continue;
+      const provider = typeof msg.provider === "string" ? msg.provider : "";
+      const model = typeof msg.model === "string" ? msg.model : "";
+      return {
+        tokens,
+        contextWindow: getContextWindow(provider, model),
+        model: provider ? `${provider}/${model}` : model,
+      };
+    }
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function numField(obj: Record<string, unknown>, key: string): number {
+  const v = obj[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+function aggToRows(agg: Map<string, ModelUsageAgg>): ModelUsageAgg[] {
+  return [...agg.values()].sort((a, b) => {
+    if (a.provider !== b.provider) return a.provider.localeCompare(b.provider);
+    return a.model.localeCompare(b.model);
+  });
 }
 
 // Thread ids are created by the harness from arbitrary inputs (e.g. email

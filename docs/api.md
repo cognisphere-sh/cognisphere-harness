@@ -242,6 +242,7 @@ compatibility with future settings that *would* need a full restart.
 |---|---|---|
 | GET | `/api/agents/:id/sessions` | List threads under `<agent>/sessions/` and their `.jsonl` files, newest-first. |
 | GET | `/api/agents/:id/sessions/:threadId/:sessionId` | Read the JSONL file as an array of parsed entries. |
+| GET | `/api/agents/:id/sessions/:threadId/usage` | Per-(agent, model) token + cost totals for the thread. Aggregates every assistant message in every `*.jsonl` under `<agent>/sessions/<threadId>/` (main agent) and `<agent>/sessions/<threadId>/subagents/*/` (one entry per sub-agent dir). |
 | DELETE | `/api/agents/:id/sessions/:threadId` | Permanently remove a thread — drops every `events` row for the thread, its `threads` row, and the on-disk `<agent>/sessions/<threadId>/` directory (all sessions). Returns `409` if a batch is in-flight; abort it first. |
 
 Session list response:
@@ -250,13 +251,26 @@ Session list response:
 { "threads": [
   {
     "threadId": "telegram:42",
+    "activeSessionId": "01HX...",
     "sessions": [
       { "sessionId": "01HX...", "modified": 1731..., "size": 12345 },
       ...
-    ]
+    ],
+    "lastContext": {
+      "tokens": 12345,
+      "contextWindow": 200000,
+      "model": "anthropic/claude-sonnet-4-6"
+    }
   }
 ]}
 ```
+
+`lastContext` is a tail-read (last ~128 KiB) of the active session's
+jsonl: the most-recent non-aborted assistant message's context tokens
+(`usage.totalTokens` or the input/output/cacheRead/cacheWrite sum) and
+the model's context window from pi-ai's registry. `null` when no
+assistant message exists yet (or it's older than the tail window);
+`contextWindow` is `null` for model ids not in the registry.
 
 Per-session response:
 
@@ -280,6 +294,48 @@ Delete response:
 `events` is the number of `events` rows deleted; `removedDir` is `false`
 if the on-disk directory did not exist (e.g. a thread that only ever had
 queued events and was deleted before its first batch ran).
+
+Usage response:
+
+```json
+{
+  "threadId": "...",
+  "main": {
+    "agent": "main",
+    "models": [
+      {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "input": 1234, "output": 567,
+        "cacheRead": 8910, "cacheWrite": 11,
+        "cost": {
+          "input": 0.0037, "output": 0.0085,
+          "cacheRead": 0.0027, "cacheWrite": 0.00004,
+          "total": 0.01494
+        }
+      }
+    ],
+    "lastContext": {
+      "tokens": 12345,
+      "contextWindow": 200000,
+      "model": "anthropic/claude-sonnet-4-6"
+    }
+  },
+  "subagents": [
+    { "agent": "<subAgentId>", "models": [ ... ], "lastContext": { ... } }
+  ]
+}
+```
+
+One row per distinct `<provider>/<model>` — a `model_change` mid-session
+yields multiple rows. Sub-agents are discovered by scanning
+`<agent>/sessions/<threadId>/subagents/*/`; the directory name is used
+as the `agent` label. Tokens and costs come from the `usage` block
+`pi-ai` writes onto each assistant message; messages without a `usage`
+block (e.g. errored before the API returned) are skipped silently.
+`lastContext` tracks the highest-timestamp non-aborted assistant
+message seen across that agent's session files (same shape as the
+threads-list field).
 
 ### Events stream
 
