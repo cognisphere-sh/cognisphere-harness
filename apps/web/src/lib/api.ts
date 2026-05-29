@@ -124,6 +124,7 @@ export interface AgentDetail {
   agentJson: {
     name: string;
     model: { provider: string; id: string; thinkingLevel?: string };
+    subagentModel?: { provider: string; id: string; thinkingLevel?: string };
     threadIdStrategy: { type: string };
     maxConcurrentSlots?: number;
     maxAttempts?: number;
@@ -203,6 +204,13 @@ export interface ThreadRow {
    *  `null` while the per-file cost cache is warming for this thread
    *  (large agents take a few polls to fill). */
   totalCost: number | null;
+  /** Per-thread model override (set via the thread header dropdown), or
+   *  `null` when the thread inherits the agent's agent.json model. */
+  modelOverride: {
+    provider: string;
+    modelId: string;
+    thinkingLevel: string | null;
+  } | null;
 }
 
 export interface UsageModelRow {
@@ -404,6 +412,19 @@ export const endpoints = {
   readUsage: (id: string, threadId: string) =>
     api.get<ThreadUsage>(
       `/api/agents/${id}/sessions/${encodeURIComponent(threadId)}/usage`,
+    ),
+  setThreadModel: (
+    id: string,
+    threadId: string,
+    body: {
+      provider: string | null;
+      modelId: string | null;
+      thinkingLevel?: string | null;
+    },
+  ) =>
+    api.put<{ ok: true }>(
+      `/api/agents/${id}/sessions/${encodeURIComponent(threadId)}/model`,
+      body,
     ),
 
   listEvents: (id: string, params?: ListEventsParams) =>

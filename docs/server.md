@@ -332,14 +332,21 @@ Per-agent SQLite WAL at `<agent>/sessions/.events.db`. Two tables:
   its own. New columns are added idempotently via `ALTER TABLE` on
   open (`PRAGMA table_info` guard), so existing dev DBs survive the
   upgrade with `NULL` in the new columns.
-- `threads(thread_id PRIMARY KEY, pi_session_id, created_at)` — the
-  canonical pi session id per thread. Populated on the thread's first
-  batch (runner generates a UUID via `randomUUID()` and inserts here);
-  re-read on every subsequent spawn so pi gets the same `--session`
-  path. On agent start, `agent-manager.backfillThreadSessions` scans
-  `<sessions>/<threadId>/` for any pre-existing `.jsonl` and seeds the
-  table with the most-recently-modified one (matches what `--continue`
-  used to pick), so threads from before this change keep continuity.
+- `threads(thread_id PRIMARY KEY, pi_session_id, created_at,
+  model_provider, model_id, thinking_level)` — the canonical pi session
+  id per thread, plus an optional per-thread model override. Populated on
+  the thread's first batch (runner generates a UUID via `randomUUID()`
+  and inserts here); re-read on every subsequent spawn so pi gets the
+  same `--session` path. On agent start,
+  `agent-manager.backfillThreadSessions` scans `<sessions>/<threadId>/`
+  for any pre-existing `.jsonl` and seeds the table with the
+  most-recently-modified one (matches what `--continue` used to pick),
+  so threads from before this change keep continuity. The three
+  `model_*` columns are added idempotently via `ALTER TABLE` on open and
+  are `NULL` by default, meaning "inherit the agent's `agent.json`
+  model"; when set (via the UI), they let one thread run a different
+  model — including a different provider — than the rest of the agent's
+  threads (see `spawnPi` below).
 
 `status` advances through the lifecycle: `queued` → `in_flight` →
 `done` (success), or back to `queued` on retry, or to `failed` (out
@@ -358,6 +365,14 @@ Load-bearing methods:
   `threads` mapping. Setter is `INSERT OR IGNORE` so the binding for a
   thread is fixed once written; the runner checks for an existing id
   before generating a new one.
+- `getThreadModel(threadId) → {provider, modelId, thinkingLevel} | null`,
+  `setThreadModel(threadId, provider, modelId, thinkingLevel)`,
+  `clearThreadModel(threadId)` — read/write the per-thread model
+  override. The setters `UPDATE` in place (returning `false` if no
+  `threads` row exists yet, i.e. the thread hasn't bound a session), so
+  an override can only be set on a thread that has already run a batch.
+  `getThreadModel` returns `null` unless both `model_provider` and
+  `model_id` are set.
 - `enqueue(args) → id` — inserts a row with `status='queued'`.
 - `peekHighestPriorityThread(exclude: Set<string>) → threadId | null` —
   the worker calls this with the active threads excluded so two workers
@@ -505,9 +520,9 @@ Builds argv:
 ```
 pi --mode rpc
    --session <agentDir>/sessions/<threadId>/<sessionId>.jsonl
-   --provider <agentJson.model.provider>
-   --model    <agentJson.model.id>
-   --thinking <agentJson.model.thinkingLevel ?? "medium">
+   --provider <thread override provider ?? agentJson.model.provider>
+   --model    <thread override modelId   ?? agentJson.model.id>
+   --thinking <thread override thinking ?? agentJson.model.thinkingLevel ?? "medium">
    --tools read,bash,edit,write,grep,find,ls
    --system-prompt "<assembled system prompt>"
    --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files
@@ -544,9 +559,26 @@ Env handed to pi:
   `VIRTUAL_ENV=<agentDir>/.venv`, delete `PYTHONHOME`.
 - `PI_AGENT_ID = agentId`.
 - `PI_WEBHOOK_BASE = ${serverBaseUrl}/webhook/${agentId}`.
+- `PI_SUBAGENT_PROVIDER` / `PI_SUBAGENT_MODEL` / `PI_SUBAGENT_THINKING` —
+  the agent's sub-agent model (`agentJson.subagentModel ?? agentJson.model`).
+  The `scripts/agent/subagent` wrapper turns these into
+  `--provider`/`--model`/`--thinking` on the `pi -p` children the agent
+  spawns, so sub-agents run on the configured model instead of pi's global
+  `settings.json` default. If `subagentModel` names a provider other than the
+  agent default, that provider's credentials are also injected (so the
+  sub-agent can authenticate); the agent default provider's key is already
+  present via `envSecrets`.
 - All `envSecrets` (provider env from `models.json` ⨁ every secret
   under this agent flattened to bare keys, with collisions caught at
   AgentManager construction time — see §4.9).
+- If the thread's model override (see §3 `threads`) names a *different*
+  provider than the agent default, that provider's credentials are
+  resolved on demand (`agent-manager.resolveProviderEnv`, reading the
+  live `ModelsStore`) and overlaid onto the env — `envSecrets` only
+  carries the agent's default-provider key. Same-provider overrides need
+  no extra credentials. Resolution happens per spawn, so an override
+  change (or a newly-added provider key) takes effect on the next batch
+  with no agent reload.
 
 cwd is `<agentDir>`, so all relative paths in the system prompt
 (`scripts/...`, `workspace/...`, `sessions/...`) resolve correctly.

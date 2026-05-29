@@ -409,6 +409,12 @@ export function ChatWindow({ agentId }: Props) {
                   setSelected({ threadId: selected.threadId, sessionId: sid })
                 }
               />
+              <span className="text-[10px]">·</span>
+              <ThreadModelControl
+                agentId={agentId}
+                threadId={selected.threadId}
+                modelOverride={currentThread?.modelOverride ?? null}
+              />
             </>
           ) : (
             <span>No session selected</span>
@@ -1009,6 +1015,128 @@ function formatFileSize(bytes: number): string {
  *  back to the most-recent on-disk session. */
 function pickThreadSession(t: ThreadRow): string | null {
   return t.activeSessionId ?? t.sessions[0]?.sessionId ?? null;
+}
+
+const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+/** Per-thread model override picker, shown in the thread header. Lists every
+ *  enabled model across all configured providers (cross-provider) plus an
+ *  "Agent default" option that clears the override. Thinking level is
+ *  editable only while a model override is active; otherwise the thread
+ *  inherits the agent's agent.json thinking level. */
+function ThreadModelControl({
+  agentId,
+  threadId,
+  modelOverride,
+}: {
+  agentId: string;
+  threadId: string;
+  modelOverride: ThreadRow["modelOverride"];
+}) {
+  const qc = useQueryClient();
+  const { data: models } = useQuery({
+    queryKey: ["models"],
+    queryFn: endpoints.getModels,
+  });
+  const { data: agent } = useQuery({
+    queryKey: ["agent", agentId],
+    queryFn: () => endpoints.getAgent(agentId),
+  });
+
+  const setModel = useMutation({
+    mutationFn: (body: {
+      provider: string | null;
+      modelId: string | null;
+      thinkingLevel?: string | null;
+    }) => endpoints.setThreadModel(agentId, threadId, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["threads", agentId] }),
+    onError: (e: Error) => toast.error(`model change failed: ${e.message}`),
+  });
+
+  // Providers offering at least one enabled model (mirrors ModelPicker in
+  // agent-settings-pane.tsx).
+  const eligible = useMemo(
+    () =>
+      (models?.providers ?? []).filter(
+        (p) => p.configured && p.enabledModels.length > 0,
+      ),
+    [models],
+  );
+
+  if (!models || !agent?.agentJson) return null;
+
+  const def = agent.agentJson.model;
+  const current = modelOverride
+    ? `${modelOverride.provider}/${modelOverride.modelId}`
+    : "";
+
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <select
+        value={current}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (!v) {
+            setModel.mutate({ provider: null, modelId: null });
+            return;
+          }
+          const idx = v.indexOf("/");
+          setModel.mutate({
+            provider: v.slice(0, idx),
+            modelId: v.slice(idx + 1),
+            thinkingLevel: modelOverride?.thinkingLevel ?? null,
+          });
+        }}
+        disabled={setModel.isPending}
+        className="min-w-0 max-w-[14rem] truncate rounded-md border border-input bg-background px-2 py-1 font-mono text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="thread model"
+      >
+        <option value="">Agent default ({def.provider}/{def.id})</option>
+        {eligible.map((p) => (
+          <optgroup key={p.id} label={p.displayName}>
+            {p.enabledModels.map((m) => (
+              <option key={`${p.id}/${m}`} value={`${p.id}/${m}`}>
+                {m}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      <select
+        value={modelOverride?.thinkingLevel ?? ""}
+        onChange={(e) =>
+          modelOverride &&
+          setModel.mutate({
+            provider: modelOverride.provider,
+            modelId: modelOverride.modelId,
+            thinkingLevel: e.target.value || null,
+          })
+        }
+        disabled={!modelOverride || setModel.isPending}
+        className="rounded-md border border-input bg-background px-1.5 py-1 font-mono text-[11px] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="thread thinking level"
+        title={
+          modelOverride
+            ? "thinking level"
+            : "thinking level (override the model first)"
+        }
+      >
+        <option value="">think: default</option>
+        {THINKING_LEVELS.map((l) => (
+          <option key={l} value={l}>
+            think: {l}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
 }
 
 function SessionPicker({

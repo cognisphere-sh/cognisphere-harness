@@ -396,6 +396,13 @@ function AgentConfigBlock({
   const setModel = (next: AgentModel) =>
     setDraft((d) => ({ ...d, model: { ...(d.model as object), ...next } }));
 
+  const subModel = (draft.subagentModel ?? {}) as AgentModel;
+  const setSubModel = (next: AgentModel) =>
+    setDraft((d) => ({
+      ...d,
+      subagentModel: { ...(d.subagentModel as object), ...next },
+    }));
+
   // Compose the rest schema per-render: static fields minus `model`
   // (rendered separately by ModelPicker), plus `config` whose shape is
   // declared by `agentJson.configSchema`. Same pattern plugins use —
@@ -441,7 +448,7 @@ function AgentConfigBlock({
           <Button
             size="sm"
             disabled={!dirty || saving}
-            onClick={() => onSave(draft)}
+            onClick={() => onSave(stripEmptyModel(draft, "subagentModel"))}
           >
             {saving ? (
               <Loader2 className="size-4 animate-spin" />
@@ -454,6 +461,13 @@ function AgentConfigBlock({
       </div>
       <div className="grid gap-4">
         <ModelPicker models={models} value={model} onChange={setModel} />
+        <ModelPicker
+          models={models}
+          value={subModel}
+          onChange={setSubModel}
+          title="Sub-agent model"
+          hint="used by pi -p sub-agents · leave unset to inherit the model above"
+        />
         <SchemaForm
           schema={restSchema}
           value={draft}
@@ -468,10 +482,14 @@ function ModelPicker({
   models,
   value,
   onChange,
+  title = "Model",
+  hint = "--provider / --model / --thinking",
 }: {
   models: ModelsView | null;
   value: AgentModel;
   onChange: (next: AgentModel) => void;
+  title?: string;
+  hint?: string;
 }) {
   // Providers offered in the dropdown: those that are fully configured
   // (all required credentials set) and have at least one enabled model.
@@ -510,10 +528,8 @@ function ModelPicker({
     <div className="rounded-md border bg-muted/20 p-3">
       <div className="mb-2 flex items-center gap-2">
         <Bot className="size-3.5 text-primary/60" />
-        <h4 className="text-sm font-medium">Model</h4>
-        <span className="text-[11px] text-muted-foreground">
-          --provider / --model / --thinking
-        </span>
+        <h4 className="text-sm font-medium">{title}</h4>
+        <span className="text-[11px] text-muted-foreground">{hint}</span>
         <Link
           to="/settings/models"
           className="ml-auto text-[11px] text-primary hover:underline"
@@ -901,4 +917,18 @@ function SecretRow({
 
 function deepClone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
+}
+
+/** Drop an optional model field (e.g. `subagentModel`) from the agent.json
+ *  payload when it has no provider or id — an empty/partial picker means
+ *  "inherit", which we represent by omitting the key entirely. */
+function stripEmptyModel(
+  draft: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const m = draft[key] as AgentModel | undefined;
+  if (m && m.provider && m.id) return draft;
+  const rest = { ...draft };
+  delete rest[key];
+  return rest;
 }

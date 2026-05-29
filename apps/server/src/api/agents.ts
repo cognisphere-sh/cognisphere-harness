@@ -15,8 +15,10 @@ import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai";
 import type { AgentManager } from "../agent-manager.js";
 import { LifecycleError } from "../agent-manager.js";
-import { agentDir } from "../config.js";
+import { agentDir, secretsRoot } from "../config.js";
 import type { ServerConfig } from "../config.js";
+import { ModelsStore } from "../models-store.js";
+import { findProviderInCatalog } from "../models-catalog.js";
 
 /**
  * /api/agents/* surface for the web UI.
@@ -40,6 +42,7 @@ import type { ServerConfig } from "../config.js";
  */
 export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
   const r = new Hono();
+  const models = new ModelsStore(join(secretsRoot(cfg), "models.json"));
 
   r.get("/", (c) => c.json({ agents: am.list() }));
 
@@ -179,6 +182,11 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       sessions: SessionEntry[];
       lastContext: LastContextInfo | null;
       totalCost: number | null;
+      modelOverride: {
+        provider: string;
+        modelId: string;
+        thinkingLevel: string | null;
+      } | null;
     }[] = [];
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       if (!ent.isDirectory()) continue;
@@ -223,6 +231,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
         sessions,
         lastContext,
         totalCost,
+        modelOverride: inst.db?.getThreadModel(ent.name) ?? null,
       });
     }
     threads.sort(
@@ -259,6 +268,66 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       events: dbRes.events,
       removedDir,
     });
+  });
+
+  // Per-thread model override. Stored on the thread's `threads` row and read
+  // live by the runner on the next batch (no agent reload). A null
+  // provider/modelId clears the override (revert to the agent default).
+  r.put("/:id/sessions/:threadId/model", async (c) => {
+    const id = c.req.param("id");
+    const inst = am.get(id);
+    if (!inst) return c.json({ error: "unknown agent" }, 404);
+    if (!inst.db) return c.json({ error: "agent not initialized" }, 503);
+    const threadId = c.req.param("threadId");
+    if (!isSafeId(threadId)) return c.json({ error: "invalid thread id" }, 400);
+
+    const body = (await c.req.json().catch(() => null)) as {
+      provider?: string | null;
+      modelId?: string | null;
+      thinkingLevel?: string | null;
+    } | null;
+    if (!body) return c.json({ error: "expected JSON body" }, 400);
+
+    if (body.provider == null || body.modelId == null) {
+      const ok = inst.db.clearThreadModel(threadId);
+      if (!ok) {
+        return c.json({ error: "send a message first to create the thread" }, 409);
+      }
+      return c.json({ ok: true });
+    }
+
+    const { provider, modelId } = body;
+    const thinkingLevel = body.thinkingLevel ?? null;
+
+    const entry = findProviderInCatalog(provider);
+    if (!entry) return c.json({ error: `unknown provider "${provider}"` }, 400);
+    const pcfg = models.getProvider(provider);
+    const configured =
+      !!pcfg &&
+      entry.credentials
+        .filter((f) => f.required)
+        .every((f) => {
+          const v = pcfg.credentials[f.key];
+          return typeof v === "string" && v.length > 0;
+        });
+    if (!configured) {
+      return c.json({ error: `provider "${provider}" is not configured` }, 400);
+    }
+    if (!pcfg.enabledModels.includes(modelId)) {
+      return c.json(
+        { error: `model "${modelId}" is not enabled for ${provider}` },
+        400,
+      );
+    }
+    if (thinkingLevel !== null && !THINKING_LEVELS.has(thinkingLevel)) {
+      return c.json({ error: "invalid thinkingLevel" }, 400);
+    }
+
+    const ok = inst.db.setThreadModel(threadId, provider, modelId, thinkingLevel);
+    if (!ok) {
+      return c.json({ error: "send a message first to create the thread" }, 409);
+    }
+    return c.json({ ok: true });
   });
 
   r.get("/:id/sessions/:threadId/usage", (c) => {
@@ -845,6 +914,15 @@ function aggToRows(agg: Map<string, ModelUsageAgg>): ModelUsageAgg[] {
 // subjects), so they can contain spaces, parens, brackets, and unicode.
 // We only need to ensure the id is a single path segment that can't escape
 // the agent's `sessions/` directory.
+const THINKING_LEVELS = new Set([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+
 function isSafeId(s: string): boolean {
   if (!s || s.length > 256) return false;
   if (s.startsWith(".")) return false; // blocks ".", "..", and hidden dirs

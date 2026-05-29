@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Wrapper around `pi -p` for spawning sub-agents.
+#
+# Why this exists: a bare `pi -p` falls back to pi's *global* default model
+# (`~/.pi/agent/settings.json`), not this agent's configured model. The
+# harness exports the agent's sub-agent model as PI_SUBAGENT_PROVIDER /
+# PI_SUBAGENT_MODEL / PI_SUBAGENT_THINKING (from `subagentModel ?? model` in
+# agent.json). This wrapper turns those into --provider/--model/--thinking so
+# every sub-agent runs on the configured model. The agent may still override
+# per call by passing --provider/--model/--thinking explicitly.
+#
+# Usage is identical to `pi -p` — all args are forwarded verbatim:
+#   scripts/agent/subagent "Read /repo/x.ts and list issues" \
+#     --session-dir "sessions/<threadId>/subagents/<subAgentId>" \
+#     --system-prompt "..." --tools "read,grep"
+set -euo pipefail
+
+has_flag() {
+  local want="$1"; shift
+  for a in "$@"; do
+    [ "$a" = "$want" ] && return 0
+  done
+  return 1
+}
+
+extra=()
+# --model "provider/id" already encodes the provider, so only add --provider
+# when neither --model nor --provider was passed by the caller.
+if [ -n "${PI_SUBAGENT_PROVIDER:-}" ] \
+  && ! has_flag --model "$@" && ! has_flag --provider "$@"; then
+  extra+=(--provider "$PI_SUBAGENT_PROVIDER")
+fi
+if [ -n "${PI_SUBAGENT_MODEL:-}" ] && ! has_flag --model "$@"; then
+  extra+=(--model "$PI_SUBAGENT_MODEL")
+fi
+if [ -n "${PI_SUBAGENT_THINKING:-}" ] && ! has_flag --thinking "$@"; then
+  extra+=(--thinking "$PI_SUBAGENT_THINKING")
+fi
+
+# ${extra[@]+...} guards the empty-array expansion under `set -u`.
+exec pi -p ${extra[@]+"${extra[@]}"} "$@"

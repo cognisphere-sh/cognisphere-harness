@@ -110,6 +110,14 @@ export interface RunnerOpts {
    * edits to `<harnessRoot>/.secrets/secrets.json`.
    */
   envSecrets?: Record<string, string>;
+  /**
+   * Resolve a provider's credential env vars on demand. Used when a thread
+   * overrides its model to a *different* provider than the agent's default
+   * (`envSecrets` only carries the default provider's key), so the override
+   * provider's key must be injected at spawn time. Reads the live
+   * `ModelsStore`, so newly-added provider keys work without an agent reload.
+   */
+  resolveProviderEnv?: (providerId: string) => Record<string, string>;
   log: Logger;
 }
 
@@ -487,12 +495,20 @@ export class AgentRunner extends EventEmitter {
     // directory from `resolve(path, "..")` so we don't need `--session-dir`.
     // We drop `--continue` because the explicit path makes "continue" implicit.
     const sessionFile = join(sessionDir, `${sessionId}.jsonl`);
+    // Per-thread model override (set via the UI); falls back to the agent's
+    // agent.json model for any unset field. A cross-provider override has its
+    // credentials injected into `env` below.
+    const override = this.opts.db.getThreadModel(threadId);
+    const provider = override?.provider ?? this.opts.agentJson.model.provider;
+    const modelId = override?.modelId ?? this.opts.agentJson.model.id;
+    const thinking =
+      override?.thinkingLevel ?? this.opts.agentJson.model.thinkingLevel ?? "medium";
     const args: string[] = [
       "--mode", "rpc",
       "--session", sessionFile,
-      "--provider", this.opts.agentJson.model.provider,
-      "--model", this.opts.agentJson.model.id,
-      "--thinking", this.opts.agentJson.model.thinkingLevel ?? "medium",
+      "--provider", provider,
+      "--model", modelId,
+      "--thinking", thinking,
       "--tools", tools,
       "--system-prompt", systemPrompt,
       "--no-extensions",
@@ -558,6 +574,33 @@ export class AgentRunner extends EventEmitter {
     // accepts this trade-off in exchange for ergonomic plugin scripts.
     for (const [k, v] of Object.entries(this.opts.envSecrets ?? {})) {
       env[k] = v;
+    }
+
+    // Cross-provider thread override: `envSecrets` only carries the agent's
+    // default provider key, so inject the override provider's credentials.
+    // (Same-provider overrides need nothing extra.)
+    if (override && override.provider !== this.opts.agentJson.model.provider) {
+      const overrideEnv = this.opts.resolveProviderEnv?.(override.provider) ?? {};
+      for (const [k, v] of Object.entries(overrideEnv)) {
+        env[k] = v;
+      }
+    }
+
+    // Sub-agent model: surfaced so the `scripts/agent/subagent` wrapper can
+    // pass --provider/--model/--thinking to the `pi -p` children the agent
+    // spawns (without these, sub-agents fall back to pi's global default
+    // model). Inherits this agent's model when `subagentModel` is unset; if
+    // it names a different provider than the agent default, inject that
+    // provider's credentials too so the sub-agent can authenticate.
+    const sub = this.opts.agentJson.subagentModel ?? this.opts.agentJson.model;
+    env.PI_SUBAGENT_PROVIDER = sub.provider;
+    env.PI_SUBAGENT_MODEL = sub.id;
+    env.PI_SUBAGENT_THINKING = sub.thinkingLevel ?? "medium";
+    if (sub.provider !== this.opts.agentJson.model.provider) {
+      const subEnv = this.opts.resolveProviderEnv?.(sub.provider) ?? {};
+      for (const [k, v] of Object.entries(subEnv)) {
+        env[k] = v;
+      }
     }
 
     log.debug(

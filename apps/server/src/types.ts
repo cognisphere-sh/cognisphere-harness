@@ -15,6 +15,18 @@ export interface AgentJson {
     id: string;
     thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   };
+  /**
+   * Optional model for sub-agents the main agent spawns via `pi -p` (the
+   * `scripts/agent/subagent` wrapper). When unset, sub-agents inherit this
+   * agent's `model`. Exposed to the pi runtime as `PI_SUBAGENT_PROVIDER` /
+   * `PI_SUBAGENT_MODEL` / `PI_SUBAGENT_THINKING` (see `runner.ts:spawnPi`),
+   * which the wrapper turns into `--provider`/`--model`/`--thinking`.
+   */
+  subagentModel?: {
+    provider: string;
+    id: string;
+    thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  };
   threadIdStrategy: ThreadIdStrategy;
   maxConcurrentSlots?: number;
   maxAttempts?: number;

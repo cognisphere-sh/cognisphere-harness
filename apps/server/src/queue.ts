@@ -36,7 +36,10 @@ CREATE INDEX IF NOT EXISTS idx_events_plugin  ON events(plugin_id, updated_at DE
 CREATE TABLE IF NOT EXISTS threads (
   thread_id      TEXT PRIMARY KEY,
   pi_session_id  TEXT NOT NULL,
-  created_at     INTEGER NOT NULL
+  created_at     INTEGER NOT NULL,
+  model_provider TEXT,
+  model_id       TEXT,
+  thinking_level TEXT
 );
 `;
 
@@ -122,6 +125,10 @@ export class AgentDb {
     this.db.exec(SCHEMA);
     this.migrateAddColumn("events", "pi_session_id", "TEXT");
     this.migrateAddColumn("events", "pi_entry_id", "TEXT");
+    // Per-thread model override (NULL ⇒ inherit the agent's agent.json model).
+    this.migrateAddColumn("threads", "model_provider", "TEXT");
+    this.migrateAddColumn("threads", "model_id", "TEXT");
+    this.migrateAddColumn("threads", "thinking_level", "TEXT");
   }
 
   /** Add a column to an existing table if it isn't already there. SQLite has
@@ -339,6 +346,68 @@ export class AgentDb {
          VALUES (?, ?, ?)`,
       )
       .run(threadId, sessionId, Date.now());
+  }
+
+  // ── per-thread model override ──────────────────────────────
+  // NULL columns mean "inherit the agent's agent.json model". A row only
+  // exists once the thread has bound a session (setThreadSessionId), so the
+  // setters UPDATE in place rather than insert.
+
+  /** Returns the thread's model override, or null if it inherits the agent
+   *  default (or has no row yet). */
+  getThreadModel(
+    threadId: string,
+  ): { provider: string; modelId: string; thinkingLevel: string | null } | null {
+    const row = this.db
+      .prepare<
+        unknown[],
+        {
+          model_provider: string | null;
+          model_id: string | null;
+          thinking_level: string | null;
+        }
+      >(
+        `SELECT model_provider, model_id, thinking_level
+           FROM threads WHERE thread_id = ?`,
+      )
+      .get(threadId);
+    if (!row || !row.model_provider || !row.model_id) return null;
+    return {
+      provider: row.model_provider,
+      modelId: row.model_id,
+      thinkingLevel: row.thinking_level,
+    };
+  }
+
+  /** Set a thread's model override. Returns false if the thread has no row
+   *  yet (no session bound) — the caller should surface that to the user. */
+  setThreadModel(
+    threadId: string,
+    provider: string,
+    modelId: string,
+    thinkingLevel: string | null,
+  ): boolean {
+    const info = this.db
+      .prepare(
+        `UPDATE threads
+            SET model_provider = ?, model_id = ?, thinking_level = ?
+          WHERE thread_id = ?`,
+      )
+      .run(provider, modelId, thinkingLevel, threadId);
+    return info.changes > 0;
+  }
+
+  /** Clear a thread's override so it reverts to the agent default. Returns
+   *  false if the thread has no row yet. */
+  clearThreadModel(threadId: string): boolean {
+    const info = this.db
+      .prepare(
+        `UPDATE threads
+            SET model_provider = NULL, model_id = NULL, thinking_level = NULL
+          WHERE thread_id = ?`,
+      )
+      .run(threadId);
+    return info.changes > 0;
   }
 
   /** Drop all events for a thread and its session-binding row, in one

@@ -442,6 +442,8 @@ export class AgentManager {
       serverBaseUrl: this.cfg.serverBaseUrl,
       timezone: this.cfg.timezone,
       envSecrets,
+      resolveProviderEnv: (providerId) =>
+        resolveProviderEnv(this.models, providerId, dir, this.log),
       log: childLogger(`agent:${inst.id}`),
     });
     // When a stale-reload is pending and the last active batch finishes,
@@ -711,6 +713,31 @@ function resolveAndValidateProvider(
       );
     }
   }
+
+  return resolveProviderEnv(models, providerId, agentDir, log);
+}
+
+/**
+ * Map a configured provider's stored credentials to the env vars the pi
+ * child expects. No validation — returns an empty object for an unknown or
+ * unconfigured provider, and silently skips empty fields. Vertex's service
+ * account JSON is materialized to a file and the env points at its path.
+ *
+ * Used both by `resolveAndValidateProvider` (the agent's default provider,
+ * injected once at start) and by the runner for a thread's cross-provider
+ * model override, where the override provider's key must be injected at
+ * spawn time (`runner.ts:spawnPi`).
+ */
+export function resolveProviderEnv(
+  models: ModelsStore,
+  providerId: string,
+  agentDir: string,
+  log: Logger,
+): Record<string, string> {
+  const entry = findProviderInCatalog(providerId);
+  if (!entry) return {};
+  const cfg = models.getProvider(providerId);
+  if (!cfg) return {};
 
   const env: Record<string, string> = {};
   for (const field of entry.credentials) {

@@ -243,6 +243,7 @@ compatibility with future settings that *would* need a full restart.
 | GET | `/api/agents/:id/sessions` | List threads under `<agent>/sessions/` and their `.jsonl` files, newest-first. |
 | GET | `/api/agents/:id/sessions/:threadId/:sessionId` | Read the JSONL file as an array of parsed entries. |
 | GET | `/api/agents/:id/sessions/:threadId/usage` | Per-(agent, model) token + cost totals for the thread. Aggregates every assistant message in every `*.jsonl` under `<agent>/sessions/<threadId>/` (main agent) and `<agent>/sessions/<threadId>/subagents/*/` (one entry per sub-agent dir). |
+| PUT | `/api/agents/:id/sessions/:threadId/model` | Set or clear the thread's model override. Takes effect on the next batch (no agent reload). |
 | DELETE | `/api/agents/:id/sessions/:threadId` | Permanently remove a thread — drops every `events` row for the thread, its `threads` row, and the on-disk `<agent>/sessions/<threadId>/` directory (all sessions). Returns `409` if a batch is in-flight; abort it first. |
 
 Session list response:
@@ -261,7 +262,12 @@ Session list response:
       "contextWindow": 200000,
       "model": "anthropic/claude-sonnet-4-6"
     },
-    "totalCost": 0.4231
+    "totalCost": 0.4231,
+    "modelOverride": {
+      "provider": "openai",
+      "modelId": "gpt-5",
+      "thinkingLevel": "high"
+    }
   }
 ]}
 ```
@@ -306,6 +312,27 @@ Delete response:
 `events` is the number of `events` rows deleted; `removedDir` is `false`
 if the on-disk directory did not exist (e.g. a thread that only ever had
 queued events and was deleted before its first batch ran).
+
+`modelOverride` is the thread's per-thread model override, or `null` when
+the thread inherits the agent's `agent.json` model. When set, the runner
+uses this provider/model/thinking for the thread's next batch — including
+a provider different from the agent default (cross-provider), whose
+credentials are injected at spawn time.
+
+Set-model request:
+
+```json
+{ "provider": "openai", "modelId": "gpt-5", "thinkingLevel": "high" }
+```
+
+`thinkingLevel` is optional (`off|minimal|low|medium|high|xhigh`; omit or
+`null` to inherit the agent's thinking level). Sending `provider: null` or
+`modelId: null` **clears** the override (the thread reverts to the agent
+default). Validation: `provider` must be a configured catalog provider and
+`modelId` must be in that provider's `enabledModels` (else `400`). Returns
+`409` if the thread has no `threads` row yet (no session bound — send a
+message first). Response: `{ "ok": true }`. The override is stored on the
+`threads` row and read live by the runner, so no agent reload occurs.
 
 Usage response:
 
