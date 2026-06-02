@@ -21,7 +21,6 @@
  *   Subject: <subject>
  *   From: <from>
  *   To: <to>
- *   TimeStamp: 2026-05-01 09:00:00 EDT
  *
  *   <body text>
  *
@@ -182,7 +181,6 @@ async function main() {
       `Subject: ${subject}`,
       `From: ${from}`,
       `To: ${to}`,
-      `TimeStamp: ${timestamp}`,
       "",
     );
   }

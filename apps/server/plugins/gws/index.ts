@@ -360,7 +360,20 @@ export default class GwsPlugin implements Plugin {
       toEmit = ordered.slice(start);
     }
 
+    // Resolve every message's payload first, then emit. `formatEmail` shells
+    // out to `gws`, so awaiting it between `ctx.notify` calls would yield the
+    // event loop mid-thread and let the runner dequeue an earlier message as
+    // its own batch before the next is enqueued — splitting what should be one
+    // batch (and missing the steer window, which only fires once a batch is
+    // streaming). Building all payloads up front keeps the emit loop below
+    // free of awaits, so same-thread rows enqueue atomically and batch.
     const unreadToMark: GmailMessage[] = [];
+    const pending: Array<{
+      invoked: boolean;
+      text: string;
+      metadata: Record<string, unknown>;
+    }> = [];
+
     for (const m of toEmit) {
       if (hasLabel(m, UNREAD_LABEL)) unreadToMark.push(m);
 
@@ -405,11 +418,9 @@ export default class GwsPlugin implements Plugin {
             : `${header}\n\n${body}`;
       }
 
-      ctx.notify(invoked ? "email_received" : "email_silent", {
+      pending.push({
+        invoked,
         text,
-        channelId: threadId,
-        threadIdOverride,
-        isSilent: !invoked,
         metadata: {
           MessageId: m.id,
           GmailThreadId: threadId,
@@ -417,6 +428,19 @@ export default class GwsPlugin implements Plugin {
           ReceivedAt: timestamp,
           ReceivedAtUtc: timestampUtc,
         },
+      });
+    }
+
+    // Synchronous emit — no awaits between notify() calls, so the runner sees
+    // every row of this thread as `queued` before its worker can dequeue, and
+    // pulls them into a single batch.
+    for (const p of pending) {
+      ctx.notify(p.invoked ? "email_received" : "email_silent", {
+        text: p.text,
+        channelId: threadId,
+        threadIdOverride,
+        isSilent: !p.invoked,
+        metadata: p.metadata,
       });
     }
 
