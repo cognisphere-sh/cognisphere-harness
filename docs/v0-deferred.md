@@ -94,7 +94,7 @@ cp apps/server/agents/templates/base/workspace/index.md \
    "$ROOT/agents/$ID/workspace/index.md"
 
 # 5. bootstrap dir — copy from template, then run to provision .venv,
-#    install ffmpeg/pdftoppm/markitdown/websearch. The runner auto-activates
+#    install ffmpeg/pdftoppm/markitdown/ddgs. The runner auto-activates
 #    .venv at spawn time; bootstrap is the operator's responsibility (same
 #    as system_prompts/, workspace/, etc.). Edit
 #    "$ROOT/agents/$ID/bootstrap/requirements.txt" first if you want extra

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Thin wrapper around the `ddgs` CLI (web metasearch; deedy5/ddgs, installed by
+# bootstrap.sh into the agent's .venv via `pip install ddgs`).
+#
+# Why this exists: the runner auto-activates <agentDir>/.venv at spawn time, so
+# ddgs is usually on PATH — but sub-agent subprocesses don't always carry that
+# activation, so a bare `ddgs ...` can 127. This wrapper prefers the agent's own
+# .venv copy and falls back to PATH, giving one stable invocation path. See
+# bootstrap/bootstrap.sh.
+#
+# Usage is identical to the underlying CLI — all args are forwarded verbatim:
+#   scripts/agent/ddgs text -q "south indian filter coffee ratio"
+#   scripts/agent/ddgs text -q "ddgs python" -m 5
+#   scripts/agent/ddgs --help
+set -euo pipefail
+
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# scripts/agent/ddgs -> agent dir is two levels up.
+agent_dir="$(cd "$(dirname "$self")/../.." >/dev/null 2>&1 && pwd)"
+
+bin=""
+# Prefer the agent's own venv build first.
+for cand in "$agent_dir/.venv/bin/ddgs"; do
+  if [ -x "$cand" ]; then bin="$cand"; break; fi
+done
+# Then a real `ddgs` on PATH (never recurse into this wrapper).
+if [ -z "$bin" ]; then
+  p="$(command -v ddgs 2>/dev/null || true)"
+  if [ -n "$p" ] && [ "$p" != "$self" ]; then bin="$p"; fi
+fi
+# Then common user/system locations.
+if [ -z "$bin" ]; then
+  for cand in "$HOME/.local/bin/ddgs" "/usr/local/bin/ddgs"; do
+    if [ -x "$cand" ]; then bin="$cand"; break; fi
+  done
+fi
+
+if [ -z "$bin" ]; then
+  echo "ddgs: binary not found in .venv or on PATH — run: bash bootstrap/bootstrap.sh" >&2
+  exit 127
+fi
+
+exec "$bin" "$@"

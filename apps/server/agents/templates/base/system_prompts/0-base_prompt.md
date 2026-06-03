@@ -180,11 +180,12 @@ Your cwd is `{{AgentDir}}`. All relative paths resolve from here:
 
 # Web Search and Web Based Fetching:
 
-Always invoke these via the `scripts/agent/` wrappers (relative to your cwd), not the bare binary names. The wrappers resolve the real binary even when PATH doesn't include `~/.cargo/bin` / the npm global bin / the venv — which is the case inside sub-agent subprocesses, where a bare `websearch` 127s with "command not found".
+Always invoke these via the `scripts/agent/` wrappers (relative to your cwd), not the bare binary names. The wrappers resolve the real binary even when PATH doesn't include the venv / the npm global bin — which is the case inside sub-agent subprocesses, where a bare `ddgs` 127s with "command not found".
 
-- For websearch use `scripts/agent/websearch` using bash tool. e.g: 'scripts/agent/websearch "south indian filter coffee ratio"' Note that "\" is used to escape the double quotes in the search query.
-- websearch will give you list of relevant web urls and snippet, use `scripts/agent/markitdown https://<url>` to read url content. The url must contain 'http://' or 'https://', else it will throw an error. e.g: `scripts/agent/markitdown https://github.com/microsoft/markitdown`
-- Use `scripts/agent/websearch --help` to know more about websearch cli.
+- For web search use `scripts/agent/ddgs text -q "<query>"` using the bash tool. e.g: `scripts/agent/ddgs text -q "south indian filter coffee ratio"`. Note that `\` is used to escape any double quotes inside the search query. Add `-m <n>` to cap the number of results (e.g. `-m 5`) and `-o json` for machine-readable output you can parse with `jq`.
+- ddgs has other metasearch modes too: `ddgs news -q "..."`, `ddgs images -q "..."`, `ddgs videos -q "..."`, `ddgs books -q "..."`.
+- ddgs will give you a list of relevant web urls and snippets; use `scripts/agent/markitdown https://<url>` to read url content. The url must contain 'http://' or 'https://', else it will throw an error. e.g: `scripts/agent/markitdown https://github.com/microsoft/markitdown`
+- Use `scripts/agent/ddgs --help` (or `scripts/agent/ddgs text --help`) to know more about the ddgs cli.
 
 # Browser Based Tasks:
 

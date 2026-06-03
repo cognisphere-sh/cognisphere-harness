@@ -8,3 +8,6 @@
 # File-to-markdown converter referenced by the harness preamble (pdf, docx,
 # pptx, xlsx, audio, etc.). The [all] extra pulls in optional backends.
 markitdown[all]==0.1.5
+
+# Web metasearch CLI (deedy5/ddgs) — invoked via scripts/agent/ddgs.
+ddgs

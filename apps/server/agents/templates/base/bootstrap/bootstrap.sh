@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Bootstrap an agent's runtime: system binaries (ffmpeg, pdftoppm), Python
-# venv + deps (markitdown[all]), and the websearch CLI (Rust).
+# Bootstrap an agent's runtime: system binaries (ffmpeg, pdftoppm) and a
+# Python venv + deps (markitdown[all], ddgs).
 #
 # Idempotent — safe to re-run. The script is non-interactive: it never
 # prompts for a sudo password. If a system dep is missing and we can't
@@ -67,18 +67,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r bootstrap/requirements.txt
 
-# ── 3. websearch (Rust binary) ────────────────────────────────────────
-if command -v websearch >/dev/null 2>&1; then
-  log "websearch already installed"
-elif command -v cargo >/dev/null 2>&1; then
-  log "installing websearch via cargo (xynehq/websearch)..."
-  cargo install --git https://github.com/xynehq/websearch.git \
-    || warn "cargo install websearch failed"
-else
-  warn "cargo (Rust) not found; install Rust (https://rustup.rs) and re-run, or install websearch by hand"
-fi
-
-# ── 4. pi-coding-agent (npm global) ───────────────────────────────────
+# ── 3. pi-coding-agent (npm global) ───────────────────────────────────
 # Provides the `pi` binary that the harness runner spawns (`pi --mode rpc`).
 if command -v pi >/dev/null 2>&1; then
   log "pi-coding-agent already installed"
@@ -90,7 +79,7 @@ else
   warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install @earendil-works/pi-coding-agent by hand"
 fi
 
-# ── 5. agent-browser (npm global) ─────────────────────────────────────
+# ── 4. agent-browser (npm global) ─────────────────────────────────────
 if command -v agent-browser >/dev/null 2>&1; then
   log "agent-browser already installed"
 elif command -v npm >/dev/null 2>&1; then
