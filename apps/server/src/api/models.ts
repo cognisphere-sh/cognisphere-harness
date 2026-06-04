@@ -1,3 +1,4 @@
+import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { Hono } from "hono";
 import { join } from "node:path";
 import type { AgentManager } from "../agent-manager.js";
@@ -6,6 +7,7 @@ import { secretsRoot } from "../config.js";
 import type { Logger } from "../logger.js";
 import { PROVIDER_CATALOG } from "../models-catalog.js";
 import { ModelsStore } from "../models-store.js";
+import { OAuthLoginManager } from "../oauth-logins.js";
 import type { CredField, ProviderConfig } from "../types.js";
 
 /**
@@ -13,6 +15,17 @@ import type { CredField, ProviderConfig } from "../types.js";
  *
  *   GET  /  → { providers: ProviderInfo[], path, mask }
  *   PUT  /  → write models.json
+ *
+ * OAuth subscription login (catalog entries with `oauth: true`):
+ *
+ *   POST   /oauth/:provider/login   → start flow, returns { state, url, instructions }
+ *   POST   /oauth/:provider/input   → paste redirect URL / auth code { value }
+ *   POST   /oauth/:provider/cancel  → abort a pending flow
+ *   GET    /oauth/:provider/status  → poll { state, url?, instructions?, message? }
+ *   DELETE /oauth/:provider         → sign out (remove stored tokens)
+ *
+ * OAuth tokens live in pi's own auth.json, not models.json — see
+ * `oauth-logins.ts` for the design rationale.
  *
  * The catalog (provider IDs, credential schemas, default model lists)
  * is fixed in code; the persisted config only stores per-provider
@@ -37,11 +50,13 @@ export interface ProviderInfo {
   credentials: CredField[];
   /** Per-field current value: secrets shown as MASK if set / "" if unset; non-secrets shown plain. */
   credentialValues: Record<string, string>;
-  /** All required fields populated. */
+  /** All required fields populated (or subscription OAuth connected). */
   configured: boolean;
   catalogModels: string[];
   enabledModels: string[];
   notes?: string;
+  /** Present only for providers with subscription OAuth support. */
+  oauth?: { supported: true; connected: boolean };
 }
 
 type PutBody = {
@@ -54,6 +69,25 @@ type PutBody = {
   >;
 };
 
+/**
+ * Restart every running agent whose `model.provider` is in `providerIds`
+ * so new credentials reach the pi runtime without a server bounce.
+ */
+async function reloadAgentsUsingProviders(
+  am: AgentManager,
+  providerIds: Set<string>,
+): Promise<string[]> {
+  const restarted: string[] = [];
+  for (const a of am.list()) {
+    const inst = am.get(a.id);
+    const provider = inst?.agentJson?.model?.provider;
+    if (!provider || !providerIds.has(provider)) continue;
+    const reloaded = await am.reloadAgent(a.id);
+    if (reloaded && reloaded.state === "running") restarted.push(a.id);
+  }
+  return restarted;
+}
+
 export function modelsRouter(
   am: AgentManager,
   cfg: ServerConfig,
@@ -62,9 +96,16 @@ export function modelsRouter(
   const r = new Hono();
   const path = join(secretsRoot(cfg), "models.json");
   const store = new ModelsStore(path);
+  const oauth = new OAuthLoginManager(log, (providerId) => {
+    void reloadAgentsUsingProviders(am, new Set([providerId])).then(
+      (restarted) =>
+        log.info({ providerId, restarted }, "oauth connected; agents reloaded"),
+    );
+  });
 
   r.get("/", (c) => {
     const data = store.load();
+    const auth = AuthStorage.create();
     const providers: ProviderInfo[] = PROVIDER_CATALOG.map((entry) => {
       const cfgEntry = data.providers[entry.id];
       const stored = cfgEntry?.credentials ?? {};
@@ -79,12 +120,19 @@ export function modelsRouter(
           values[field.key] = v;
         }
       }
-      const configured = entry.credentials
+      const requiredOk = entry.credentials
         .filter((f) => f.required)
         .every((f) => {
           const v = stored[f.key];
           return typeof v === "string" && v.length > 0;
         });
+      const oauthConnected = entry.oauth === true && auth.has(entry.id);
+      // OAuth-only providers (no cred fields) are configured iff connected;
+      // otherwise OAuth connection satisfies missing required fields.
+      const configured =
+        entry.credentials.length === 0
+          ? oauthConnected
+          : requiredOk || oauthConnected;
       return {
         id: entry.id,
         displayName: entry.displayName,
@@ -94,9 +142,62 @@ export function modelsRouter(
         catalogModels: entry.models,
         enabledModels: cfgEntry?.enabledModels ?? [],
         notes: entry.notes,
+        oauth: entry.oauth
+          ? { supported: true as const, connected: oauthConnected }
+          : undefined,
       };
     });
     return c.json({ providers, path, mask: MASK });
+  });
+
+  // ── OAuth subscription login ─────────────────────────────────────
+  const oauthEntry = (providerId: string) => {
+    const entry = PROVIDER_CATALOG.find((p) => p.id === providerId);
+    return entry?.oauth && oauth.supported(providerId) ? entry : undefined;
+  };
+
+  r.post("/oauth/:provider/login", async (c) => {
+    const providerId = c.req.param("provider");
+    if (!oauthEntry(providerId)) {
+      return c.json({ error: `provider ${providerId} does not support OAuth` }, 404);
+    }
+    const state = await oauth.start(providerId);
+    return c.json(state);
+  });
+
+  r.post("/oauth/:provider/input", async (c) => {
+    const providerId = c.req.param("provider");
+    const body = (await c.req.json().catch(() => null)) as {
+      value?: string;
+    } | null;
+    if (!body || typeof body.value !== "string" || body.value.length === 0) {
+      return c.json({ error: "expected { value: string }" }, 400);
+    }
+    if (!oauth.submitInput(providerId, body.value)) {
+      return c.json({ error: "no pending login awaiting input" }, 409);
+    }
+    return c.json({ ok: true });
+  });
+
+  r.post("/oauth/:provider/cancel", async (c) => {
+    await oauth.cancel(c.req.param("provider"));
+    return c.json({ ok: true });
+  });
+
+  r.get("/oauth/:provider/status", (c) => {
+    return c.json(oauth.status(c.req.param("provider")));
+  });
+
+  r.delete("/oauth/:provider", async (c) => {
+    const providerId = c.req.param("provider");
+    if (!oauthEntry(providerId)) {
+      return c.json({ error: `provider ${providerId} does not support OAuth` }, 404);
+    }
+    await oauth.cancel(providerId);
+    oauth.logout(providerId);
+    const restarted = await reloadAgentsUsingProviders(am, new Set([providerId]));
+    log.info({ providerId, restarted }, "oauth signed out; agents reloaded");
+    return c.json({ ok: true, restarted });
   });
 
   r.put("/", async (c) => {
@@ -159,14 +260,7 @@ export function modelsRouter(
     const changedProviders = new Set(
       Object.keys(body.providers).filter((p) => catalogById.has(p)),
     );
-    const restarted: string[] = [];
-    for (const a of am.list()) {
-      const inst = am.get(a.id);
-      const provider = inst?.agentJson?.model?.provider;
-      if (!provider || !changedProviders.has(provider)) continue;
-      const reloaded = await am.reloadAgent(a.id);
-      if (reloaded && reloaded.state === "running") restarted.push(a.id);
-    }
+    const restarted = await reloadAgentsUsingProviders(am, changedProviders);
     log.info(
       { providers: [...changedProviders], restarted },
       "models updated; agents reloaded",

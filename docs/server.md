@@ -172,6 +172,12 @@ Conventions worth knowing:
   `google-vertex` (the operator pastes the SA blob into Models settings;
   the runner writes it to disk at 0600 so pi's GCP libraries can read
   it via `GOOGLE_APPLICATION_CREDENTIALS`). Removed on agent stop.
+- OAuth subscription tokens (Claude Pro/Max, OpenAI Codex) live
+  *outside* this tree, in pi's own `~/.pi/agent/auth.json`
+  (0600, file-locked; path follows `PI_CODING_AGENT_DIR` if set).
+  Written by the server's login flow via pi-coding-agent's
+  `AuthStorage`, read and auto-refreshed by every spawned pi child —
+  see §4.5.1.
 
 ---
 
@@ -278,8 +284,11 @@ ids that agents may select.
   `@earendil-works/pi-coding-agent`'s provider surface. Each entry has
   `id`, `displayName`, a `credentials: CredField[]` list (the form
   fields the operator must populate), a curated `models: string[]`
-  shortlist, and optional `notes`. The `CredField.envVar` is what gets
-  injected into the pi child's env at spawn.
+  shortlist, optional `notes`, and an optional `oauth: true` flag for
+  providers with subscription OAuth support (the id must match an
+  entry in pi-ai's OAuth registry — currently `anthropic` and
+  `openai-codex`). The `CredField.envVar` is what gets injected into
+  the pi child's env at spawn.
 - **Store** (`models-store.ts`): read-through (never cached) against
   `<harnessRoot>/.secrets/models.json`. Shape on disk:
 
@@ -304,10 +313,13 @@ Agent-level provider validation lives in `agent-manager.ts`
    provider → empty env, pi falls back to ambient (lets the operator
    experiment with out-of-catalog providers).
 2. Requires the provider to be configured in `models.json` if a
-   `model.id` is specified.
+   `model.id` is specified. A subscription-OAuth connection (tokens in
+   pi's auth.json) counts as configured.
 3. Refuses to start if the chosen model id isn't in the provider's
    `enabledModels` allowlist.
-4. Refuses to start if any required `CredField` is empty.
+4. Refuses to start if any required `CredField` is empty — unless the
+   provider is OAuth-connected, which substitutes for credentials
+   (nothing extra is injected; the pi child resolves auth.json itself).
 5. For `google-vertex`'s `serviceAccountKey` (a paste-blob JSON), writes
    the value to `<agentDir>/.vertex-sa.json` at 0600 and points
    `GOOGLE_APPLICATION_CREDENTIALS` at the path. Removed on agent stop.
@@ -316,6 +328,43 @@ The map returned merges with the secrets snapshot before going to the
 pi child env; if a secret key collides with a provider env var, the
 agent start fails (so an operator can't accidentally shadow a managed
 credential).
+
+### 4.5.1 OAuthLoginManager — `oauth-logins.ts`
+
+Server-driven OAuth login flows for subscription providers (catalog
+entries with `oauth: true`), exposed over `/api/models/oauth/*` (see
+`docs/api.md` §7.1). Reuses pi-coding-agent's `AuthStorage` — the same
+machinery behind pi's `/login` command.
+
+**Storage decision:** tokens persist to pi's own
+`<piAgentDir>/auth.json` (default `~/.pi/agent/auth.json`, 0600,
+file-locked), never to models.json:
+
+- Refresh tokens rotate on every refresh. Spawned pi children already
+  refresh + persist under a file lock; a competing copy in models.json
+  would go stale after the first child-side refresh and brick the
+  login.
+- Access tokens expire mid-session. Env-injected keys can't be updated
+  on a live child, but pi re-resolves auth.json itself, so
+  long-running agents survive expiry transparently.
+
+Spawned children inherit the server's env (`runner.ts:spawnPi`), so
+they read the same auth.json with zero changes to credential
+injection. pi's credential priority is auth.json (api_key, then OAuth)
+**before** env vars — so a connected OAuth subscription takes
+precedence over an `ANTHROPIC_API_KEY` from models.json.
+
+**Flow:** `start(providerId)` runs `AuthStorage.login()` in the
+background with pi-ai's `OAuthLoginCallbacks` and resolves once
+`onAuth` delivers the provider's authorize URL. The browser opens the
+URL; either the provider's localhost callback server (fixed port,
+e.g. 53692 for Anthropic) completes the flow — works when the harness
+runs on the operator's machine — or the operator pastes the final
+redirect URL back (`submitInput`, wired to `onManualCodeInput` /
+`onPrompt`). One pending login per provider (the callback port is
+fixed); `start` cancels any prior pending flow. On success/logout the
+models router reloads running agents using the provider, same as
+`PUT /api/models`.
 
 ### 4.6 AgentDb — `queue.ts`
 
@@ -1317,7 +1366,8 @@ Agent-runner subsystem (HTTP API surface omitted — see
 | `apps/server/src/plugin-registry.ts` | 114 | dual-root plugin discovery |
 | `apps/server/src/secrets.ts` | 159 | bucketed JSON-file secret store |
 | `apps/server/src/models-store.ts` | 91 | read-through models.json |
-| `apps/server/src/models-catalog.ts` | 472 | static provider catalog |
+| `apps/server/src/models-catalog.ts` | 490 | static provider catalog |
+| `apps/server/src/oauth-logins.ts` | 170 | subscription OAuth login flows → pi's auth.json |
 | `apps/server/src/queue.ts` | 395 | per-agent SQLite queue + DLQ + event log |
 | `apps/server/src/rpc.ts` | 213 | JSON-RPC client to pi children |
 | `apps/server/src/runner.ts` | 578 | per-agent worker pool + spawn + steer + stale-pause |

@@ -192,14 +192,18 @@ export interface CredField {
 
 /**
  * Static catalog entry for a model provider. Mirrors pi-coding-agent's
- * provider surface (`packages/coding-agent/docs/providers.md`). OAuth
- * subscription providers (Claude Pro/Max, ChatGPT Codex, GitHub Copilot)
- * are out of scope for v0.
+ * provider surface (`packages/coding-agent/docs/providers.md`).
  *
- * `credentials` is 1+ fields the operator must supply. `models` is the
+ * `credentials` is 0+ fields the operator may supply. `models` is the
  * curated default list shown in the UI; operators may enable any subset
  * and append custom model IDs not in this list. `notes` shows under
  * the card for provider-specific guidance (e.g. Bedrock alt auth modes).
+ *
+ * `oauth: true` marks providers with subscription OAuth support in
+ * pi-ai's OAuth registry (the id must match an `OAuthProviderInterface`
+ * id there). Tokens are persisted to pi's own `<agentDir>/auth.json`
+ * via `AuthStorage` — never to models.json — so spawned pi children
+ * pick them up and auto-refresh them natively. See `oauth-logins.ts`.
  */
 export interface ProviderCatalogEntry {
   id: string;
@@ -207,6 +211,7 @@ export interface ProviderCatalogEntry {
   credentials: CredField[];
   models: string[];
   notes?: string;
+  oauth?: boolean;
 }
 
 /**

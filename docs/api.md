@@ -627,11 +627,14 @@ logged but don't fail the save — the file write already succeeded.
 ## 7. Models — `/api/models`
 
 Implemented in `apps/server/src/api/models.ts`. Reads/writes the global
-`<harnessRoot>/.secrets/models.json`. Both routes require auth.
+`<harnessRoot>/.secrets/models.json`. All routes require auth.
 
 The provider catalog (id, displayName, `CredField[]`, default model
-list, optional notes) is fixed in `models-catalog.ts`. Only the
-per-provider `credentials` and `enabledModels` are persisted.
+list, optional notes, optional `oauth` flag) is fixed in
+`models-catalog.ts`. Only the per-provider `credentials` and
+`enabledModels` are persisted to models.json; OAuth subscription tokens
+are persisted to pi's own `<piAgentDir>/auth.json` (see
+[§7.1](#71-oauth-subscription-login--apimodelsoauth)).
 
 ### `GET /api/models`
 
@@ -646,7 +649,8 @@ per-provider `credentials` and `enabledModels` are persisted.
       "configured": true,
       "catalogModels": ["claude-sonnet-4-5", "claude-opus-4-7", ...],
       "enabledModels": ["claude-sonnet-4-5"],
-      "notes": "..."
+      "notes": "...",
+      "oauth": { "supported": true, "connected": false }
     },
     ...
   ],
@@ -662,7 +666,13 @@ Per-field rules in `credentialValues`:
 - Non-secret field with a value → the plaintext value (so the UI can
   show region selectors etc.).
 
-`configured` is true iff every `required` credential is populated.
+`oauth` is present only for providers with subscription OAuth support
+(catalog `oauth: true`); `connected` reflects whether OAuth credentials
+exist in pi's auth.json.
+
+`configured` is true iff every `required` credential is populated, or
+subscription OAuth is connected. Providers with an empty `credentials`
+schema (OAuth-only, e.g. `openai-codex`) are configured iff connected.
 
 ### `PUT /api/models`
 
@@ -696,6 +706,65 @@ After saving, the route reloads every running agent whose
 
 ```json
 { "ok": true, "restartRequired": false, "restarted": ["dr-renu"] }
+```
+
+### 7.1 OAuth subscription login — `/api/models/oauth/*`
+
+Browser-driven sign-in for subscription providers (Anthropic Claude
+Pro/Max, OpenAI Codex). The server drives pi-ai's OAuth flow via
+pi-coding-agent's `AuthStorage`; tokens land in pi's own
+`<piAgentDir>/auth.json` (default `~/.pi/agent/auth.json`), never in
+models.json. See `docs/server.md` §oauth-logins for the design
+rationale. All routes require auth. `:provider` must be a catalog entry
+with `oauth: true`, else 404.
+
+#### `POST /api/models/oauth/:provider/login`
+
+Starts (or restarts — any pending flow for the provider is cancelled
+first) a login flow. Resolves once the provider's auth URL is known:
+
+```json
+{ "state": "pending", "url": "https://claude.ai/oauth/authorize?...", "instructions": "..." }
+```
+
+The client opens `url` in a new tab. If the harness server runs on the
+same machine as the browser, the provider's localhost callback server
+(fixed port, e.g. 53692 for Anthropic) completes the flow
+automatically. Otherwise the operator pastes the final redirect URL via
+the `input` route.
+
+#### `POST /api/models/oauth/:provider/input`
+
+```json
+{ "value": "<redirect URL or authorization code>" }
+```
+
+Feeds pasted input into the pending flow. 400 if `value` is missing,
+409 if no pending login is awaiting input.
+
+#### `GET /api/models/oauth/:provider/status`
+
+Poll while a flow is pending:
+
+```json
+{ "state": "idle" | "pending" | "success" | "error", "url": "...", "instructions": "...", "message": "<error only>" }
+```
+
+`success`/`error` are the last terminal outcome, cleared on the next
+`login`. On success the server has already persisted the tokens and
+reloaded running agents using the provider.
+
+#### `POST /api/models/oauth/:provider/cancel`
+
+Aborts a pending flow (no-op if none). `{ "ok": true }`.
+
+#### `DELETE /api/models/oauth/:provider`
+
+Sign out: cancels any pending flow, removes the provider's tokens from
+pi's auth.json, reloads running agents using the provider.
+
+```json
+{ "ok": true, "restarted": ["dr-renu"] }
 ```
 
 ---
@@ -856,7 +925,7 @@ exposed in GET responses, so the client has nothing to send back.
 
 ### Auto-reload on settings PUTs
 
-Five PUTs trigger an auto-reload of affected agents instead of
+These mutations trigger an auto-reload of affected agents instead of
 requiring a manual restart:
 
 | Endpoint | Reload |
@@ -865,6 +934,7 @@ requiring a manual restart:
 | `PUT /api/agents/:id/plugins/:pid/config` | `reloadPlugin(id, pid)` (plugin bounce only) |
 | `PUT /api/secrets` | `reloadAgent(aid)` for every agent named in the body |
 | `PUT /api/models` | `reloadAgent(aid)` for every running agent whose `model.provider` matches a touched provider |
+| OAuth login success / `DELETE /api/models/oauth/:provider` | same per-provider reload as `PUT /api/models` |
 | `PUT /api/harness` | `reloadAgent(aid)` for every loaded agent (timezone is captured at runner construction and in plugin contexts) |
 
 `reloadAgent` waits for active batches to drain before swapping (zero

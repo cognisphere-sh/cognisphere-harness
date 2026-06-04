@@ -9,10 +9,12 @@ import type { CredField, ProviderCatalogEntry } from "./types.js";
  * models agents may select; custom model IDs not in the curated list
  * can be appended via the UI.
  *
- * Out of scope for v0: OAuth subscription auth (Claude Pro/Max, ChatGPT
- * Codex, GitHub Copilot). The `anthropic` entry below covers the
- * `ANTHROPIC_API_KEY` path; Pro/Max OAuth lands later. Bedrock / Vertex
- * / Azure / Cloudflare are in scope as multi-cred providers.
+ * OAuth subscription auth: entries with `oauth: true` (Anthropic
+ * Claude Pro/Max, OpenAI Codex) support browser sign-in from the Models
+ * page in addition to (or instead of) API keys — see `oauth-logins.ts`.
+ * GitHub Copilot OAuth exists in pi-ai but has no catalog entry yet.
+ * Bedrock / Vertex / Azure / Cloudflare are in scope as multi-cred
+ * providers.
  *
  * SOURCE OF TRUTH for provider IDs and env-var names:
  *   temp/pi-mono/packages/ai/src/types.ts (KnownProvider union)
@@ -82,6 +84,9 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     id: "anthropic",
     displayName: "Anthropic",
     credentials: apiKeyOnly("ANTHROPIC_API_KEY"),
+    oauth: true,
+    notes:
+      "API key or Claude Pro/Max subscription OAuth. When both are set, pi prefers the OAuth credential.",
     models: [
       "claude-opus-4-7",
       "claude-opus-4-6",
@@ -107,6 +112,22 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
       "o4-mini",
       "o3",
       "o3-mini",
+    ],
+  },
+  {
+    id: "openai-codex",
+    displayName: "OpenAI Codex",
+    credentials: [],
+    oauth: true,
+    notes:
+      "ChatGPT Plus/Pro subscription via OAuth — no API key. Sign in below.",
+    models: [
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex",
+      "gpt-5.3-codex-spark",
+      "gpt-5.2",
     ],
   },
   {

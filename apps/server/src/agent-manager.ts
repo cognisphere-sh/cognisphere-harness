@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { Ajv, type ErrorObject } from "ajv";
 import type { ServerConfig } from "./config.js";
 import { agentDir, agentsRoot, secretsRoot } from "./config.js";
@@ -682,7 +683,14 @@ function resolveAndValidateProvider(
   if (!providerId) return {};
   const entry = findProviderInCatalog(providerId);
   if (!entry) return {};
-  const cfg = models.getProvider(providerId);
+  // Subscription OAuth (tokens in pi's own auth.json) substitutes for
+  // models.json credentials — pi children resolve auth.json themselves,
+  // so nothing extra is injected; only the model allowlist still applies.
+  const oauthConnected =
+    entry.oauth === true && AuthStorage.create().has(providerId);
+  const cfg =
+    models.getProvider(providerId) ??
+    (oauthConnected ? { credentials: {}, enabledModels: [] } : undefined);
   const modelId = agentJson.model?.id;
 
   if (!cfg) {
@@ -707,7 +715,7 @@ function resolveAndValidateProvider(
         return typeof v !== "string" || v.length === 0;
       })
       .map((f) => f.label);
-    if (missing.length > 0) {
+    if (missing.length > 0 && !oauthConnected) {
       throw new Error(
         `agent ${agentId}: provider ${providerId} is missing required credentials: ${missing.join(", ")} (set them in Models settings)`,
       );

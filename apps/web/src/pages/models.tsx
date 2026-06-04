@@ -3,10 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft,
+  ExternalLink,
   Eye,
   EyeOff,
   KeyRound,
   Loader2,
+  LogIn,
+  LogOut,
   Plus,
   RotateCcw,
   Save,
@@ -78,7 +81,9 @@ export function ModelsPage() {
                 <CardTitle className="text-sm">Plaintext storage</CardTitle>
                 <CardDescription className="mt-1">
                   Provider credentials are stored unencrypted at{" "}
-                  <code>{data.path}</code>. v1 will encrypt at rest.
+                  <code>{data.path}</code>. v1 will encrypt at rest. OAuth
+                  subscription tokens are stored separately in pi&apos;s own{" "}
+                  <code>~/.pi/agent/auth.json</code>.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -137,6 +142,8 @@ function ProviderCard({
 
   // Effective values after applying draft, used for the configured-after-save check.
   const requiredOk = useMemo(() => {
+    // Subscription OAuth substitutes for required credential fields.
+    if (provider.oauth?.connected) return true;
     for (const f of provider.credentials) {
       if (!f.required) continue;
       const drafted = draft.credentials[f.key];
@@ -150,7 +157,12 @@ function ProviderCard({
       if (current.length === 0) return false;
     }
     return true;
-  }, [provider.credentials, provider.credentialValues, draft.credentials]);
+  }, [
+    provider.credentials,
+    provider.credentialValues,
+    provider.oauth,
+    draft.credentials,
+  ]);
 
   const save = useMutation({
     mutationFn: (body: PutModelsBody) => endpoints.putModels(body),
@@ -272,29 +284,33 @@ function ProviderCard({
       </CardHeader>
       <Separator />
       <div className="grid gap-5 p-4">
-        <div>
-          <div className="mb-2 flex items-center gap-2">
-            <KeyRound className="size-3.5 text-primary/60" />
-            <h3 className="text-sm font-medium">Credentials</h3>
-            {!requiredOk && (
-              <span className="text-[11px] text-warning">
-                required field(s) missing
-              </span>
-            )}
+        {provider.oauth?.supported && <OAuthSection provider={provider} />}
+
+        {provider.credentials.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-center gap-2">
+              <KeyRound className="size-3.5 text-primary/60" />
+              <h3 className="text-sm font-medium">Credentials</h3>
+              {!requiredOk && (
+                <span className="text-[11px] text-warning">
+                  required field(s) missing
+                </span>
+              )}
+            </div>
+            <div className="grid gap-3">
+              {provider.credentials.map((field) => (
+                <CredentialField
+                  key={field.key}
+                  field={field}
+                  serverValue={provider.credentialValues[field.key] ?? ""}
+                  draftValue={draft.credentials[field.key]}
+                  mask={mask}
+                  onChange={(v) => setField(field.key, v)}
+                />
+              ))}
+            </div>
           </div>
-          <div className="grid gap-3">
-            {provider.credentials.map((field) => (
-              <CredentialField
-                key={field.key}
-                field={field}
-                serverValue={provider.credentialValues[field.key] ?? ""}
-                draftValue={draft.credentials[field.key]}
-                mask={mask}
-                onChange={(v) => setField(field.key, v)}
-              />
-            ))}
-          </div>
-        </div>
+        )}
 
         <Separator />
 
@@ -386,6 +402,188 @@ function ProviderCard({
         </div>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Subscription OAuth sign-in (e.g. Claude Pro/Max, ChatGPT Codex).
+ * The server drives pi's login flow; tokens land in pi's own auth.json.
+ * If the harness runs on the same machine as the browser, the localhost
+ * OAuth callback completes the flow automatically — otherwise the
+ * operator pastes the final redirect URL into the input below.
+ */
+function OAuthSection({ provider }: { provider: ProviderInfo }) {
+  const qc = useQueryClient();
+  const [active, setActive] = useState(false);
+  const [pasteValue, setPasteValue] = useState("");
+
+  const status = useQuery({
+    queryKey: ["oauth-status", provider.id],
+    queryFn: () => endpoints.getOauthStatus(provider.id),
+    enabled: active,
+    refetchInterval: (q) =>
+      q.state.data?.state === "pending" ? 1000 : false,
+  });
+  const flow = status.data;
+
+  // Terminal states: success refreshes the page data; error stays visible.
+  useEffect(() => {
+    if (!active || flow?.state !== "success") return;
+    setActive(false);
+    setPasteValue("");
+    toast.success("signed in · agents using this provider reloaded");
+    qc.invalidateQueries({ queryKey: ["models"] });
+    qc.invalidateQueries({ queryKey: ["agents"] });
+    qc.invalidateQueries({ queryKey: ["agent"] });
+  }, [active, flow?.state, qc]);
+
+  const start = useMutation({
+    mutationFn: () => endpoints.startOauthLogin(provider.id),
+    onSuccess: (data) => {
+      setActive(true);
+      if (data.url) window.open(data.url, "_blank", "noopener");
+    },
+    onError: (e: Error) => toast.error(`sign-in failed to start: ${e.message}`),
+  });
+
+  const submit = useMutation({
+    mutationFn: () => endpoints.submitOauthInput(provider.id, pasteValue.trim()),
+    onSuccess: () => setPasteValue(""),
+    onError: (e: Error) => toast.error(`submit failed: ${e.message}`),
+  });
+
+  const cancel = useMutation({
+    mutationFn: () => endpoints.cancelOauthLogin(provider.id),
+    onSuccess: () => setActive(false),
+  });
+
+  const signOut = useMutation({
+    mutationFn: () => endpoints.oauthLogout(provider.id),
+    onSuccess: () => {
+      toast.success("signed out · agents using this provider reloaded");
+      qc.invalidateQueries({ queryKey: ["models"] });
+      qc.invalidateQueries({ queryKey: ["agents"] });
+      qc.invalidateQueries({ queryKey: ["agent"] });
+    },
+    onError: (e: Error) => toast.error(`sign-out failed: ${e.message}`),
+  });
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2">
+        <LogIn className="size-3.5 text-primary/60" />
+        <h3 className="text-sm font-medium">Subscription sign-in</h3>
+        {provider.oauth?.connected && (
+          <Badge variant="secondary">OAuth connected</Badge>
+        )}
+      </div>
+      {provider.oauth?.connected ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-[11px] text-muted-foreground">
+            Tokens are stored in pi&apos;s <code>auth.json</code> and
+            auto-refreshed. OAuth takes precedence over an API key.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => signOut.mutate()}
+            disabled={signOut.isPending}
+          >
+            {signOut.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <LogOut className="size-3.5" />
+            )}
+            Sign out
+          </Button>
+        </div>
+      ) : !active ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => start.mutate()}
+          disabled={start.isPending}
+        >
+          {start.isPending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <LogIn className="size-3.5" />
+          )}
+          Sign in with {provider.displayName}
+        </Button>
+      ) : (
+        <div className="grid gap-2 rounded-md border bg-accent/20 p-3">
+          {flow?.state === "error" ? (
+            <p className="text-xs text-destructive">{flow.message}</p>
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              waiting for sign-in to complete…
+            </div>
+          )}
+          {flow?.instructions && (
+            <p className="text-[11px] text-muted-foreground">
+              {flow.instructions}
+            </p>
+          )}
+          {flow?.url && (
+            <a
+              href={flow.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            >
+              <ExternalLink className="size-3" />
+              open sign-in page
+            </a>
+          )}
+          {flow?.state === "pending" && (
+            <div className="flex items-center gap-1">
+              <Input
+                value={pasteValue}
+                onChange={(e) => setPasteValue(e.target.value)}
+                placeholder="paste the redirect URL or authorization code"
+                className="font-mono text-xs"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && pasteValue.trim()) {
+                    e.preventDefault();
+                    submit.mutate();
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => submit.mutate()}
+                disabled={!pasteValue.trim() || submit.isPending}
+              >
+                {submit.isPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  "Submit"
+                )}
+              </Button>
+            </div>
+          )}
+          <div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-[11px] text-muted-foreground"
+              onClick={() =>
+                flow?.state === "error" ? setActive(false) : cancel.mutate()
+              }
+            >
+              {flow?.state === "error" ? "Dismiss" : "Cancel"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

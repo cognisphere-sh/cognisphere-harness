@@ -323,11 +323,20 @@ export interface ProviderInfo {
   credentials: CredField[];
   /** Per-field current value: secrets shown as MASK if set / "" if unset; non-secrets shown plain. */
   credentialValues: Record<string, string>;
-  /** All required fields populated. */
+  /** All required fields populated (or subscription OAuth connected). */
   configured: boolean;
   catalogModels: string[];
   enabledModels: string[];
   notes?: string;
+  /** Present only for providers with subscription OAuth support. */
+  oauth?: { supported: true; connected: boolean };
+}
+
+export interface OAuthLoginState {
+  state: "idle" | "pending" | "success" | "error";
+  url?: string;
+  instructions?: string;
+  message?: string;
 }
 
 export interface ModelsView {
@@ -472,6 +481,17 @@ export const endpoints = {
   getModels: () => api.get<ModelsView>("/api/models"),
   putModels: (body: PutModelsBody) =>
     api.put<{ ok: true; restartRequired: boolean }>("/api/models", body),
+
+  startOauthLogin: (provider: string) =>
+    api.post<OAuthLoginState>(`/api/models/oauth/${provider}/login`),
+  submitOauthInput: (provider: string, value: string) =>
+    api.post<{ ok: true }>(`/api/models/oauth/${provider}/input`, { value }),
+  cancelOauthLogin: (provider: string) =>
+    api.post<{ ok: true }>(`/api/models/oauth/${provider}/cancel`),
+  getOauthStatus: (provider: string) =>
+    api.get<OAuthLoginState>(`/api/models/oauth/${provider}/status`),
+  oauthLogout: (provider: string) =>
+    api.delete<{ ok: true; restarted: string[] }>(`/api/models/oauth/${provider}`),
 
   getHarness: () => api.get<HarnessSettings>("/api/harness"),
   putHarness: (body: { timezone: string }) =>
