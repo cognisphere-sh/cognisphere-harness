@@ -355,16 +355,31 @@ injection. pi's credential priority is auth.json (api_key, then OAuth)
 precedence over an `ANTHROPIC_API_KEY` from models.json.
 
 **Flow:** `start(providerId)` runs `AuthStorage.login()` in the
-background with pi-ai's `OAuthLoginCallbacks` and resolves once
-`onAuth` delivers the provider's authorize URL. The browser opens the
-URL; either the provider's localhost callback server (fixed port,
-e.g. 53692 for Anthropic) completes the flow — works when the harness
-runs on the operator's machine — or the operator pastes the final
-redirect URL back (`submitInput`, wired to `onManualCodeInput` /
-`onPrompt`). One pending login per provider (the callback port is
-fixed); `start` cancels any prior pending flow. On success/logout the
-models router reloads running agents using the provider, same as
-`PUT /api/models`.
+background with pi-ai's `OAuthLoginCallbacks` and resolves once the
+flow surfaces its first interaction. The callbacks map onto the
+polled status (`/api/models/oauth/:provider/status`) like so:
+
+- `onAuth` → `url` + `instructions`. The browser opens the URL; either
+  the provider's localhost callback server (fixed port, e.g. 53692 for
+  Anthropic, 1455 for Codex) completes the flow — works when the
+  harness runs on the operator's machine — or the operator pastes the
+  final redirect URL back (`submitInput(kind: "text")`, wired to
+  `onManualCodeInput` / `onPrompt`).
+- `onSelect` → `select` (e.g. Codex: browser vs device-code login),
+  answered via `submitInput(kind: "select")` with an option id;
+  cancel resolves it with `undefined` (the provider treats that as a
+  user cancel).
+- `onDeviceCode` → `deviceCode` (`userCode` + `verificationUri`); the
+  operator enters the code in a browser while pi-ai polls the token
+  endpoint (abortable via the entry's `AbortController`). This is the
+  path of choice when the harness is hosted remotely — no localhost
+  callback involved.
+- `onPrompt` → `prompt` (free-text question), answered via
+  `submitInput(kind: "text")`.
+
+One pending login per provider (the callback port is fixed); `start`
+cancels any prior pending flow. On success/logout the models router
+reloads running agents using the provider, same as `PUT /api/models`.
 
 ### 4.6 AgentDb — `queue.ts`
 

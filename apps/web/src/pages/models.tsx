@@ -447,7 +447,8 @@ function OAuthSection({ provider }: { provider: ProviderInfo }) {
   });
 
   const submit = useMutation({
-    mutationFn: () => endpoints.submitOauthInput(provider.id, pasteValue.trim()),
+    mutationFn: ({ value, kind }: { value: string; kind: "text" | "select" }) =>
+      endpoints.submitOauthInput(provider.id, value, kind),
     onSuccess: () => setPasteValue(""),
     onError: (e: Error) => toast.error(`submit failed: ${e.message}`),
   });
@@ -523,6 +524,44 @@ function OAuthSection({ provider }: { provider: ProviderInfo }) {
               waiting for sign-in to complete…
             </div>
           )}
+          {flow?.state === "pending" && flow.select && (
+            <div className="grid gap-1.5">
+              <p className="text-xs">{flow.select.message}</p>
+              <div className="flex flex-wrap gap-2">
+                {flow.select.options.map((o) => (
+                  <Button
+                    key={o.id}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => submit.mutate({ value: o.id, kind: "select" })}
+                    disabled={submit.isPending}
+                  >
+                    {o.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+          {flow?.state === "pending" && flow.deviceCode && (
+            <div className="grid gap-1">
+              <p className="text-xs">
+                Open the verification page and enter this code:
+              </p>
+              <code className="w-fit rounded-md border bg-secondary px-2 py-1 font-mono text-sm tracking-widest">
+                {flow.deviceCode.userCode}
+              </code>
+              <a
+                href={flow.deviceCode.verificationUri}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <ExternalLink className="size-3" />
+                {flow.deviceCode.verificationUri}
+              </a>
+            </div>
+          )}
           {flow?.instructions && (
             <p className="text-[11px] text-muted-foreground">
               {flow.instructions}
@@ -539,33 +578,44 @@ function OAuthSection({ provider }: { provider: ProviderInfo }) {
               open sign-in page
             </a>
           )}
-          {flow?.state === "pending" && (
-            <div className="flex items-center gap-1">
-              <Input
-                value={pasteValue}
-                onChange={(e) => setPasteValue(e.target.value)}
-                placeholder="paste the redirect URL or authorization code"
-                className="font-mono text-xs"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && pasteValue.trim()) {
-                    e.preventDefault();
-                    submit.mutate();
+          {flow?.state === "pending" && !flow.select && !flow.deviceCode && (
+            <div className="grid gap-1">
+              <p className="text-[11px] text-muted-foreground">
+                {flow.prompt?.message ??
+                  "If this harness runs on a different machine than your browser, the final redirect will land on a localhost URL that fails to load — copy that URL from the address bar and paste it here."}
+              </p>
+              <div className="flex items-center gap-1">
+                <Input
+                  value={pasteValue}
+                  onChange={(e) => setPasteValue(e.target.value)}
+                  placeholder={
+                    flow.prompt?.placeholder ??
+                    "http://localhost:…/callback?code=…&state=…"
                   }
-                }}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => submit.mutate()}
-                disabled={!pasteValue.trim() || submit.isPending}
-              >
-                {submit.isPending ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  "Submit"
-                )}
-              </Button>
+                  className="font-mono text-xs"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && pasteValue.trim()) {
+                      e.preventDefault();
+                      submit.mutate({ value: pasteValue.trim(), kind: "text" });
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    submit.mutate({ value: pasteValue.trim(), kind: "text" })
+                  }
+                  disabled={!pasteValue.trim() || submit.isPending}
+                >
+                  {submit.isPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    "Submit"
+                  )}
+                </Button>
+              </div>
             </div>
           )}
           <div>

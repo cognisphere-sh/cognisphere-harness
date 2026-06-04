@@ -169,11 +169,13 @@ export function modelsRouter(
     const providerId = c.req.param("provider");
     const body = (await c.req.json().catch(() => null)) as {
       value?: string;
+      kind?: string;
     } | null;
     if (!body || typeof body.value !== "string" || body.value.length === 0) {
-      return c.json({ error: "expected { value: string }" }, 400);
+      return c.json({ error: "expected { value: string, kind?: 'text'|'select' }" }, 400);
     }
-    if (!oauth.submitInput(providerId, body.value)) {
+    const kind = body.kind === "select" ? "select" : "text";
+    if (!oauth.submitInput(providerId, body.value, kind)) {
       return c.json({ error: "no pending login awaiting input" }, 409);
     }
     return c.json({ ok: true });

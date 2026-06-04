@@ -336,6 +336,12 @@ export interface OAuthLoginState {
   state: "idle" | "pending" | "success" | "error";
   url?: string;
   instructions?: string;
+  /** Outstanding choice (e.g. Codex: browser vs device-code login). */
+  select?: { message: string; options: { id: string; label: string }[] };
+  /** Device-code flow: show this code + verification URL to the operator. */
+  deviceCode?: { userCode: string; verificationUri: string };
+  /** Outstanding free-text prompt beyond the default redirect-URL paste. */
+  prompt?: { message: string; placeholder?: string };
   message?: string;
 }
 
@@ -484,8 +490,8 @@ export const endpoints = {
 
   startOauthLogin: (provider: string) =>
     api.post<OAuthLoginState>(`/api/models/oauth/${provider}/login`),
-  submitOauthInput: (provider: string, value: string) =>
-    api.post<{ ok: true }>(`/api/models/oauth/${provider}/input`, { value }),
+  submitOauthInput: (provider: string, value: string, kind: "text" | "select" = "text") =>
+    api.post<{ ok: true }>(`/api/models/oauth/${provider}/input`, { value, kind }),
   cancelOauthLogin: (provider: string) =>
     api.post<{ ok: true }>(`/api/models/oauth/${provider}/cancel`),
   getOauthStatus: (provider: string) =>

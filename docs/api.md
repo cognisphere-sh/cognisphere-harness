@@ -721,33 +721,50 @@ with `oauth: true`, else 404.
 #### `POST /api/models/oauth/:provider/login`
 
 Starts (or restarts — any pending flow for the provider is cancelled
-first) a login flow. Resolves once the provider's auth URL is known:
+first) a login flow. Resolves once the flow surfaces its first
+interaction:
 
 ```json
 { "state": "pending", "url": "https://claude.ai/oauth/authorize?...", "instructions": "..." }
 ```
 
-The client opens `url` in a new tab. If the harness server runs on the
-same machine as the browser, the provider's localhost callback server
-(fixed port, e.g. 53692 for Anthropic) completes the flow
-automatically. Otherwise the operator pastes the final redirect URL via
-the `input` route.
+The pending shape can carry any of (all optional, provider/step
+dependent):
+
+- `url` + `instructions` — authorize URL to open in a new tab. If the
+  harness server runs on the same machine as the browser, the
+  provider's localhost callback server (fixed port, e.g. 53692 for
+  Anthropic, 1455 for Codex) completes the flow automatically.
+  Otherwise the operator pastes the final redirect URL via the `input`
+  route.
+- `select` — `{ message, options: [{ id, label }] }`, an outstanding
+  choice (e.g. Codex: "Browser login" vs "Device code login"). Answer
+  via `input` with `kind: "select"`. Device-code login is the right
+  pick when the harness is hosted remotely — no localhost callback
+  involved.
+- `deviceCode` — `{ userCode, verificationUri }`, shown to the
+  operator who enters the code at the verification URL; the server
+  polls until authorized. No input needed.
+- `prompt` — `{ message, placeholder? }`, an outstanding free-text
+  question. Answer via `input` with `kind: "text"`.
 
 #### `POST /api/models/oauth/:provider/input`
 
 ```json
-{ "value": "<redirect URL or authorization code>" }
+{ "value": "<redirect URL, code, or select option id>", "kind": "text" | "select" }
 ```
 
-Feeds pasted input into the pending flow. 400 if `value` is missing,
-409 if no pending login is awaiting input.
+Feeds operator input into the pending flow. `kind` defaults to
+`"text"` (redirect-URL paste / prompt answer); `"select"` answers an
+outstanding `select` with an option id. 400 if `value` is missing,
+409 if no pending login is awaiting that kind of input.
 
 #### `GET /api/models/oauth/:provider/status`
 
 Poll while a flow is pending:
 
 ```json
-{ "state": "idle" | "pending" | "success" | "error", "url": "...", "instructions": "...", "message": "<error only>" }
+{ "state": "idle" | "pending" | "success" | "error", "url": "...", "instructions": "...", "select": {...}, "deviceCode": {...}, "prompt": {...}, "message": "<error only>" }
 ```
 
 `success`/`error` are the last terminal outcome, cleared on the next

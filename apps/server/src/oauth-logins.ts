@@ -15,29 +15,63 @@
  * auth.json with zero changes to credential injection.
  *
  * Flow shape (pi-ai's `OAuthLoginCallbacks`): `login()` starts the
- * provider flow in the background and resolves once the auth URL is
- * known. The browser opens the URL; either the provider's localhost
- * callback server completes the flow (harness on the same machine as
- * the browser), or the operator pastes the final redirect URL /
- * authorization code back via `submitInput()`. One pending login per
- * provider — the callback server binds a fixed port.
+ * provider flow in the background and resolves once the flow surfaces
+ * its first interaction — an auth URL (`onAuth`), a login-method
+ * selector (`onSelect`, e.g. Codex browser vs device-code), a device
+ * code to display (`onDeviceCode`), or a text prompt (`onPrompt`).
+ * Each is exposed via `status()` for the web UI to render; answers
+ * come back through `submitInput()`. For callback-server flows, either
+ * the provider's localhost callback completes the flow (harness on the
+ * same machine as the browser) or the operator pastes the final
+ * redirect URL. One pending login per provider — the callback server
+ * binds a fixed port.
  */
 
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "./logger.js";
 
+export interface OAuthSelectInfo {
+  message: string;
+  options: { id: string; label: string }[];
+}
+
+export interface OAuthDeviceCodeDisplay {
+  userCode: string;
+  verificationUri: string;
+}
+
+export interface OAuthPromptInfo {
+  message: string;
+  placeholder?: string;
+}
+
 export type OAuthLoginState =
   | { state: "idle" }
-  | { state: "pending"; url?: string; instructions?: string }
+  | {
+      state: "pending";
+      url?: string;
+      instructions?: string;
+      /** Outstanding choice (e.g. Codex: browser vs device-code login). */
+      select?: OAuthSelectInfo;
+      /** Device-code flow: show this code + verification URL to the operator. */
+      deviceCode?: OAuthDeviceCodeDisplay;
+      /** Outstanding free-text prompt beyond the default redirect-URL paste. */
+      prompt?: OAuthPromptInfo;
+    }
   | { state: "success" }
   | { state: "error"; message: string };
 
 interface PendingLogin {
   url?: string;
   instructions?: string;
-  /** Resolves the outstanding onPrompt/onManualCodeInput waiter, if any. */
-  submitInput?: (input: string) => void;
-  rejectInput?: (err: Error) => void;
+  select?: OAuthSelectInfo;
+  deviceCode?: OAuthDeviceCodeDisplay;
+  prompt?: OAuthPromptInfo;
+  /** Resolves the outstanding onPrompt/onManualCodeInput text waiter, if any. */
+  submitText?: (input: string) => void;
+  rejectText?: (err: Error) => void;
+  /** Resolves the outstanding onSelect waiter, if any (undefined = cancel). */
+  submitSelect?: (optionId: string | undefined) => void;
   abort: AbortController;
   /** Settles when the underlying provider flow settles (never rejects). */
   settled: Promise<void>;
@@ -70,15 +104,25 @@ export class OAuthLoginManager {
 
   status(providerId: string): OAuthLoginState {
     const p = this.pending.get(providerId);
-    if (p) return { state: "pending", url: p.url, instructions: p.instructions };
+    if (p) {
+      return {
+        state: "pending",
+        url: p.url,
+        instructions: p.instructions,
+        select: p.select,
+        deviceCode: p.deviceCode,
+        prompt: p.prompt,
+      };
+    }
     return this.results.get(providerId) ?? { state: "idle" };
   }
 
   /**
    * Start (or restart) a login flow. Cancels any pending flow for the
    * provider first — the provider's callback server binds a fixed port,
-   * so two flows can't coexist. Resolves once the auth URL is available
-   * (or the flow failed even earlier).
+   * so two flows can't coexist. Resolves once the flow surfaces its
+   * first interaction (auth URL / selector / device code / prompt) or
+   * fails even earlier.
    */
   async start(providerId: string): Promise<OAuthLoginState> {
     await this.cancel(providerId);
@@ -88,9 +132,9 @@ export class OAuthLoginManager {
       abort: new AbortController(),
       settled: Promise.resolve(),
     };
-    let urlReady!: () => void;
-    const urlPromise = new Promise<void>((resolve) => {
-      urlReady = resolve;
+    let surfaced!: () => void;
+    const surfacedPromise = new Promise<void>((resolve) => {
+      surfaced = resolve;
     });
 
     const auth = AuthStorage.create();
@@ -99,10 +143,38 @@ export class OAuthLoginManager {
         onAuth: (info) => {
           entry.url = info.url;
           entry.instructions = info.instructions;
-          urlReady();
+          surfaced();
         },
-        onPrompt: () => this.waitForInput(entry),
-        onManualCodeInput: () => this.waitForInput(entry),
+        onSelect: (prompt) => {
+          entry.select = {
+            message: prompt.message,
+            options: prompt.options.map((o) => ({ id: o.id, label: o.label })),
+          };
+          surfaced();
+          return new Promise<string | undefined>((resolve) => {
+            entry.submitSelect = (optionId) => {
+              entry.select = undefined;
+              entry.submitSelect = undefined;
+              resolve(optionId);
+            };
+          });
+        },
+        onDeviceCode: (info) => {
+          entry.deviceCode = {
+            userCode: info.userCode,
+            verificationUri: info.verificationUri,
+          };
+          surfaced();
+        },
+        onPrompt: (prompt) => {
+          entry.prompt = {
+            message: prompt.message,
+            placeholder: prompt.placeholder,
+          };
+          surfaced();
+          return this.waitForText(entry);
+        },
+        onManualCodeInput: () => this.waitForText(entry),
         onProgress: (message) =>
           this.log.info({ providerId, message }, "oauth login progress"),
         signal: entry.abort.signal,
@@ -118,22 +190,37 @@ export class OAuthLoginManager {
         this.log.warn({ providerId, err }, "oauth login failed");
       })
       .finally(() => {
-        urlReady(); // unblock start() if the flow died before onAuth
+        surfaced(); // unblock start() if the flow died before any interaction
         this.pending.delete(providerId);
       });
     this.pending.set(providerId, entry);
 
-    await urlPromise;
+    await surfacedPromise;
     return this.status(providerId);
   }
 
-  /** Feed a pasted redirect URL / authorization code into the pending flow. */
-  submitInput(providerId: string, input: string): boolean {
+  /**
+   * Feed operator input into the pending flow. `kind: "select"` answers
+   * an outstanding selector with an option id; `kind: "text"` (default)
+   * answers a prompt / pastes a redirect URL or authorization code.
+   */
+  submitInput(
+    providerId: string,
+    input: string,
+    kind: "text" | "select" = "text",
+  ): boolean {
     const entry = this.pending.get(providerId);
-    if (!entry?.submitInput) return false;
-    entry.submitInput(input);
-    entry.submitInput = undefined;
-    entry.rejectInput = undefined;
+    if (!entry) return false;
+    if (kind === "select") {
+      if (!entry.submitSelect) return false;
+      entry.submitSelect(input);
+      return true;
+    }
+    if (!entry.submitText) return false;
+    entry.prompt = undefined;
+    entry.submitText(input);
+    entry.submitText = undefined;
+    entry.rejectText = undefined;
     return true;
   }
 
@@ -141,7 +228,8 @@ export class OAuthLoginManager {
   async cancel(providerId: string): Promise<void> {
     const entry = this.pending.get(providerId);
     if (!entry) return;
-    entry.rejectInput?.(new Error("login cancelled"));
+    entry.submitSelect?.(undefined); // provider treats undefined as cancel
+    entry.rejectText?.(new Error("login cancelled"));
     entry.abort.abort();
     await entry.settled;
     this.results.delete(providerId); // a cancel is not an error worth surfacing
@@ -153,10 +241,10 @@ export class OAuthLoginManager {
     this.results.delete(providerId);
   }
 
-  private waitForInput(entry: PendingLogin): Promise<string> {
+  private waitForText(entry: PendingLogin): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      entry.submitInput = resolve;
-      entry.rejectInput = reject;
+      entry.submitText = resolve;
+      entry.rejectText = reject;
     });
   }
 }
