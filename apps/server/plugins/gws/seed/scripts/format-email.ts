@@ -61,7 +61,7 @@ export async function formatEmail(
   msg: GmailMessage,
   opts: FormatEmailOptions,
 ): Promise<FormattedEmail> {
-  const body = stripQuotedHistory(pickTextBody(msg.payload));
+  const body = pickTextBody(msg.payload);
   const attParts = collectAttachments(msg.payload);
   const attachments: FormattedAttachment[] = [];
 
@@ -108,58 +108,6 @@ export function collectHeaders(part: GmailPart): Map<string, string> {
   const m = new Map<string, string>();
   for (const h of part.headers ?? []) m.set(h.name.toLowerCase(), h.value);
   return m;
-}
-
-/** Trim quoted/forwarded thread history from a reply body, leaving only the
- *  latest message (plus its signature). Truncates at the earliest of several
- *  well-known boundary markers emitted by Gmail, Apple Mail, and Outlook. If
- *  no marker matches, the body is returned unchanged.
- *
- *  Reply markers (`On … wrote:`, Outlook `From:/Sent:`) sit ABOVE quoted
- *  history, so the wanted text is what precedes them — always cut there.
- *  Forward markers (`Begin forwarded message:`, `---------- Forwarded
- *  message ----------`) are different: the forwarded payload BELOW the marker
- *  is the message. Cutting there would drop the whole point of the email, so a
- *  forward marker is honored only when a substantial body precedes it — i.e. a
- *  long reply that happens to quote a forwarded chain underneath. A bare
- *  forward, or one with a short cover note, keeps its payload intact. */
-export function stripQuotedHistory(body: string): string {
-  // Normalize CRLF/CR to LF first: Gmail bodies arrive with `\r\n`, which
-  // defeats markers anchored on a trailing `\n` (the `\r` sits between
-  // `wrote:` and the newline).
-  body = body.replace(/\r\n?/g, "\n");
-  const replyMarkers: RegExp[] = [
-    /\nOn [\s\S]{1,300}?wrote:[ \t]*\n/,
-    /\nFrom: [^\n]{1,300}\nSent: /i,
-    /\nFrom: [^\n]{1,300}\nDate: [^\n]{1,300}\nSubject: /i,
-    /\n_{5,}\s*\nFrom: /i,
-  ];
-  const forwardMarkers: RegExp[] = [
-    /\nBegin forwarded message:/i,
-    /\n-{2,}\s*Forwarded message\s*-{2,}/i,
-  ];
-  // A reply long enough to bury a forwarded chain runs well past a typical
-  // cover note (usually a sentence or two). Below this, assume the marker
-  // begins the forwarded payload and keep everything.
-  const FORWARD_PREAMBLE_MIN = 800;
-
-  let cut = body.length;
-  for (const re of replyMarkers) {
-    const m = body.match(re);
-    if (m && m.index !== undefined && m.index < cut) cut = m.index;
-  }
-  for (const re of forwardMarkers) {
-    const m = body.match(re);
-    if (
-      m &&
-      m.index !== undefined &&
-      m.index < cut &&
-      body.slice(0, m.index).trim().length >= FORWARD_PREAMBLE_MIN
-    ) {
-      cut = m.index;
-    }
-  }
-  return body.slice(0, cut).trimEnd();
 }
 
 export function pickTextBody(part: GmailPart): string {

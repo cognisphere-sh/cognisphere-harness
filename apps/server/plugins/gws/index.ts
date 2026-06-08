@@ -17,7 +17,6 @@ import {
 
 const execFileP = promisify(execFile);
 const UNREAD_LABEL = "UNREAD";
-const SENT_LABEL = "SENT";
 const LEDGER_FILE = "ingested-threads.jsonl";
 
 interface GwsConfig {
@@ -36,12 +35,15 @@ interface GmailThread {
 }
 
 /**
- * Polls Gmail through the `gws` CLI and emits one notification per inbound
- * message. Messages where the agent's own email is in the `To` header
- * deliver headers + body + attachment paths and wake the agent. Messages
- * where the agent is only in `Cc`/`Bcc` deliver headers only and are
- * marked `isSilent: true` so they park behind a future addressed message in
- * the same harness thread, supplying context without a standalone wake.
+ * Polls Gmail through the `gws` CLI. For each matching thread it looks only
+ * at the most recent message: if the agent's own email is in that message's
+ * `To` header it delivers headers + body + attachment paths and wakes the
+ * agent; otherwise nothing is emitted. Older messages in the thread are
+ * never re-emitted. Every unread message in a handled thread is marked read
+ * so the poll query stops re-matching it.
+ *
+ * (Backlog mode — `firstOfThreadOnly` — instead emits every message in a
+ * matching thread, waking only on the first.)
  *
  * Threading: the harness thread id is `<Subject> [<gmailThreadId>]` — taken
  * from the first message of the Gmail thread so a later `Re: …` rewrite
@@ -332,32 +334,20 @@ export default class GwsPlugin implements Plugin {
 
     // Backlog mode: deliver every message in the thread, most-recent first
     // so the chronologically-first message (the only one that wakes the
-    // agent) is emitted last. The ledger append after the loop then lands
-    // immediately after that wake notification.
+    // agent) is emitted last. Default mode: consider only the most recent
+    // message and wake only when it is unread and the agent's address is in
+    // its `To` — older messages are never re-emitted.
     let toEmit: GmailMessage[];
     if (this.firstOfThreadOnly) {
       toEmit = [...ordered].reverse();
     } else {
-      // Boundary = most recent SENT message (an agent reply, or anything sent
-      // from this Gmail account). Everything strictly after it is new and
-      // should be delivered. If there's no SENT message, the whole thread is
-      // new and we deliver from the start.
-      let boundaryIdx = -1;
-      for (let i = ordered.length - 1; i >= 0; i--) {
-        if (hasLabel(ordered[i]!, SENT_LABEL)) {
-          boundaryIdx = i;
-          break;
-        }
-      }
-      const start = boundaryIdx === -1 ? 0 : boundaryIdx + 1;
-      if (start >= ordered.length) {
-        // Nothing new past the boundary — still mark any stray unread to keep
-        // the inbox query loop from re-firing on this thread.
-        const unread = ordered.filter((m) => hasLabel(m, UNREAD_LABEL));
-        if (unread.length > 0) await this.markRead(unread);
-        return;
-      }
-      toEmit = ordered.slice(start);
+      const last = ordered[ordered.length - 1]!;
+      const to = collectHeaders(last.payload).get("to") ?? "";
+      toEmit =
+        hasLabel(last, UNREAD_LABEL) &&
+        extractEmails(to).includes(this.agentEmail)
+          ? [last]
+          : [];
     }
 
     // Resolve every message's payload first, then emit. `formatEmail` shells
@@ -367,7 +357,6 @@ export default class GwsPlugin implements Plugin {
     // batch (and missing the steer window, which only fires once a batch is
     // streaming). Building all payloads up front keeps the emit loop below
     // free of awaits, so same-thread rows enqueue atomically and batch.
-    const unreadToMark: GmailMessage[] = [];
     const pending: Array<{
       invoked: boolean;
       text: string;
@@ -375,8 +364,6 @@ export default class GwsPlugin implements Plugin {
     }> = [];
 
     for (const m of toEmit) {
-      if (hasLabel(m, UNREAD_LABEL)) unreadToMark.push(m);
-
       const h = collectHeaders(m.payload);
       const from = h.get("from") ?? "(unknown sender)";
       const to = h.get("to") ?? "(unknown recipient)";
@@ -444,6 +431,9 @@ export default class GwsPlugin implements Plugin {
       });
     }
 
+    // Mark every unread message in the thread read so the poll query stops
+    // re-matching it, regardless of which (if any) message we emitted.
+    const unreadToMark = ordered.filter((m) => hasLabel(m, UNREAD_LABEL));
     if (unreadToMark.length > 0) await this.markRead(unreadToMark);
 
     if (this.firstOfThreadOnly) {
