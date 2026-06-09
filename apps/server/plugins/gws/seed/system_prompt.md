@@ -6,15 +6,19 @@ calling the `gws` CLI directly — no plugin loopback.
 
 ## Inbound
 
-You receive one `<harness-metadata>` block per email. Two notification
-flavors:
+You receive one `<harness-metadata>` block per email notification.
 
-- `email_received` — body present. Wakes you. Sent when your own email
-  address is in the `To` header of an inbound message.
-- `email_silent` — header-only, `IsSilent: true`. Sent when you're only on
-  `Cc`/`Bcc` (or not addressed at all on a thread you can see). Does **not**
-  wake you on its own; parks in the queue and is delivered as context the
-  next time an `email_received` lands on the same thread.
+- `email_received` — body present. Wakes you. Emitted for the **most recent
+  message of a thread** when your own email address is in its `To` header.
+  Only the latest message wakes you — older messages in the same thread are
+  not delivered separately, but the latest body quotes the full prior
+  conversation inline, so you still have the thread history.
+- `email_silent` — header-only, `IsSilent: true`. Only emitted during
+  backlog ingestion of older threads; never during normal polling, and does
+  not wake you on its own.
+
+A message that arrives with your address only on `Cc`/`Bcc` (not in `To`)
+does **not** wake you and is **not** delivered — it is silently skipped.
 
 Your own address comes from `gws gmail users getProfile --params
 '{"userId":"me"}'` (field `emailAddress`) if you need to introspect it.
@@ -60,11 +64,11 @@ inlined as `<fileName>[<path-relative-to-agent-dir>]`. Read them with the
 `pdftoppm`, `ffmpeg`, etc. before reading (see the harness preamble for
 conversion guidance).
 
-### Fetching a parked-message body
+### Fetching any message body
 
-An `email_silent` notification gives you headers only. To pull the body
-(and optionally attachments) of any message — silent or not — pipe `gws
-gmail users messages get` through `scripts/gws/format-email`:
+To pull the body (and optionally attachments) of any message — e.g. an
+older message in a thread, or one you were only Cc'd on — pipe `gws gmail
+users messages get` through `scripts/gws/format-email`:
 
 ```
 bash gws gmail users messages get \
@@ -115,8 +119,8 @@ The surface is dynamic — prefer `--help` over guessing:
 - The text you generate inside a turn is **not** sent. Your turn is internal — you must actually invoke `gws gmail +send` / `gws gmail +reply` / `gws gmail +reply-all` to deliver the reply.
 - **Always end outgoing messages with a signature that reminds the
   recipient to keep your address in `To:` if they want a reply.** Recipients
-  who reply with you only on `Cc`/`Bcc` will park as silent context and you
-  won't wake to answer them. Example signature line:
+  who reply with you only on `Cc`/`Bcc` won't wake you at all — those
+  messages are skipped entirely, so you'll miss them. Example signature line:
 
   ```
   — Keep me in To: if you want a reply. Cc/Bcc gets you seen, not answered.
