@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import type { BatchMessage } from "./types.js";
+import type { BatchMessage, RetryMode } from "./types.js";
 
 /**
  * Single-table event lifecycle: every notify() inserts one row; the row's
@@ -63,6 +63,19 @@ export interface EventRow {
   pi_entry_id: string | null;
 }
 
+/**
+ * Derive a re-dispatch {@link RetryMode} from a row's persisted state. No
+ * dedicated column: a row that was delivered to the model has its
+ * `pi_entry_id` written in real time (by the runner, from the harness-bridge
+ * extension), so its presence on a retried row means "already in pi's
+ * history → continue, don't resend".
+ */
+function deriveRetryMode(row: EventRow): RetryMode | undefined {
+  if (row.pi_entry_id != null) return "continue";
+  if (row.attempts > 0) return "resend";
+  return undefined;
+}
+
 function rowToMessage(row: EventRow): BatchMessage {
   return {
     id: row.id,
@@ -74,6 +87,7 @@ function rowToMessage(row: EventRow): BatchMessage {
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     isSilent: row.is_silent === 1,
     attempts: row.attempts,
+    retryMode: deriveRetryMode(row),
   };
 }
 
@@ -188,13 +202,29 @@ export class AgentDb {
     return null;
   }
 
-  dequeueBatch(threadId: string): BatchMessage[] {
+  /**
+   * Claim queued rows for one thread and flip them to `in_flight` in a single
+   * transaction.
+   *
+   * When `continueOnly` is true, claim only *continue* rows — those already
+   * delivered to the model on a prior batch (`pi_entry_id IS NOT NULL`). The
+   * runner sends these as their own prompt (a continuation nudge), isolated
+   * from any other work, then steers the remaining rows in. A plain call
+   * (`continueOnly = false`) claims everything still queued — i.e. resend +
+   * fresh rows — which the runner concatenates into one prompt.
+   */
+  dequeueBatch(threadId: string, continueOnly = false): BatchMessage[] {
     const txn = this.db.transaction((): BatchMessage[] => {
       const rows = this.db
         .prepare<unknown[], EventRow>(
-          `SELECT * FROM events
-           WHERE thread_id = ? AND status = 'queued'
-           ORDER BY priority DESC, id ASC`,
+          continueOnly
+            ? `SELECT * FROM events
+               WHERE thread_id = ? AND status = 'queued'
+                 AND pi_entry_id IS NOT NULL
+               ORDER BY priority DESC, id ASC`
+            : `SELECT * FROM events
+               WHERE thread_id = ? AND status = 'queued'
+               ORDER BY priority DESC, id ASC`,
         )
         .all(threadId);
       if (rows.length === 0) return [];
@@ -231,17 +261,31 @@ export class AgentDb {
   }
 
   /**
-   * Mark every id done. `sessionId` (when non-null) is written to all rows;
-   * `entryIdByRowId` writes a per-row pi entry id. The runner derives the
-   * map by reading pi's session JSONL post-batch and matching user-message
-   * entries to the dispatch order (initial concatenated batch → one shared
-   * id; each steer → its own id).
+   * Bind a row to its position in pi's session JSONL. Called by the runner in
+   * real time as the harness-bridge extension reports each user-message entry
+   * id (so the link exists even for rows whose batch later fails, and without
+   * waiting for pi to exit). COALESCE on the session id preserves a value from
+   * a prior attempt; the entry id is written outright (the latest delivery
+   * wins).
    */
-  markBatchDone(
-    ids: number[],
-    sessionId: string | null,
-    entryIdByRowId: Map<number, string>,
-  ): void {
+  setRowEntryId(rowId: number, sessionId: string, entryId: string): void {
+    this.db
+      .prepare(
+        `UPDATE events
+            SET pi_session_id = COALESCE(?, pi_session_id),
+                pi_entry_id   = ?,
+                updated_at    = ?
+          WHERE id = ?`,
+      )
+      .run(sessionId, entryId, Date.now(), rowId);
+  }
+
+  /**
+   * Mark every id done. `sessionId` (when non-null) is written to all rows.
+   * Per-row `pi_entry_id`s are no longer threaded through here — they are
+   * written in real time via {@link setRowEntryId} during the batch.
+   */
+  markBatchDone(ids: number[], sessionId: string | null): void {
     if (ids.length === 0) return;
     const now = Date.now();
     const txn = this.db.transaction(() => {
@@ -249,12 +293,11 @@ export class AgentDb {
         `UPDATE events
             SET status = 'done',
                 updated_at = ?,
-                pi_session_id = COALESCE(?, pi_session_id),
-                pi_entry_id   = COALESCE(?, pi_entry_id)
+                pi_session_id = COALESCE(?, pi_session_id)
           WHERE id = ?`,
       );
       for (const id of ids) {
-        stmt.run(now, sessionId, entryIdByRowId.get(id) ?? null, id);
+        stmt.run(now, sessionId, id);
       }
     });
     txn();
@@ -459,7 +502,11 @@ export class AgentDb {
 
   // ── DLQ-style actions on failed rows ──────────────────────
 
-  /** Reset a failed row back to queued. Returns the row id, or null if not found / not failed. */
+  /** Reset a failed row back to queued. Returns the row id, or null if not
+   *  found / not failed. `pi_entry_id` is deliberately preserved: if the row
+   *  was delivered before it dead-lettered, its text is already in pi's
+   *  session history, so the requeued attempt must continue (nudge) rather
+   *  than resend and duplicate it. Clearing it would reintroduce that bug. */
   requeueFailed(id: number): number | null {
     const info = this.db
       .prepare(
@@ -519,6 +566,9 @@ export class AgentDb {
     if (cur.status === "in_flight") return "in_flight";
     const now = Date.now();
     if (next === "queued") {
+      // `pi_entry_id` is preserved (not in the SET list) so a delivered row
+      // forced back to queued continues rather than resends — see
+      // requeueFailed for the rationale.
       this.db
         .prepare(
           `UPDATE events

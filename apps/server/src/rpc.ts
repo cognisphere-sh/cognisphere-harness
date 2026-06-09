@@ -16,13 +16,37 @@ interface ExtensionUiRequest {
   id: string;
   method: string;
   title?: string;
+  /** Present on fire-and-forget `setStatus` requests (the harness-bridge
+   *  extension uses these to report session entry ids — see {@link onHarnessEntry}). */
+  statusKey?: string;
+  statusText?: string;
+}
+
+/**
+ * Minimal shape of an entry in `agent_end.messages` / `message_start.message`.
+ * The harness only inspects the final message's `role` and (for assistants)
+ * `stopReason` / `errorMessage` to decide turn completion; the full pi message
+ * type isn't needed here.
+ */
+export interface PiMessage {
+  role?: string;
+  stopReason?: string;
+  errorMessage?: string;
+}
+
+/** Reported by the harness-bridge extension via `setStatus("pi-harness", …)`. */
+export interface HarnessEntryReport {
+  kind: "user_entry";
+  index: number;
+  entryId: string;
 }
 
 type RpcMessage =
   | RpcResponse
   | ExtensionUiRequest
   | { type: "agent_start" }
-  | { type: "agent_end"; messages?: unknown[] }
+  | { type: "agent_end"; messages?: PiMessage[] }
+  | { type: "message_start"; message?: PiMessage }
   | { type: string; [k: string]: unknown };
 
 /**
@@ -40,7 +64,9 @@ export class PiRpcClient {
     { resolve: (r: RpcResponse) => void; reject: (e: Error) => void }
   >();
   private nextId = 1;
-  private agentEndHandler: (() => void) | undefined;
+  private agentEndHandler: ((messages: PiMessage[]) => void) | undefined;
+  private userMessageStartHandler: (() => void) | undefined;
+  private harnessEntryHandler: ((report: HarnessEntryReport) => void) | undefined;
   private exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 
   constructor(child: ChildProcess, log: Logger) {
@@ -74,8 +100,24 @@ export class PiRpcClient {
     });
   }
 
-  onAgentEnd(h: () => void): void {
+  /** Fires once per run when pi's agent loop ends. Receives the run's
+   *  messages so the caller can inspect the final message's shape (role +
+   *  stopReason) to decide whether the turn completed. */
+  onAgentEnd(h: (messages: PiMessage[]) => void): void {
     this.agentEndHandler = h;
+  }
+
+  /** Fires each time pi appends a *user* message (the initial prompt and each
+   *  steer). The caller counts these in dispatch order to know which rows
+   *  actually reached the model. */
+  onUserMessageStart(h: () => void): void {
+    this.userMessageStartHandler = h;
+  }
+
+  /** Fires when the harness-bridge extension reports a user-message session
+   *  entry id over the `setStatus("pi-harness", …)` channel. */
+  onHarnessEntry(h: (report: HarnessEntryReport) => void): void {
+    this.harnessEntryHandler = h;
   }
 
   waitExit() {
@@ -184,7 +226,15 @@ export class PiRpcClient {
       return;
     }
     if (p.type === "agent_end") {
-      this.agentEndHandler?.();
+      const messages = Array.isArray((p as { messages?: PiMessage[] }).messages)
+        ? (p as { messages: PiMessage[] }).messages
+        : [];
+      this.agentEndHandler?.(messages);
+      return;
+    }
+    if (p.type === "message_start") {
+      const role = (p as { message?: PiMessage }).message?.role;
+      if (role === "user") this.userMessageStartHandler?.();
       return;
     }
     if (p.type === "extension_ui_request") {
@@ -194,6 +244,25 @@ export class PiRpcClient {
   }
 
   private handleExtensionUi(req: ExtensionUiRequest): void {
+    // The harness-bridge extension reports session entry ids as a
+    // fire-and-forget `setStatus` keyed "pi-harness". Intercept those and
+    // route to the harness-entry handler instead of treating them as UI.
+    if (req.method === "setStatus" && req.statusKey === "pi-harness") {
+      if (req.statusText == null) return;
+      try {
+        const report = JSON.parse(req.statusText) as HarnessEntryReport;
+        if (
+          report.kind === "user_entry" &&
+          typeof report.index === "number" &&
+          typeof report.entryId === "string"
+        ) {
+          this.harnessEntryHandler?.(report);
+        }
+      } catch {
+        this.log.debug({ statusText: req.statusText }, "bad pi-harness setStatus payload");
+      }
+      return;
+    }
     const dialog = new Set(["select", "confirm", "input", "editor"]);
     if (dialog.has(req.method)) {
       this.log.warn({ method: req.method }, "auto-cancel extension_ui_request");

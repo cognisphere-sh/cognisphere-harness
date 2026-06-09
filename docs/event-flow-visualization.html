@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pi-harness · Event / Notification Flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
+    --txt:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950;
+    --amber:#d29922; --red:#f85149; --purple:#bc8cff; --cyan:#39c5cf;
+    --pink:#f778ba; --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.55;font-size:15px}
+  header{padding:32px 40px 20px;border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,#11161d,#0d1117)}
+  header h1{margin:0 0 6px;font-size:26px;letter-spacing:-.5px}
+  header p{margin:0;color:var(--muted);max-width:900px}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 24px 80px}
+  nav{position:sticky;top:0;z-index:50;background:rgba(13,17,23,.92);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--border);
+    display:flex;flex-wrap:wrap;gap:4px;padding:10px 24px}
+  nav a{color:var(--muted);text-decoration:none;font-size:13px;padding:6px 11px;
+    border-radius:6px;transition:.15s;white-space:nowrap}
+  nav a:hover{color:var(--txt);background:var(--panel2)}
+  section{margin-top:46px;scroll-margin-top:60px}
+  h2{font-size:21px;border-left:3px solid var(--accent);padding-left:12px;margin:0 0 6px}
+  .sub{color:var(--muted);margin:0 0 20px;padding-left:15px;font-size:14px}
+  h3{font-size:16px;color:var(--cyan);margin:28px 0 10px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:22px 24px;margin:16px 0}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  code{background:#22272e;padding:1px 6px;border-radius:5px;color:var(--pink)}
+  pre{background:#0a0e14;border:1px solid var(--border);border-radius:10px;
+    padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;
+    line-height:1.5;color:#c9d1d9}
+  pre .k{color:var(--purple)} pre .s{color:var(--green)} pre .c{color:var(--muted);font-style:italic}
+  pre .f{color:var(--accent)} pre .n{color:var(--amber)}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent);font-weight:600}
+  td code{font-size:.85em}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:880px){.grid2,.grid3{grid-template-columns:1fr}}
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;
+    font-weight:600;font-family:var(--mono);border:1px solid}
+  .p-queued{color:var(--accent);border-color:var(--accent);background:#58a6ff18}
+  .p-inflight{color:var(--amber);border-color:var(--amber);background:#d2992218}
+  .p-done{color:var(--green);border-color:var(--green);background:#3fb95018}
+  .p-failed{color:var(--red);border-color:var(--red);background:#f8514918}
+  .p-cancelled{color:var(--muted);border-color:var(--muted);background:#8b949e18}
+  .note{border-left:3px solid var(--amber);background:#d2992212;padding:12px 16px;
+    border-radius:0 8px 8px 0;margin:14px 0;font-size:14px}
+  .note.r{border-color:var(--red);background:#f8514912}
+  .note.g{border-color:var(--green);background:#3fb95012}
+  .note b{color:var(--amber)} .note.r b{color:var(--red)} .note.g b{color:var(--green)}
+  .lgd{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 0;font-size:12.5px;color:var(--muted)}
+  .lgd span{display:flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .fn{color:var(--accent);font-family:var(--mono);font-size:.9em}
+  ul.tight{margin:8px 0;padding-left:22px} ul.tight li{margin:5px 0}
+  .kvar{color:var(--purple);font-family:var(--mono)}
+  /* flow diagram */
+  .flow{display:flex;flex-direction:column;gap:0;margin:10px 0}
+  .step{display:flex;gap:14px;align-items:flex-start;position:relative;padding-bottom:18px}
+  .step:not(:last-child)::before{content:"";position:absolute;left:17px;top:36px;
+    bottom:-2px;width:2px;background:var(--border)}
+  .stepn{flex:none;width:36px;height:36px;border-radius:50%;background:var(--panel2);
+    border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;
+    font-weight:700;font-size:14px;color:var(--accent);z-index:1}
+  .stepb{flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:9px;
+    padding:11px 15px}
+  .stepb .t{font-weight:600;margin-bottom:3px}
+  .stepb .d{color:var(--muted);font-size:13.5px}
+  .stepb .d code{font-size:.95em}
+  /* svg states */
+  .legend-txt{font-size:13px;color:var(--muted)}
+  .deci{border:1px dashed var(--purple);border-radius:9px;padding:12px 16px;margin:10px 0;
+    background:#bc8cff0e}
+  .deci .q{color:var(--purple);font-weight:600}
+  footer{color:var(--muted);font-size:12.5px;text-align:center;padding:40px 0 0;
+    border-top:1px solid var(--border);margin-top:50px}
+  .tag{font-family:var(--mono);font-size:12px;padding:1px 7px;border-radius:5px;
+    background:#22272e;color:var(--cyan)}
+  .crumb{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>pi-harness · Event &amp; Notification Lifecycle</h1>
+  <p>A critical, code-accurate walkthrough of how a single <code>ctx.notify()</code> event travels from a plugin,
+  through the durable SQLite queue, into a <code>pi --mode rpc</code> child, and back out — including the status
+  machine, the two retry modes, every decision point, the data persisted at each hop, and how the
+  <em>pi-coding-agent</em> harness-bridge extension closes the real-time entry-id loop.</p>
+  <div class="crumb">Sources: runner.ts · queue.ts · rpc.ts · types.ts · harness-bridge.ts · docs/server.md</div>
+</header>
+
+<nav>
+  <a href="#bigpic">Big picture</a>
+  <a href="#flow">End-to-end flow</a>
+  <a href="#status">Status machine</a>
+  <a href="#decisions">Decision points</a>
+  <a href="#retry">Retry mechanism</a>
+  <a href="#data">Data maintained</a>
+  <a href="#ext">pi extensions</a>
+  <a href="#classes">Classes &amp; functions</a>
+  <a href="#vars">Key variables</a>
+  <a href="#code">Critical code</a>
+</nav>
+
+<div class="wrap">
+
+<!-- ───────────────────────── BIG PICTURE ───────────────────────── -->
+<section id="bigpic">
+  <h2>1 · The big picture</h2>
+  <p class="sub">One Node process owns many agents. Each agent has its own SQLite queue + worker pool and spawns one pi child per batch.</p>
+  <div class="panel">
+<pre>
+ EXTERNAL          PARENT NODE PROCESS (single)                         CHILD (per batch)
+ ─────────         ───────────────────────────────────────────         ─────────────────
+
+ webhook ─┐        ┌───────────┐   notify()   ┌──────────────┐
+ poll  ───┼──────▶ │  Plugin   │ ───────────▶ │ AgentRunner  │
+ cron  ───┘        │ (in-proc) │              │ worker pool  │
+                   └───────────┘              └──────┬───────┘
+                                                     │ enqueue / dequeue
+                                              ┌──────▼───────┐
+                                              │  AgentDb     │  SQLite WAL
+                                              │ events table │ .events.db
+                                              │ threads tbl  │
+                                              └──────┬───────┘
+                                                     │ spawnPi()
+                                              ┌──────▼───────┐  JSON-RPC   ┌──────────────┐
+                                              │ PiRpcClient  │◀═══stdio═══▶│ pi --mode rpc│
+                                              │ (stdin/out)  │            │ + tools      │
+                                              └──────────────┘            │ + harness-   │
+                                                                          │   bridge ext │
+                                                                          └──────────────┘
+</pre>
+    <div class="lgd">
+      <span><span class="dot" style="background:var(--accent)"></span>durable queue (survives crash)</span>
+      <span><span class="dot" style="background:var(--amber)"></span>per-thread serialization</span>
+      <span><span class="dot" style="background:var(--green)"></span>one pi child = one batch = one fault domain</span>
+    </div>
+  </div>
+  <div class="grid3">
+    <div class="panel" style="margin:0">
+      <h3 style="margin-top:0">Unit of work</h3>
+      <p style="font-size:13.5px;color:var(--muted);margin:0">A <b>batch</b> = all queued rows for one <code>threadId</code>, concatenated into a single prompt. Threads are serialized; different threads run concurrently up to <code>maxConcurrentSlots</code>.</p>
+    </div>
+    <div class="panel" style="margin:0">
+      <h3 style="margin-top:0">Thread identity</h3>
+      <p style="font-size:13.5px;color:var(--muted);margin:0"><code>threadIdStrategy</code>: <code>single</code>→<code>"default"</code>, <code>plugin</code>→<code>&lt;pid&gt;</code>, <code>plugin_channel</code>→<code>&lt;pid&gt;:&lt;chan&gt;</code>. One pi session JSONL per thread.</p>
+    </div>
+    <div class="panel" style="margin:0">
+      <h3 style="margin-top:0">Durability</h3>
+      <p style="font-size:13.5px;color:var(--muted);margin:0">Every event is a row first, action second. A crash mid-batch leaves rows recoverable via <code>sweepInFlight()</code> at next boot.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── END-TO-END FLOW ───────────────────────── -->
+<section id="flow">
+  <h2>2 · End-to-end flow of one event</h2>
+  <p class="sub">From plugin signal to terminal status. File references are to <code>apps/server/src/</code>.</p>
+
+  <div class="panel">
+  <div class="flow">
+    <div class="step"><div class="stepn">1</div><div class="stepb">
+      <div class="t">Plugin receives external signal</div>
+      <div class="d">A webhook hit, poll result, or cron tick. The plugin calls <code>ctx.notify("message_received", {text, channelId, metadata, …})</code>. The context wrapper injects <code>pluginId</code> and <code>metadata._notification = name</code>, then calls <span class="fn">runner.notify()</span>.</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">2</div><div class="stepb">
+      <div class="t">Runner enqueues — durable first <span class="crumb">runner.ts:286</span></div>
+      <div class="d"><span class="fn">notify()</span> computes <code>threadId</code> (via strategy or <code>threadIdOverride</code>), then <span class="fn">db.enqueue()</span> inserts a row with <span class="pill p-queued">queued</span>, <code>attempts=0</code>. The row exists before any decision about how to deliver it.</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">3</div><div class="stepb">
+      <div class="t">Steer-or-wake decision <span class="crumb">runner.ts:301</span></div>
+      <div class="d">Is there an <b>active streaming batch</b> on the same thread, with <code>doNotSteer !== true</code>?
+      <br>• <b>Yes</b> → build <code>&lt;harness-metadata&gt;</code>+text, <span class="fn">rpc.sendSteer()</span> into the live child, push a single-row group onto <code>steerGroups</code>, <span class="fn">markInFlight([id])</span>.
+      <br>• <b>No</b> → <span class="fn">signalAll()</span> wakes an idle worker. (Silent / doNotSteer rows never wake a worker — they ride the next batch.)</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">4</div><div class="stepb">
+      <div class="t">Worker claims a thread <span class="crumb">runner.ts:364</span></div>
+      <div class="d"><span class="fn">peekHighestPriorityThread(exclude=active)</span> returns a thread with queued, non-silent rows no other worker owns. Then the <b>continue-first</b> claim: <span class="fn">dequeueBatch(threadId, continueOnly=true)</span>. If it yields rows → <em>continue batch</em>; else <span class="fn">dequeueBatch(threadId)</span> claims all resend+fresh rows. Claimed rows flip to <span class="pill p-inflight">in_flight</span> in one transaction.</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">5</div><div class="stepb">
+      <div class="t">Resolve session + spawn pi <span class="crumb">runner.ts:391, 649</span></div>
+      <div class="d"><span class="fn">getThreadSessionId()</span> or generate a <code>randomUUID()</code> and persist in <code>threads</code>. <span class="fn">spawnPi()</span> builds argv: <code>--session &lt;dir&gt;/&lt;uuid&gt;.jsonl --provider --model --thinking --tools read,bash,edit,write,grep,find,ls --system-prompt … --extension &lt;agentDir&gt;/extensions/harness-bridge.ts</code>. Env = process.env ⨁ provider creds ⨁ flattened secrets ⨁ subagent model vars.</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">6</div><div class="stepb">
+      <div class="t">Wire the live event stream <span class="crumb">runner.ts:455</span></div>
+      <div class="d"><span class="fn">rpc.onUserMessageStart()</span> → <code>active.deliveredCount++</code> (counts deliveries in dispatch order). <span class="fn">rpc.onHarnessEntry()</span> → for each delivered row, <span class="fn">db.setRowEntryId(id, sessionId, entryId)</span> — writes <code>pi_entry_id</code> <b>in real time</b>, even before exit, even on rows that later fail.</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">7</div><div class="stepb">
+      <div class="t">Assemble prompt &amp; send <span class="crumb">runner.ts:467</span></div>
+      <div class="d">Continue rows → one <span class="fn">buildContinuationNudge()</span> (not re-rendered). Fresh/resend rows → each renders <code>&lt;harness-metadata&gt;</code>+text (resend carries <code>Retry: true</code> when <code>attempts&gt;0</code>). <span class="fn">rpc.sendPrompt()</span>; phase → <code>streaming</code>. On a continue batch, <span class="fn">drainQueuedAsSteers()</span> injects the remaining resend+fresh rows as one combined steer.</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">8</div><div class="stepb">
+      <div class="t">Await completion or crash <span class="crumb">runner.ts:502</span></div>
+      <div class="d"><code>Promise.race([agentEnded, rpc.waitExit()])</code> — guards against pi dying before emitting <code>agent_end</code>. If <code>active.cancelled</code> after the race → throw into the cancel branch. Otherwise <span class="fn">endStdin()</span>, await exit (5s <code>SIGKILL</code> guard).</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">9</div><div class="stepb">
+      <div class="t">Verdict from message shape <span class="crumb">runner.ts:515, endOfTurn()</span></div>
+      <div class="d">No JSONL read. <span class="fn">endOfTurn(messages)</span>: complete <em>iff</em> last message is assistant with <code>stopReason:"stop"</code>. Else tagged <code>[agent_error]</code> / <code>[incomplete]</code>. No <code>agent_end</code> at all → <code>[crash]</code> + stderr tail.</div>
+    </div></div>
+
+    <div class="step"><div class="stepn">10</div><div class="stepb">
+      <div class="t">Delivery split &amp; terminal status <span class="crumb">runner.ts:582, finalizeBatch()</span></div>
+      <div class="d">Rows split by whether they reached the model (<span class="fn">deliveredRowIds()</span>):
+      <br>• never delivered → <span class="fn">markBatchFailed</span> <code>[not_delivered]</code> (retry as <b>resend</b>).
+      <br>• delivered + complete → <span class="pill p-done">done</span>.
+      <br>• delivered + incomplete → <span class="fn">markBatchFailed</span> with the tag (retry as <b>continue</b>, since <code>pi_entry_id</code> is already set).
+      <br>Finally <code>emit("batch-completed")</code> for any pending stale-swap.</div>
+    </div></div>
+  </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── STATUS MACHINE ───────────────────────── -->
+<section id="status">
+  <h2>3 · The status machine</h2>
+  <p class="sub">Single <code>events</code> table, one column <code>status</code>. Rows are never deleted on completion — history is preserved for the UI.</p>
+
+  <div class="panel">
+  <svg viewBox="0 0 920 430" width="100%" style="max-width:920px;display:block;margin:0 auto" font-family="var(--mono)">
+    <defs>
+      <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="#8b949e"/>
+      </marker>
+      <marker id="arrR" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="#d29922"/>
+      </marker>
+      <marker id="arrG" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="#3fb950"/>
+      </marker>
+    </defs>
+
+    <!-- enqueue -->
+    <text x="20" y="120" fill="#8b949e" font-size="12">notify()</text>
+    <line x1="20" y1="130" x2="120" y2="130" stroke="#8b949e" stroke-width="2" marker-end="url(#arr)"/>
+
+    <!-- queued -->
+    <rect x="125" y="105" width="140" height="50" rx="9" fill="#58a6ff18" stroke="#58a6ff" stroke-width="2"/>
+    <text x="195" y="130" fill="#58a6ff" font-size="15" text-anchor="middle" font-weight="bold">queued</text>
+    <text x="195" y="146" fill="#8b949e" font-size="10" text-anchor="middle">attempts=0..N</text>
+
+    <!-- in_flight -->
+    <rect x="390" y="105" width="140" height="50" rx="9" fill="#d2992218" stroke="#d29922" stroke-width="2"/>
+    <text x="460" y="130" fill="#d29922" font-size="15" text-anchor="middle" font-weight="bold">in_flight</text>
+    <text x="460" y="146" fill="#8b949e" font-size="10" text-anchor="middle">claimed by worker</text>
+
+    <!-- queued -> in_flight -->
+    <line x1="265" y1="130" x2="388" y2="130" stroke="#8b949e" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="326" y="122" fill="#8b949e" font-size="10.5" text-anchor="middle">dequeueBatch</text>
+
+    <!-- done -->
+    <rect x="700" y="40" width="140" height="50" rx="9" fill="#3fb95018" stroke="#3fb950" stroke-width="2"/>
+    <text x="770" y="65" fill="#3fb950" font-size="15" text-anchor="middle" font-weight="bold">done</text>
+    <text x="770" y="81" fill="#8b949e" font-size="10" text-anchor="middle">terminal ✓</text>
+    <path d="M530,118 C620,90 640,70 698,66" fill="none" stroke="#3fb950" stroke-width="2" marker-end="url(#arrG)"/>
+    <text x="640" y="92" fill="#3fb950" font-size="10.5" text-anchor="middle">markBatchDone</text>
+    <text x="640" y="104" fill="#8b949e" font-size="9.5" text-anchor="middle">delivered + endOfTurn ✓</text>
+
+    <!-- failed (retry back to queued) -->
+    <rect x="390" y="240" width="140" height="50" rx="9" fill="#d2992218" stroke="#d29922" stroke-width="2" stroke-dasharray="5 3"/>
+    <text x="460" y="262" fill="#d29922" font-size="13" text-anchor="middle" font-weight="bold">markBatchFailed</text>
+    <text x="460" y="279" fill="#8b949e" font-size="10" text-anchor="middle">attempts++ · bounce</text>
+
+    <line x1="460" y1="157" x2="460" y2="238" stroke="#d29922" stroke-width="2" marker-end="url(#arrR)"/>
+    <text x="540" y="200" fill="#d29922" font-size="10.5" text-anchor="middle">crash / error /</text>
+    <text x="540" y="213" fill="#d29922" font-size="10.5" text-anchor="middle">incomplete</text>
+
+    <!-- failed -> queued (retry) when attempts < max -->
+    <path d="M388,265 C250,265 195,210 195,157" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#arrR)"/>
+    <text x="250" y="225" fill="#d29922" font-size="10.5">attempts &lt; max → requeue</text>
+
+    <!-- failed terminal -->
+    <rect x="700" y="240" width="140" height="50" rx="9" fill="#f8514918" stroke="#f85149" stroke-width="2"/>
+    <text x="770" y="262" fill="#f85149" font-size="15" text-anchor="middle" font-weight="bold">failed</text>
+    <text x="770" y="278" fill="#8b949e" font-size="10" text-anchor="middle">DLQ · terminal ✗</text>
+    <line x1="530" y1="265" x2="698" y2="265" stroke="#f85149" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="614" y="257" fill="#f85149" font-size="10.5" text-anchor="middle">attempts ≥ max</text>
+
+    <!-- cancelled -->
+    <rect x="700" y="345" width="140" height="50" rx="9" fill="#8b949e18" stroke="#8b949e" stroke-width="2"/>
+    <text x="770" y="367" fill="#8b949e" font-size="14" text-anchor="middle" font-weight="bold">cancelled</text>
+    <text x="770" y="383" fill="#8b949e" font-size="10" text-anchor="middle">terminal · no retry</text>
+    <path d="M460,290 C460,360 600,370 698,370" fill="none" stroke="#8b949e" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="560" y="345" fill="#8b949e" font-size="10.5" text-anchor="middle">abort / stop → markBatchCancelled</text>
+
+    <!-- DLQ requeue loop -->
+    <path d="M770,238 L770,92" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrG)"/>
+    <text x="785" y="165" fill="#3fb950" font-size="10">requeueFailed()</text>
+    <text x="785" y="178" fill="#8b949e" font-size="9">operator action</text>
+  </svg>
+
+  <div class="lgd" style="justify-content:center;margin-top:14px">
+    <span><span class="pill p-queued">queued</span> runnable / waiting</span>
+    <span><span class="pill p-inflight">in_flight</span> claimed by a worker</span>
+    <span><span class="pill p-done">done</span> ✓ terminal</span>
+    <span><span class="pill p-failed">failed</span> ✗ DLQ terminal</span>
+    <span><span class="pill p-cancelled">cancelled</span> terminal</span>
+  </div>
+  </div>
+
+  <table>
+    <tr><th>Transition</th><th>Trigger</th><th>Method</th><th>Notes</th></tr>
+    <tr><td><span class="pill p-queued">queued</span> → <span class="pill p-inflight">in_flight</span></td><td>worker claims batch</td><td><code>dequeueBatch</code> / <code>markInFlight</code> (for live steers)</td><td>single transaction; <code>updated_at</code> bumped</td></tr>
+    <tr><td><span class="pill p-inflight">in_flight</span> → <span class="pill p-done">done</span></td><td>delivered &amp; turn complete</td><td><code>markBatchDone</code></td><td>writes <code>pi_session_id</code> via COALESCE; row stays</td></tr>
+    <tr><td><span class="pill p-inflight">in_flight</span> → <span class="pill p-queued">queued</span></td><td>fail, <code>attempts&lt;max</code></td><td><code>markBatchFailed</code> → <code>retrying[]</code></td><td><code>attempts++</code>, <code>error</code> set; eligible for re-claim</td></tr>
+    <tr><td><span class="pill p-inflight">in_flight</span> → <span class="pill p-failed">failed</span></td><td>fail, <code>attempts≥max</code></td><td><code>markBatchFailed</code> → <code>dead[]</code></td><td>dead-letter; operator can requeue/discard</td></tr>
+    <tr><td><span class="pill p-inflight">in_flight</span> → <span class="pill p-cancelled">cancelled</span></td><td>user abort / runner stop / plugin cancel</td><td><code>markBatchCancelled</code></td><td>no attempt bump, no retry</td></tr>
+    <tr><td><span class="pill p-failed">failed</span> → <span class="pill p-queued">queued</span></td><td>operator requeue / force-status</td><td><code>requeueFailed</code> / <code>setStatus</code></td><td>resets <code>attempts=0</code>, <b>preserves <code>pi_entry_id</code></b> (→ continue)</td></tr>
+    <tr><td>orphaned <span class="pill p-inflight">in_flight</span> → fail</td><td>crash recovery at boot</td><td><code>sweepInFlight</code></td><td>each crash counts as one attempt</td></tr>
+  </table>
+</section>
+
+<!-- ───────────────────────── DECISION POINTS ───────────────────────── -->
+<section id="decisions">
+  <h2>4 · Key decision points</h2>
+  <p class="sub">Every branch that changes how an event is handled. These are the load-bearing forks in the code.</p>
+
+  <div class="grid2">
+    <div class="deci">
+      <div class="q">D1 · Steer or wake? <span class="crumb">notify() runner.ts:301</span></div>
+      Active streaming batch on this thread <b>AND</b> <code>!doNotSteer</code> <b>AND</b> <code>active.rpc</code>?
+      <br>→ <b>Steer</b> into the live child (fire-and-forget) + <code>markInFlight</code>.
+      <br>→ Else <b>wake</b> a worker via <code>signalAll()</code>.
+    </div>
+    <div class="deci">
+      <div class="q">D2 · Silent / doNotSteer suppression</div>
+      <code>peekHighestPriorityThread</code> filters <code>is_silent=0</code>. A silent row <b>never wakes a worker on its own</b> — it waits for the next non-silent batch on the same thread. Used for scheduler late-firings.
+    </div>
+    <div class="deci">
+      <div class="q">D3 · Continue-first claim <span class="crumb">runner.ts:383</span></div>
+      <code>dequeueBatch(threadId, continueOnly=true)</code> first. If it returns rows → <b>continue batch</b> (prompt = nudge only); resend+fresh rows are steered in afterward. Continue rows are <b>never mixed</b> into a concatenated prompt.
+    </div>
+    <div class="deci">
+      <div class="q">D4 · Retry mode per row <span class="crumb">deriveRetryMode() queue.ts:73</span></div>
+      <code>pi_entry_id != null</code> → <b>continue</b> (delivered; nudge, don't resend).
+      <br><code>attempts &gt; 0</code> → <b>resend</b> (never delivered; full text + <code>Retry:true</code>).
+      <br>else → <b>fresh</b>.
+    </div>
+    <div class="deci">
+      <div class="q">D5 · Completion verdict <span class="crumb">endOfTurn() runner.ts:123</span></div>
+      Last message assistant + <code>stopReason:"stop"</code> → <b>complete</b>.
+      <br><code>stopReason:"error"</code> → <code>[agent_error]</code>.
+      <br>toolResult / <code>toolUse</code> / <code>length</code> → <code>[incomplete]</code>.
+      <br>no <code>agent_end</code> → <code>[crash]</code>.
+    </div>
+    <div class="deci">
+      <div class="q">D6 · Delivery split <span class="crumb">deliveredRowIds() runner.ts:567</span></div>
+      Per row: did its user-message index actually arrive (<code>deliveredCount</code>)? Undelivered rows fail as <code>[not_delivered]</code> (→ resend) <b>even if the rest of the batch completed</b>.
+    </div>
+    <div class="deci">
+      <div class="q">D7 · attempts vs maxAttempts <span class="crumb">markBatchFailed queue.ts:340</span></div>
+      <code>attempts+1 ≥ maxAttempts</code> (default 3) → <span class="pill p-failed">failed</span> (DLQ). Otherwise bounce to <span class="pill p-queued">queued</span>.
+    </div>
+    <div class="deci">
+      <div class="q">D8 · Cancel vs fail <span class="crumb">processBatch catch runner.ts:529</span></div>
+      In the catch branch, <code>active.cancelled</code> → <code>markBatchCancelled</code> (terminal, no retry). Else → <code>markBatchFailed</code> (with stderr tail + <code>[runner_error]</code> fallback tag).
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── RETRY ───────────────────────── -->
+<section id="retry">
+  <h2>5 · How retry works — the two modes</h2>
+  <p class="sub">The central design insight: there is <b>no <code>retry_mode</code> column</b>. The mode is <em>derived</em> from <code>pi_entry_id</code>, which is written in real time during the batch — so it survives a full server crash.</p>
+
+  <div class="note g"><b>Why it works:</b> <code>pi_entry_id</code> is set the instant a row's user message reaches the model (via the harness-bridge extension → <code>setRowEntryId</code>), not at exit. So even a row whose batch later crashes carries the marker. At the next dequeue, its presence answers "was this already said to the model?" — and that single bit chooses continue vs resend.</div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3 style="margin-top:0;color:var(--green)">🔁 CONTINUE mode</h3>
+      <p style="font-size:13.5px"><code>pi_entry_id != null</code> — the row's message <b>already reached the model</b>; the turn was cut off <em>after</em> delivery.</p>
+      <ul class="tight" style="font-size:13.5px">
+        <li>Text is <b>already in pi's session history</b> — do NOT resend.</li>
+        <li>Prompt = a single <code>buildContinuationNudge()</code> tagged <code>Continuation: true</code>.</li>
+        <li>"The automated equivalent of a human typing <em>continue</em>."</li>
+        <li>Claimed in isolation via <code>dequeueBatch(…, continueOnly=true)</code>.</li>
+      </ul>
+      <pre><span class="c">// buildContinuationNudge — slim, no plugin/channel</span>
+&lt;harness-metadata&gt;
+Timestamp: …
+Continuation: true
+&lt;/harness-metadata&gt;
+Your previous turn ended before it finished…
+Continue from where you left off.</pre>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;color:var(--amber)">↩️ RESEND mode</h3>
+      <p style="font-size:13.5px"><code>pi_entry_id IS NULL</code> &amp; <code>attempts &gt; 0</code> — the row was requeued but <b>never delivered</b> to the model.</p>
+      <ul class="tight" style="font-size:13.5px">
+        <li>Full original text is re-rendered.</li>
+        <li>Carries <code>Retry: true</code> (because <code>attempts &gt; 0</code>).</li>
+        <li>Base prompt tells the agent: "you may have done partial work — don't blindly redo it."</li>
+        <li>Concatenated into the normal batch prompt.</li>
+      </ul>
+      <pre><span class="c">// buildHarnessMetadata when attempts &gt; 0</span>
+&lt;harness-metadata&gt;
+Timestamp: …
+Plugin: telegram
+Channel: 12345
+Retry: true
+&lt;/harness-metadata&gt;
+&lt;full original message text&gt;</pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">Retry trigger sources</h3>
+    <table>
+      <tr><th>Source</th><th>Mechanism</th><th>Resulting mode</th></tr>
+      <tr><td>Batch failed (error/incomplete), delivered rows</td><td><code>markBatchFailed</code> bounces to <code>queued</code>; <code>pi_entry_id</code> set</td><td><span class="pill p-done" style="color:var(--green);border-color:var(--green)">continue</span></td></tr>
+      <tr><td>Batch failed, undelivered rows</td><td><code>[not_delivered]</code> → requeued; <code>pi_entry_id</code> null</td><td><span class="pill p-inflight">resend</span></td></tr>
+      <tr><td>Server crash mid-batch</td><td><code>sweepInFlight</code> at boot → <code>markBatchFailed</code></td><td>continue or resend per <code>pi_entry_id</code></td></tr>
+      <tr><td>Operator requeues a dead row</td><td><code>requeueFailed</code> — resets attempts, <b>preserves <code>pi_entry_id</code></b></td><td>continue if it was delivered</td></tr>
+      <tr><td>Steer into N consecutive failing batches</td><td>steer ids folded into <code>markBatchFailed</code></td><td>attempts accrue → eventually DLQ</td></tr>
+    </table>
+    <div class="note r"><b>Bug it prevents:</b> if <code>requeueFailed</code> / <code>setStatus(queued)</code> cleared <code>pi_entry_id</code>, a delivered-then-dead-lettered row would <b>resend and duplicate</b> a message already in pi's history. The column is deliberately omitted from those SET clauses.</div>
+  </div>
+
+  <h3>Retry decision flow</h3>
+  <div class="panel">
+<pre>
+   row re-enters dequeueBatch
+            │
+            ▼
+   ┌─────────────────────┐   pi_entry_id != null    ┌────────────────────────────┐
+   │ deriveRetryMode(row)│ ───────────────────────▶ │ CONTINUE  → nudge only      │
+   └──────────┬──────────┘                          │ (claimed continueOnly=true) │
+              │ pi_entry_id == null                 └────────────────────────────┘
+              ▼
+        attempts &gt; 0 ?  ──yes──▶  RESEND  → full text + Retry:true
+              │
+              │ no
+              ▼
+           FRESH  → full text, no Retry line
+</pre>
+  </div>
+</section>
+
+<!-- ───────────────────────── DATA MAINTAINED ───────────────────────── -->
+<section id="data">
+  <h2>6 · What data is maintained</h2>
+  <p class="sub">Per-agent SQLite WAL at <code>&lt;agent&gt;/sessions/.events.db</code>. Two tables. New columns added idempotently via guarded <code>ALTER TABLE</code> on open.</p>
+
+  <h3><code>events</code> — one row per <code>notify()</code>, lives forever</h3>
+  <table>
+    <tr><th>Column</th><th>Type</th><th>Role</th></tr>
+    <tr><td><code>id</code></td><td>INTEGER PK</td><td>row identity; stable across retries &amp; requeue</td></tr>
+    <tr><td><code>ts</code> / <code>updated_at</code></td><td>INTEGER</td><td>enqueue time / last mutation (drives UI sort)</td></tr>
+    <tr><td><code>plugin_id</code> / <code>channel_id</code> / <code>thread_id</code></td><td>TEXT</td><td>routing identity; <code>thread_id</code> serializes work</td></tr>
+    <tr><td><code>is_silent</code></td><td>INTEGER</td><td>1 ⇒ never wakes a worker alone (rides next batch)</td></tr>
+    <tr><td><code>text</code> / <code>metadata</code></td><td>TEXT</td><td>payload; metadata JSON → PascalCase harness-metadata fields</td></tr>
+    <tr><td><b><code>status</code></b></td><td>TEXT</td><td>the lifecycle state (§3)</td></tr>
+    <tr><td><code>priority</code></td><td>INTEGER</td><td>dequeue ordering (<code>DESC, id ASC</code>)</td></tr>
+    <tr><td><b><code>attempts</code></b></td><td>INTEGER</td><td>retry counter vs <code>maxAttempts</code>; also marks "Retry"</td></tr>
+    <tr><td><code>error</code></td><td>TEXT</td><td>last failure tag + stderr tail</td></tr>
+    <tr><td><code>pi_session_id</code></td><td>TEXT</td><td>links row → pi session JSONL file (<code>&lt;id&gt;.jsonl</code>)</td></tr>
+    <tr><td><b><code>pi_entry_id</code></b></td><td>TEXT</td><td><b>the retry-mode marker</b> — set live; presence ⇒ continue</td></tr>
+  </table>
+  <div class="lgd"><span>Indexes: <code>idx_events_runnable(thread_id,status,is_silent,priority DESC,id)</code> · <code>idx_events_updated</code> · <code>idx_events_status</code> · <code>idx_events_plugin</code></span></div>
+
+  <h3><code>threads</code> — one row per thread, canonical session binding</h3>
+  <table>
+    <tr><th>Column</th><th>Role</th></tr>
+    <tr><td><code>thread_id</code> (PK)</td><td>the thread identity</td></tr>
+    <tr><td><code>pi_session_id</code></td><td>UUID generated on first batch; fixed via <code>INSERT OR IGNORE</code>; passed as <code>--session &lt;dir&gt;/&lt;uuid&gt;.jsonl</code> every spawn</td></tr>
+    <tr><td><code>created_at</code></td><td>first-batch timestamp</td></tr>
+    <tr><td><code>model_provider</code> / <code>model_id</code> / <code>thinking_level</code></td><td>optional per-thread model override (NULL ⇒ inherit <code>agent.json</code> model); cross-provider override injects that provider's creds at spawn</td></tr>
+  </table>
+
+  <h3>In-memory data per active batch — <code>ActiveBatch</code> <span class="crumb">runner.ts:145</span></h3>
+  <div class="grid2">
+    <div>
+      <table>
+        <tr><th>Field</th><th>Holds</th></tr>
+        <tr><td><code>threadId</code></td><td>the thread being processed</td></tr>
+        <tr><td><code>ids[]</code></td><td>row ids in the initial claimed batch</td></tr>
+        <tr><td><code>steerGroups[][]</code></td><td>ordered groups of row ids, one per steer entry</td></tr>
+        <tr><td><code>sessionId</code></td><td>canonical pi session UUID</td></tr>
+        <tr><td><code>phase</code></td><td><code>spawning→streaming→completing→exited</code></td></tr>
+      </table>
+    </div>
+    <div>
+      <table>
+        <tr><th>Field</th><th>Holds</th></tr>
+        <tr><td><code>cancelled</code></td><td>abort/stop flag → cancel branch</td></tr>
+        <tr><td><code>isContinue</code></td><td>prompt is the continuation nudge</td></tr>
+        <tr><td><code>promptRowIds[]</code></td><td>rows rendered into prompt (user index 0)</td></tr>
+        <tr><td><code>continueIds</code> (Set)</td><td>delivered-on-prior-batch rows</td></tr>
+        <tr><td><code>deliveredCount</code></td><td>user messages pi has appended this run</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── PI EXTENSIONS ───────────────────────── -->
+<section id="ext">
+  <h2>7 · How pi-coding-agent extensions work</h2>
+  <p class="sub">The harness controls exactly what pi loads. <code>--no-extensions</code> disables auto-discovery; explicit <code>--extension &lt;path&gt;</code> still loads. The one seeded extension — <b>harness-bridge</b> — closes the real-time entry-id loop.</p>
+
+  <div class="panel">
+    <h3 style="margin-top:0">Loading model — <code>spawnPi()</code> <span class="crumb">runner.ts:649</span></h3>
+    <ul class="tight" style="font-size:13.5px">
+      <li><code>--no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files</code> suppress pi's default discovery — the harness controls the surface.</li>
+      <li><b>Skills:</b> one <code>--skill &lt;skills-root&gt;</code> — pi's <code>loadSkillsFromDir</code> <em>recurses</em> for <code>SKILL.md</code>.</li>
+      <li><b>Extensions:</b> pi's <code>loadExtension</code> does <em>not</em> recurse — it expects <code>index.ts/.js</code> / <code>package.json</code> at the path. So the runner passes <b>one <code>--extension</code> per first-level child</b> of <code>extensions/</code>, and verifies the entrypoint exists first (a missing module crashes the whole pi run).</li>
+      <li>harness-bridge is <b>not special-cased</b> — it ships as an ordinary seeded agent extension at <code>extensions/harness-bridge.ts</code>, copied at agent-create from <code>templates/base/extensions/</code>.</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">harness-bridge — the entry-id reporter <span class="crumb">harness-bridge.ts</span></h3>
+    <p style="font-size:13.5px">Its <b>sole job</b>: report each user-message session <b>entry id</b> back to the parent in real time, so the harness can link a queued row to its place in pi's JSONL <em>without reading the file</em> and <em>without waiting for exit</em> (a failed batch never reaches a post-exit read).</p>
+
+    <div class="grid2">
+      <div>
+        <h4 style="color:var(--cyan);margin:6px 0">Transport</h4>
+        <ul class="tight" style="font-size:13px">
+          <li><code>ctx.ui.setStatus("pi-harness", &lt;json&gt;)</code></li>
+          <li>In RPC mode → a fire-and-forget <code>extension_ui_request{method:"setStatus"}</code> frame on stdout.</li>
+          <li><code>PiRpcClient.handleExtensionUi</code> intercepts <code>statusKey==="pi-harness"</code>, parses <code>{kind,index,entryId}</code>, routes to <code>onHarnessEntry</code>.</li>
+          <li>Other dialog methods (<code>select/confirm/input/editor</code>) are <b>auto-cancelled</b> — no human to answer.</li>
+        </ul>
+      </div>
+      <div>
+        <h4 style="color:var(--cyan);margin:6px 0">Why a sweep, not a read?</h4>
+        <ul class="tight" style="font-size:13px">
+          <li>pi emits the extension event <b>before</b> it appends the message to the session (emit, then <code>appendMessage</code>) — so the entry id doesn't exist at <code>message_end</code> yet.</li>
+          <li>Instead the extension re-scans <code>getEntries()</code> on every event (<code>agent_start</code>, <code>message_start</code>, <code>turn_start/end</code>, <code>agent_end</code>) and emits newly-appeared user entries by index.</li>
+          <li>The extension knows <b>nothing</b> about harness row ids — it reports <code>{index, entryId}</code>; the parent maps index→row.</li>
+        </ul>
+      </div>
+    </div>
+
+    <pre><span class="k">export default function</span> <span class="f">harnessBridge</span>(pi) {
+  <span class="k">let</span> reported = 0;                              <span class="c">// per-run counter</span>
+  <span class="k">const</span> <span class="f">sweep</span> = (ctx) =&gt; {
+    <span class="k">const</span> userEntries = ctx.sessionManager.getEntries()
+                          .filter(isUserMessageEntry);
+    <span class="k">for</span> (<span class="k">let</span> i = reported; i &lt; userEntries.length; i++)
+      ctx.ui.<span class="f">setStatus</span>(<span class="s">"pi-harness"</span>,
+        JSON.stringify({ kind:<span class="s">"user_entry"</span>, index:i, entryId:userEntries[i].id }));
+    reported = userEntries.length;
+  };
+  pi.<span class="f">on</span>(<span class="s">"agent_start"</span>, (_e,ctx)=&gt;{ reported=0; sweep(ctx); });
+  pi.<span class="f">on</span>(<span class="s">"message_start"</span>, (_e,ctx)=&gt;sweep(ctx));   <span class="c">// + turn_start/end, agent_end</span>
+}</pre>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">The full entry-id round trip</h3>
+<pre>
+ pi child                          stdout (JSON-RPC)              PiRpcClient            AgentRunner / AgentDb
+ ────────                          ────────────────              ───────────            ─────────────────────
+ append user msg
+ fire message_start ───┐
+ harness-bridge.sweep()│
+   setStatus("pi-harness",{index,entryId}) ──▶ extension_ui_request ──▶ handleExtensionUi
+                                                                        statusKey==="pi-harness"
+                                                                        → onHarnessEntry({index,entryId}) ──▶ rowsForUserIndex(active,index)
+                                                                                                              → setRowEntryId(rowId, sessionId, entryId)
+                                                                                                                ⇒ pi_entry_id written LIVE
+ message_start(role:user) ─────────────────▶ onUserMessageStart ──────────────────────────────────────────▶ active.deliveredCount++
+</pre>
+  </div>
+
+  <div class="note"><b>Graceful degradation:</b> an agent missing harness-bridge simply loses real-time entry capture — the runner falls back to its own <code>message_start</code> delivery count (<code>deliveredCount</code>) for the delivery split, but loses the precise continue/resend classification on failed rows.</div>
+</section>
+
+<!-- ───────────────────────── CLASSES & FUNCTIONS ───────────────────────── -->
+<section id="classes">
+  <h2>8 · Key classes &amp; functions</h2>
+  <p class="sub">The cast, by file.</p>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3 style="margin-top:0">AgentRunner <span class="crumb">runner.ts</span></h3>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 8px">One worker pool per agent. <code>extends EventEmitter</code>. Owns nothing it isn't passed.</p>
+      <table>
+        <tr><td><code>notify()</code></td><td>enqueue + steer-or-wake</td></tr>
+        <tr><td><code>workerLoop()</code></td><td>peek → continue-first dequeue → processBatch</td></tr>
+        <tr><td><code>processBatch()</code></td><td>spawn, wire stream, send, race, verdict</td></tr>
+        <tr><td><code>spawnPi()</code></td><td>build argv + env, spawn child</td></tr>
+        <tr><td><code>finalizeBatch()</code></td><td>delivery split → done/failed</td></tr>
+        <tr><td><code>deliveredRowIds()</code></td><td>which rows reached the model</td></tr>
+        <tr><td><code>drainQueuedAsSteers()</code></td><td>combined steer on continue batch</td></tr>
+        <tr><td><code>rowsForUserIndex()</code></td><td>user index → row id group</td></tr>
+        <tr><td><code>abort()</code> / <code>pauseDequeue()</code> / <code>wake()</code></td><td>lifecycle controls</td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0">AgentDb <span class="crumb">queue.ts</span></h3>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 8px">SQLite WAL, single writer, all calls sync.</p>
+      <table>
+        <tr><td><code>enqueue()</code></td><td>insert queued row</td></tr>
+        <tr><td><code>peekHighestPriorityThread()</code></td><td>pick a runnable thread</td></tr>
+        <tr><td><code>dequeueBatch(tid, continueOnly?)</code></td><td>claim → in_flight</td></tr>
+        <tr><td><code>setRowEntryId()</code></td><td>write <code>pi_entry_id</code> live</td></tr>
+        <tr><td><code>markBatchDone / Failed / Cancelled</code></td><td>terminal / retry transitions</td></tr>
+        <tr><td><code>sweepInFlight()</code></td><td>crash recovery at boot</td></tr>
+        <tr><td><code>deriveRetryMode()</code></td><td>pi_entry_id/attempts → mode</td></tr>
+        <tr><td><code>requeueFailed / removeFailed</code></td><td>DLQ operator actions</td></tr>
+        <tr><td><code>get/setThreadSessionId</code></td><td>thread→session binding</td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0">PiRpcClient <span class="crumb">rpc.ts</span></h3>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 8px">JSON-RPC 2.0 over child stdio, manual <code>\n</code> split (readline breaks on U+2028/29 in JSON).</p>
+      <table>
+        <tr><td><code>sendPrompt()</code></td><td>request/response</td></tr>
+        <tr><td><code>sendSteer()</code></td><td>fire-and-forget inject</td></tr>
+        <tr><td><code>sendAbort()</code></td><td>abort frame + end stdin</td></tr>
+        <tr><td><code>onAgentEnd()</code></td><td>final messages → verdict</td></tr>
+        <tr><td><code>onUserMessageStart()</code></td><td>count deliveries</td></tr>
+        <tr><td><code>onHarnessEntry()</code></td><td>entry-id reports</td></tr>
+        <tr><td><code>handleExtensionUi()</code></td><td>route pi-harness / auto-cancel dialogs</td></tr>
+        <tr><td><code>waitExit() / kill() / stderrSnapshot()</code></td><td>lifecycle</td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0">Pure helpers <span class="crumb">runner.ts</span></h3>
+      <table>
+        <tr><td><code>endOfTurn(messages)</code></td><td>verdict from message shape</td></tr>
+        <tr><td><code>buildHarnessMetadata(m,tz)</code></td><td>fenced block; <code>Retry:true</code> if attempts&gt;0</td></tr>
+        <tr><td><code>buildContinuationNudge(tz)</code></td><td>slim <code>Continuation:true</code> nudge</td></tr>
+        <tr><td><code>assembleSystemPrompt(dir,tid)</code></td><td>concat <code>system_prompts/*.md</code> + ThreadId block</td></tr>
+        <tr><td><code>pascal()</code> / <code>renderMetaValue()</code> / <code>fmtTs()</code></td><td>metadata formatting</td></tr>
+      </table>
+      <h3>Types <span class="crumb">types.ts</span></h3>
+      <p style="font-size:13px;margin:0"><code>AgentJson</code> · <code>NotifyPayload</code> · <code>BatchMessage</code> · <code>RetryMode</code> · <code>ThreadIdStrategy</code> · <code>AGENT_TOOLS</code> (7 frozen tools)</p>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── VARIABLES ───────────────────────── -->
+<section id="vars">
+  <h2>9 · Key variables &amp; their meaning</h2>
+  <table>
+    <tr><th>Variable</th><th>Where</th><th>Why it's load-bearing</th></tr>
+    <tr><td class="kvar">pi_entry_id</td><td>events column</td><td>The retry-mode oracle. Present ⇒ delivered ⇒ continue. Written live, never cleared on requeue.</td></tr>
+    <tr><td class="kvar">attempts</td><td>events column / BatchMessage</td><td>Retry counter vs <code>maxAttempts</code>; <code>&gt;0</code> ⇒ "Retry: true"; <code>≥max</code> ⇒ DLQ.</td></tr>
+    <tr><td class="kvar">status</td><td>events column</td><td>The single source of lifecycle truth.</td></tr>
+    <tr><td class="kvar">is_silent</td><td>events column</td><td>Suppresses worker wake; rides next non-silent batch.</td></tr>
+    <tr><td class="kvar">deliveredCount</td><td>ActiveBatch</td><td>Count of user messages pi appended; drives the delivery split (index 0 = prompt, k≥1 = k-th steer).</td></tr>
+    <tr><td class="kvar">steerGroups</td><td>ActiveBatch</td><td>Ordered row-id groups, one per steer entry — maps each steer to its <code>pi_entry_id</code> by dispatch order.</td></tr>
+    <tr><td class="kvar">continueIds</td><td>ActiveBatch</td><td>Rows delivered on a prior batch — counted as delivered up front, never re-rendered.</td></tr>
+    <tr><td class="kvar">isContinue</td><td>ActiveBatch</td><td>Prompt is the nudge; resend+fresh rows get drained in as a combined steer.</td></tr>
+    <tr><td class="kvar">cancelled</td><td>ActiveBatch</td><td>Routes the post-race path to <code>markBatchCancelled</code> instead of finalize.</td></tr>
+    <tr><td class="kvar">dequeuePaused</td><td>AgentRunner</td><td>One-way soft-stop for the stale-swap protocol; runner is replaced once active drains.</td></tr>
+    <tr><td class="kvar">maxSlots / maxAttempts</td><td>AgentRunner</td><td><code>max(1, maxConcurrentSlots ?? 1)</code> / <code>maxAttempts ?? 3</code>.</td></tr>
+    <tr><td class="kvar">phase</td><td>ActiveBatch</td><td><code>spawning→streaming→completing→exited</code>; steers only land while <code>streaming</code>.</td></tr>
+  </table>
+</section>
+
+<!-- ───────────────────────── CRITICAL CODE ───────────────────────── -->
+<section id="code">
+  <h2>10 · Critical code blocks</h2>
+  <p class="sub">The handful of blocks where the whole design lives.</p>
+
+  <h3>Continue-first dequeue + delivery split <span class="crumb">runner.ts:workerLoop / finalizeBatch</span></h3>
+  <pre><span class="c">// 1. Continue rows resume in isolation — their own nudge prompt</span>
+<span class="k">const</span> continueBatch = db.<span class="f">dequeueBatch</span>(threadId, <span class="k">true</span>);   <span class="c">// continueOnly</span>
+<span class="k">const</span> isContinue   = continueBatch.length &gt; 0;
+<span class="k">const</span> batch        = isContinue ? continueBatch : db.<span class="f">dequeueBatch</span>(threadId);
+
+<span class="c">// 2. After agent_end: who actually reached the model?</span>
+<span class="f">deliveredRowIds</span>(active) {
+  <span class="k">const</span> delivered = <span class="k">new</span> Set(active.continueIds);          <span class="c">// prior-batch rows</span>
+  <span class="k">if</span> (active.deliveredCount &gt;= 1) <span class="c">// prompt landed (user index 0)</span>
+    active.promptRowIds.forEach(id =&gt; delivered.add(id));
+  <span class="k">for</span> (<span class="k">let</span> k = 1; k &lt; active.deliveredCount; k++)        <span class="c">// each steer</span>
+    (active.steerGroups[k-1] ?? []).forEach(id =&gt; delivered.add(id));
+  <span class="k">return</span> delivered;
+}
+
+<span class="c">// 3. Split: undelivered → resend; delivered → done | continue</span>
+<span class="k">if</span> (undelivered.length)  db.<span class="f">markBatchFailed</span>(undelivered, <span class="s">"[not_delivered] …"</span>, max, sid);
+<span class="k">else if</span> (complete)        db.<span class="f">markBatchDone</span>(deliveredIds, sid);
+<span class="k">else</span>                     db.<span class="f">markBatchFailed</span>(deliveredIds, errorTag, max, sid);</pre>
+
+  <h3>Verdict from message shape — no JSONL read <span class="crumb">runner.ts:endOfTurn</span></h3>
+  <pre><span class="k">function</span> <span class="f">endOfTurn</span>(messages) {
+  <span class="k">const</span> last = messages[messages.length - 1];
+  <span class="k">if</span> (last?.role === <span class="s">"assistant"</span> &amp;&amp; last.stopReason === <span class="s">"stop"</span>)
+    <span class="k">return</span> { complete: <span class="k">true</span>,  errorTag: <span class="s">""</span> };               <span class="c">// ✓ natural stop</span>
+  <span class="k">if</span> (last?.role === <span class="s">"assistant"</span> &amp;&amp; last.stopReason === <span class="s">"error"</span>)
+    <span class="k">return</span> { complete: <span class="k">false</span>, errorTag: <span class="s">`[agent_error] …`</span> };  <span class="c">// model/API error</span>
+  <span class="k">return</span> { complete: <span class="k">false</span>, errorTag: <span class="s">`[incomplete] … (last=…)`</span> }; <span class="c">// toolResult/length</span>
+}</pre>
+
+  <h3>Retry-mode derivation — the one bit that decides everything <span class="crumb">queue.ts:deriveRetryMode</span></h3>
+  <pre><span class="k">function</span> <span class="f">deriveRetryMode</span>(row) {
+  <span class="k">if</span> (row.pi_entry_id != <span class="k">null</span>) <span class="k">return</span> <span class="s">"continue"</span>;  <span class="c">// delivered → nudge</span>
+  <span class="k">if</span> (row.attempts &gt; 0)        <span class="k">return</span> <span class="s">"resend"</span>;    <span class="c">// requeued, never delivered</span>
+  <span class="k">return</span> <span class="k">undefined</span>;                              <span class="c">// fresh</span>
+}</pre>
+
+  <h3>Steer-or-wake — why callers never decide <span class="crumb">runner.ts:notify</span></h3>
+  <pre>db.<span class="f">enqueue</span>(…);                          <span class="c">// durable FIRST, always</span>
+<span class="k">const</span> active = this.active.get(threadId);
+<span class="k">if</span> (active &amp;&amp; active.phase === <span class="s">"streaming"</span> &amp;&amp; !payload.doNotSteer &amp;&amp; active.rpc) {
+  active.steerGroups.<span class="f">push</span>([id]);          <span class="c">// track BEFORE dispatch</span>
+  <span class="k">try</span> { active.rpc.<span class="f">sendSteer</span>(steerText); db.<span class="f">markInFlight</span>([id]); }
+  <span class="k">catch</span> { active.steerGroups.splice(idx,1); }  <span class="c">// pipe broke → keep pending</span>
+} <span class="k">else</span> this.<span class="f">signalAll</span>();                 <span class="c">// wake an idle worker</span></pre>
+</section>
+
+<footer>
+  Generated from a static read of <code>apps/server/src/{runner,queue,rpc,types}.ts</code>,
+  <code>agents/templates/base/extensions/harness-bridge.ts</code>, and <code>docs/server.md</code>.<br>
+  Line references reflect the working-tree state at analysis time.
+</footer>
+
+</div>
+</body>
+</html>

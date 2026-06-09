@@ -126,6 +126,7 @@ Plugin: telegram
 Channel: 12345
 [IsSilent: true]
 [Retry: true]
+[Continuation: true]
 <plugin-contributed PascalCase fields>
 </harness-metadata>
 ```
@@ -141,6 +142,12 @@ Channel: 12345
   required actions (sent a reply, scheduled a reminder, written a file,
   etc.). **Do not blindly redo what you already did.** Continue from where you left off, and if
   no further action is needed, just end your turn.
+- **Continuation: true** — your _previous turn_ on this thread was cut off
+  before it finished (the process or model connection stopped mid-step). This
+  message carries no new request — the original request and everything you
+  already did are in the conversation history above and are **not** repeated.
+  **Do not restart from scratch and do not ask anyone to resend.** Pick up where
+  you left off, finish the remaining work, then end your turn.
 - **Plugin-contributed fields** — PascalCase keys (e.g. `SenderId`, `MessageId`, `Attachments`).
 
 ## File attachments

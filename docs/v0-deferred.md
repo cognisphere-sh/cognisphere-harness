@@ -93,6 +93,14 @@ EOF
 cp apps/server/agents/templates/base/workspace/index.md \
    "$ROOT/agents/$ID/workspace/index.md"
 
+# 4b. harness-bridge extension — copy so the runner can capture pi session
+#     entry ids in real time (used by smart retry / continue-vs-resend). The
+#     agent still runs without it, but loses real-time entry linking and a
+#     delivered-but-failed row can't be told apart for a continue retry.
+mkdir -p "$ROOT/agents/$ID/extensions"
+cp apps/server/agents/templates/base/extensions/harness-bridge.ts \
+   "$ROOT/agents/$ID/extensions/harness-bridge.ts"
+
 # 5. bootstrap dir — copy from template, then run to provision .venv,
 #    install ffmpeg/pdftoppm/markitdown/ddgs. The runner auto-activates
 #    .venv at spawn time; bootstrap is the operator's responsibility (same

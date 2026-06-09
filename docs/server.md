@@ -150,6 +150,7 @@ is `<rootDir>/<harnessId>`.
         │   ├── state/            ← plugin-private
         │   └── inbox/            ← plugin-private (file attachments etc.)
         ├── skills/<scope>/<skill>/SKILL.md
+        ├── extensions/harness-bridge.ts   ← seeded; reports entry ids (§4.7)
         ├── extensions/<scope>/{index.ts,package.json,...}
         ├── scripts/<plugin>/<cli>
         └── assets/               ← agent-authored static assets
@@ -390,7 +391,13 @@ Per-agent SQLite WAL at `<agent>/sessions/.events.db`. Two tables:
   text, metadata, status, priority, attempts, error, pi_session_id,
   pi_entry_id)`. The last two link the row to a position in pi's
   session JSONL (file = `<threadDir>/<pi_session_id>.jsonl`, entry
-  = `pi_entry_id`); both are `NULL` until the row's batch completes.
+  = `pi_entry_id`). `pi_entry_id` is written **in real time** during the
+  batch (via `setRowEntryId`, fed by the harness-bridge extension — see
+  §4.7/§4.8), so it is populated as soon as the row's user message is
+  delivered, even on rows whose batch later fails or is still in-flight.
+  It doubles as the **retry-mode marker**: a re-queued row that already
+  carries one was delivered, so it is retried in *continue* mode (a nudge,
+  not a resend) — there is no separate `retry_mode` column.
   Multiple rows in the same batch share a single `pi_entry_id`
   (concatenated prompt → one user message); each live-steer row gets
   its own. New columns are added idempotently via `ALTER TABLE` on
@@ -443,14 +450,24 @@ Load-bearing methods:
   never claim the same thread. Filters `status='queued' AND is_silent=0`
   (silent rows never wake a worker on their own; they ride along with
   the next non-silent batch).
-- `dequeueBatch(threadId) → BatchMessage[]` — pulls all `status='queued'`
-  rows for one thread and flips them to `status='in_flight'` in a single
-  transaction.
-- `markBatchDone(ids[], sessionId, entryIdByRowId)` — sets
-  `status='done'` and writes `pi_session_id` (one value for the whole
-  batch) plus a per-row `pi_entry_id` from the supplied map. Both
-  use `COALESCE(?, existing)` so a `NULL` argument never clobbers a
-  value written by a prior attempt. Rows stay in place.
+- `dequeueBatch(threadId, continueOnly = false) → BatchMessage[]` — pulls
+  `status='queued'` rows for one thread and flips them to
+  `status='in_flight'` in a single transaction. With `continueOnly`, claims
+  only *continue* rows (`pi_entry_id IS NOT NULL` — already delivered on a
+  prior batch). The runner calls this first: if continue rows exist they form
+  their own prompt (a continuation nudge), isolated from all other work, and
+  the remaining resend + fresh rows are steered in afterwards. A plain call
+  claims everything still queued (resend + fresh), which the runner
+  concatenates into one prompt. Each `BatchMessage` carries a derived
+  `retryMode` (`pi_entry_id` set → `"continue"`, else `attempts > 0` →
+  `"resend"`, else fresh).
+- `setRowEntryId(rowId, sessionId, entryId)` — bind one row to its pi session
+  entry, called by the runner in real time as the harness-bridge extension
+  reports each user-message entry id. This is what makes `pi_entry_id`
+  available before exit and on failed rows.
+- `markBatchDone(ids[], sessionId)` — sets `status='done'` and writes
+  `pi_session_id` via `COALESCE`. Per-row `pi_entry_id`s are no longer passed
+  here (written live via `setRowEntryId`). Rows stay in place.
 - `markBatchCancelled(ids[], sessionId)` — terminal cancellation for
   user abort, plugin-driven cancel, runner stop. Records `sessionId`
   via COALESCE.
@@ -458,13 +475,18 @@ Load-bearing methods:
   bumps attempts; rows past the cap get `status='failed'`, otherwise
   bounce back to `status='queued'` with `error` populated. `sessionId`
   is recorded via COALESCE so the partially-completed pi session is
-  still discoverable from the row.
+  still discoverable from the row. Whether the requeued row then retries as
+  continue or resend is decided entirely by its `pi_entry_id` at the next
+  `dequeueBatch` — this method takes no mode argument.
 - `sweepInFlight(maxAttempts)` — at runner start, every row still
   `status='in_flight'` (from a previous crash) is routed through
-  `markBatchFailed`. Crash-mid-batch counts as one attempt.
+  `markBatchFailed`. Crash-mid-batch counts as one attempt. Because
+  `pi_entry_id` is persisted live, a swept row that was already delivered
+  still retries as continue.
 - `requeueFailed(id) → id | null`, `removeFailed(id)` — operator-facing
-  controls on failed rows. Requeue preserves the row id (just resets
-  status/attempts/error). Discard hard-deletes.
+  controls on failed rows. Requeue preserves the row id and its
+  `pi_entry_id` (just resets status/attempts/error) — so a delivered row
+  requeues as continue, not a duplicate resend. Discard hard-deletes.
 - `deleteThread(threadId) → { events }` — hard-delete every `events` row
   for a thread and its `threads` row, in one transaction. The HTTP
   layer that calls this also `rm -r`'s the on-disk session directory,
@@ -488,8 +510,21 @@ newline-delimited.
   such a string would split incorrectly. `JSON.stringify` never emits
   raw `\n` outside strings, so a plain `\n` split is safe.
 - Methods: `sendPrompt` (request/response), `sendSteer` (fire-and-forget
-  inject), `sendAbort`, `onAgentEnd`, `waitExit`, `kill`, `endStdin`,
-  `stderrSnapshot`.
+  inject), `sendAbort`, `onAgentEnd`, `onUserMessageStart`, `onHarnessEntry`,
+  `waitExit`, `kill`, `endStdin`, `stderrSnapshot`.
+- The whole pi event stream is read off stdout (rpc-mode forwards every
+  agent event there). Three of them are surfaced to the runner:
+  - `onAgentEnd(messages)` — fires once when pi's loop ends, carrying the
+    run's messages so the runner can judge completion from the **shape** of
+    the final message (assistant + `stopReason: "stop"` ⇒ complete) with no
+    JSONL read.
+  - `onUserMessageStart()` — fires on each `message_start` with role `user`
+    (the prompt and each steer); the runner counts these in dispatch order to
+    know which rows reached the model.
+  - `onHarnessEntry({index, entryId})` — the harness-bridge extension (§4.8)
+    reports each user-message session entry id over the fire-and-forget
+    `setStatus` channel keyed `"pi-harness"`; the client parses it out of the
+    `extension_ui_request` stream and the runner writes it via `setRowEntryId`.
 - Stderr is mirrored to the structured logger and kept in a rolling
   16 KiB buffer; `stderrSnapshot()` returns the tail and is included in
   the failure event when a batch crashes.
@@ -497,7 +532,8 @@ newline-delimited.
   prompts the user via these (select/confirm/input/editor); the harness
   has no human, so it replies `cancelled: true` and lets the agent
   continue. Without this, a pi extension that pops a dialog would hang
-  the batch indefinitely.
+  the batch indefinitely. `setStatus` requests keyed `"pi-harness"` are
+  intercepted for `onHarnessEntry` instead of being treated as UI.
 - Pending RPC promises are rejected if the child exits or errors before
   responding.
 
@@ -534,32 +570,42 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
    signalled.
 2. `peekHighestPriorityThread(exclude=active.keys())` — returns a thread
    id with pending non-silent rows that no other worker is processing.
-3. `dequeueBatch(threadId)` — claims the rows.
-4. Spawn `pi --mode rpc` (see §4.8.1).
-5. Concatenate batch messages: each message gets a `<harness-metadata>`
-   prefix, then the message text; messages joined with `\n\n`.
-6. `rpc.sendPrompt(promptText)`. Phase becomes `streaming`.
+3. `dequeueBatch(threadId, continueOnly=true)` first. If it returns rows, this
+   is a **continue batch** (the prompt is just the nudge); otherwise
+   `dequeueBatch(threadId)` claims the remaining resend + fresh rows for a
+   normal concatenated prompt. Continue rows are never mixed with other work.
+4. Spawn `pi --mode rpc` (see §4.8.1). The seeded harness-bridge agent
+   extension (`<agentDir>/extensions/harness-bridge.ts`) loads with it and
+   streams user-message entry ids back live.
+5. Assemble the prompt. On a continue batch it is a single
+   `buildContinuationNudge` (`Continuation: true`) — the continue rows are not
+   re-rendered (their text is already in pi's history). Otherwise each resend
+   and fresh row renders its `<harness-metadata>` + text (resend rows carry
+   `Retry: true` via `attempts > 0`), joined with `\n\n`.
+6. `rpc.sendPrompt(promptText)`. Phase becomes `streaming`. On a continue
+   batch, `drainQueuedAsSteers` then claims the thread's remaining resend +
+   fresh rows and injects them as **one combined steer** (a single
+   user-message entry carrying all of them) so they ride this batch.
 7. `Promise.race(agentEnded, rpc.waitExit())` — guards against pi
    crashing before emitting `agent_end`.
-8. On clean end: close stdin, await pi's exit (5s SIGKILL guard),
-   then inspect the session JSONL. First, scan for the final assistant
-   entry appended during this batch — if its `message.stopReason ===
-   "error"` (the agent loop bailed out on a model/API error but pi
-   still emitted `agent_end`), throw with the entry's `errorMessage`
-   so the catch branch routes the rows through `markBatchFailed`.
-   Otherwise, slice off any user-message entries appended past the
-   pre-batch snapshot count and build `entryIdByRowId`: every row in
-   `active.ids` shares the first new entry id (one concatenated prompt
-   → one user message); each `active.steerIds[i]` gets the (i+1)-th.
-   `markBatchDone(ids, sessionId, entryIdByRowId)` writes the link
-   back. If the JSONL has fewer user-message entries than expected
-   (e.g. pi didn't append a steer before agent_end), affected rows'
-   `pi_entry_id` stays NULL and the runner logs a warn.
-9. On crash or pi-side error (no `agent_end`, or `agent_end` followed
-   by a `stopReason: "error"` final entry): `markBatchFailed(ids,
-   errFull, maxAttempts)` — bumps attempts, dead-letters past the cap.
-   Stderr tail is appended to the error message for the
-   no-`agent_end` path.
+8. Throughout the batch, `onUserMessageStart` counts deliveries in dispatch
+   order and `onHarnessEntry` writes each delivered row's `pi_entry_id` via
+   `setRowEntryId` (so the link exists even if the batch later fails). User
+   entry 0 maps to the prompt rows (`promptRowIds` — empty on a continue
+   batch); entry i≥1 maps to the i-th steer's row *group* (`steerGroups[i-1]`
+   — one row for a live `notify` steer, the whole drained set for the combined
+   steer). Continue rows keep the entry id they were given on a prior batch.
+9. On clean end (`agent_end` received): close stdin, await pi's exit (5s
+   SIGKILL guard), then `finalizeBatch`. Completion is judged purely from the
+   **shape** of the `agent_end` messages (`endOfTurn`): complete iff the last
+   message is an assistant with `stopReason: "stop"`. Rows are split by
+   delivery: any row whose user message never arrived → `markBatchFailed`
+   `[not_delivered]` (retries as resend); delivered rows → `markBatchDone`
+   when the turn completed, else `markBatchFailed` with the turn's tag
+   (`[agent_error]` for `stopReason: "error"`, otherwise `[incomplete]` —
+   e.g. the loop stopped on a `toolResult`). Delivered-but-failed rows already
+   carry their `pi_entry_id`, so they retry as continue. With no `agent_end`
+   at all, the batch is a `[crash]` and all delivered rows fail likewise.
 10. On `abort(threadId)`: the runner sets `active.cancelled = true` and
     sends an `abort` frame to pi, which responds by emitting `agent_end`
     cleanly. The race resolves successfully, but the post-race check on
@@ -573,9 +619,12 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
 a fenced block with `Timestamp`, `Plugin`, `Channel`, optional
 `IsSilent` / `Retry`, then pascal-cased keys from `payload.metadata`
 (reserved keys `Timestamp` / `Plugin` / `Channel` / `IsSilent` /
-`Retry` are filtered to prevent clobbering). The `Retry: true` line
-appears when `attempts > 0`, signalling to the agent that the prior
-attempt may have completed partial work.
+`Retry` / `Continuation` are filtered to prevent clobbering). The
+`Retry: true` line appears when `attempts > 0`, signalling to the agent
+that the prior attempt may have completed partial work. A separate
+`buildContinuationNudge` emits a slim block tagged `Continuation: true`
+(no plugin/channel — the originals are in history) for continue-mode
+retries; see §5.3.
 
 #### 4.8.1 `spawnPi(threadId, sessionDir, log)`
 
@@ -594,6 +643,17 @@ pi --mode rpc
    --extension <agentDir>/extensions/<X> ← per first-level entry, only
                                             when entrypoint resolvable
 ```
+
+The **harness-bridge** extension (which reports user-message entry ids back
+over the RPC stream — see §4.7) is **not** special-cased here: it ships as an
+ordinary seeded agent extension at `<agentDir>/extensions/harness-bridge.ts`
+and is picked up by the same `<agentDir>/extensions/` loop as any other
+agent extension. The canonical copy lives at
+`apps/server/agents/templates/base/extensions/harness-bridge.ts` and is copied
+into each agent's `extensions/` dir at create time (like `0-base_prompt.md`);
+an agent missing it simply loses real-time entry capture (the runner falls
+back to its own `message_start` delivery count — §4.8). `--no-extensions` only
+disables pi's auto-discovery; explicit `--extension` paths still load.
 
 `--session <path>` instead of `--session-dir … --continue`: the harness
 generates the `sessionId` (UUID) on the thread's first batch, persists it
@@ -658,8 +718,8 @@ Then:
   `<pluginId>:<channelId>`.
 - Checks if there's an active streaming batch on the same thread.
 - If yes **and** `doNotSteer !== true`: builds `<harness-metadata>` +
-  text, calls `rpc.sendSteer` against the live child, adds the row id
-  to `active.steerIds` (so it gets marked done with the batch).
+  text, calls `rpc.sendSteer` against the live child, pushes a single-row
+  group onto `active.steerGroups` (so it gets marked done with the batch).
 - Else: `signalAll()` to wake an idle worker.
 
 This means callers (admin plugin, scheduler, telegram, …) never need to
@@ -667,15 +727,19 @@ ask "is this a new prompt or a steer?". They call `notify()`; the
 runner decides. There is no operator-only steer endpoint — admin is
 just another plugin calling `ctx.notify()`.
 
-`steerIds` is an ordered array (not a `Set`) so that the post-batch
-`pi_entry_id` capture can map each steer to the user-message entry pi
-appended for it (stdin is serial → pi appends in dispatch order).
-Steers push the new row id onto `steerIds` *before* dispatching; if the
-in-flight steer write throws, the id is removed and the row stays
-pending (it'll be picked up in the next batch). If the batch later
-fails, the steer ids are folded into `markBatchFailed` along with the
-original batch ids, so a row that was steered into N consecutive
-failing batches accrues attempts and eventually reaches the DLQ.
+`steerGroups` is an ordered array of row-id groups (not a flat `Set`) so the
+live `pi_entry_id` capture can map each steer to the user-message entry pi
+appended for it (stdin is serial → pi appends in dispatch order, so the i-th
+steer is the (i+1)-th user message). Each group is the set of rows sharing
+one steer entry: a live `notify` steer pushes a single-row group; the
+continue batch's drained resend+fresh rows push one multi-row group (they go
+out as a single combined steer → one entry). Steers push their group *before*
+dispatching; if the write throws, the group is removed and those rows stay
+pending (picked up next batch). If the batch later fails, the groups are
+folded into the delivery split along with the prompt rows — a steer that
+never landed retries as resend; one that landed but the turn was cut off
+retries as continue. Either way attempts accrue and the row eventually
+reaches the DLQ.
 
 Silent (`isSilent: true`) and `doNotSteer: true` notifications never
 wake a worker on their own — they wait for the next non-silent batch
@@ -888,7 +952,8 @@ The shared type surface every component imports from. Notable shapes:
 Same as 5.1 step 4, except an active streaming batch exists on the
 same `threadId` and `payload.doNotSteer !== true`. The runner *also*
 calls `rpc.sendSteer` against the live child. The row id is added to
-`active.steerIds` and merged into the "done" set on batch completion.
+`active.steerGroups` (as a single-row group) and merged into the "done"
+set on batch completion.
 If the batch fails, the steer ids ride along into `markBatchFailed` so
 their attempts get bumped (rows that have been steered into N
 consecutive failing batches eventually reach `status='failed'` instead
@@ -904,30 +969,39 @@ of looping forever).
 - If `attempts >= maxAttempts`: row goes to `status='failed'`.
 
 Boot then proceeds normally; the worker loop picks up retried rows on
-its next `peekHighestPriorityThread`. The retried batch's first prompt
-carries `Retry: true` in its `<harness-metadata>`, telling the agent
-that the prior attempt may have completed partial work.
+its next `peekHighestPriorityThread`. How each row re-dispatches is
+decided by its `pi_entry_id` (written live during the original batch):
+a row that was delivered retries in **continue** mode (a single
+`Continuation: true` nudge, no resend — its text is already in pi's
+history), while an undelivered row retries in **resend** mode, carrying
+`Retry: true`. Because `pi_entry_id` is persisted as messages are
+delivered, this classification survives a full server crash.
 
-The `pi` child crashing mid-batch (no `agent_end`) is detected by the
-`Promise.race(agentEnded, rpc.waitExit())` — if `waitExit` resolves
-first, the worker throws `pi exited without agent_end. stderr: ...`,
-which goes through `markBatchFailed`. Same retry loop.
+**Completion** is judged from the shape of pi's `agent_end` frame, not a
+JSONL read. `endOfTurn(messages)` returns complete only when the last
+message is an assistant with `stopReason: "stop"`. Every other shape is
+incomplete and routes the *delivered* rows through `markBatchFailed`
+(→ continue):
 
-Pi-side errors that don't crash the process — e.g. the model returning
-a 400 (rate-limit, usage-cap, content policy) — are different: pi's
-agent loop catches the error, writes a final assistant entry with
-`message.stopReason: "error"` and `message.errorMessage`, then emits
-`agent_end` cleanly. After `waitExit`, the worker re-reads the session
-JSONL and inspects the last assistant entry appended during the batch;
-if its `stopReason === "error"`, it throws so the batch routes through
-`markBatchFailed` instead of `markBatchDone`. Same retry loop as
-crashes.
+- **No `agent_end` at all** (the child died) — detected by
+  `Promise.race(agentEnded, rpc.waitExit())`; tagged `[crash]` with the
+  stderr tail.
+- **Model/API error** — pi catches it, sets the final assistant
+  `stopReason: "error"`, and still emits `agent_end`; tagged
+  `[agent_error]` with the `errorMessage` carried on the frame.
+- **Cut off mid-step** — e.g. the loop stopped after a tool turn on a
+  context cap, so the last message is a `toolResult` (or an assistant
+  with `toolUse`/`length`); tagged `[incomplete]`. This is the case that
+  previously required a human to type "continue"; the nudge now does it.
 
-Both failure paths prefix the `error` text with a short tag so the
-category is recoverable without re-parsing pi state:
-`[crash] ...` (no `agent_end`), `[agent_error] ...` (pi
-`stopReason=error`), `[runner_error] ...` (everything else, e.g. an
-unexpected harness-side exception).
+Separately, any row whose user message never reached the model (its
+delivery index never arrived) is tagged `[not_delivered]` and retries as
+resend — even when the rest of the batch completed.
+
+Error tags make the category recoverable without re-parsing pi state:
+`[crash]`, `[agent_error]`, `[incomplete]`, `[not_delivered]`, and
+`[runner_error]` (an unexpected harness-side exception, e.g. spawn
+failure).
 
 ### 5.4 Boot sequence
 

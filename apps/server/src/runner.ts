@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node
 import { join } from "node:path";
 import type { AgentDb } from "./queue.js";
 import { PiRpcClient } from "./rpc.js";
+import type { PiMessage } from "./rpc.js";
 import type {
   AgentJson,
   BatchMessage,
@@ -14,7 +15,14 @@ import type {
 import { AGENT_TOOLS } from "./types.js";
 import type { Logger } from "./logger.js";
 
-const RESERVED_META = new Set(["Timestamp", "Plugin", "Channel", "IsSilent", "Retry"]);
+const RESERVED_META = new Set([
+  "Timestamp",
+  "Plugin",
+  "Channel",
+  "IsSilent",
+  "Retry",
+  "Continuation",
+]);
 
 function pascal(s: string): string {
   return s
@@ -81,19 +89,89 @@ export function buildHarnessMetadata(m: BatchMessage, tz: string): string {
   return lines.join("\n");
 }
 
+/**
+ * Prompt fragment used to resume a thread whose previous turn was interrupted
+ * (the LLM connection dropped, or pi stopped mid-loop on a context cap). The
+ * interrupted rows' original text is already in pi's session history, so we
+ * send a single generic continuation note instead of re-sending it — the
+ * automated equivalent of a human typing "continue". Carries a slim metadata
+ * block (no plugin/channel; the originals are in history) tagged
+ * `Continuation: true`, which the base prompt documents.
+ */
+export function buildContinuationNudge(tz: string): string {
+  return [
+    "<harness-metadata>",
+    `Timestamp: ${fmtTs(Date.now(), tz)}`,
+    "Continuation: true",
+    "</harness-metadata>",
+    "Your previous turn on this thread ended before it finished — the process or " +
+      "model connection stopped mid-step. The original request(s) and everything " +
+      "you already did are in the conversation history above and are NOT repeated " +
+      "here. Do not restart from scratch and do not ask anyone to resend. Continue " +
+      "from where you left off and finish the remaining work.",
+  ].join("\n");
+}
+
+/**
+ * Classify a finished pi run from the messages carried on its `agent_end`
+ * frame. The turn is complete only when its **last** message is an assistant
+ * message that stopped naturally (`stopReason: "stop"`). Pi's agent loop
+ * appends tool results after an assistant turn, so a last message that is a
+ * `toolResult` (or an assistant with `toolUse`/`length`) means the loop was
+ * cut off mid-step (e.g. a context-budget stop) and the work isn't done.
+ */
+function endOfTurn(messages: PiMessage[]): { complete: boolean; errorTag: string } {
+  const last = messages[messages.length - 1];
+  if (last?.role === "assistant" && last.stopReason === "stop") {
+    return { complete: true, errorTag: "" };
+  }
+  if (last?.role === "assistant" && last.stopReason === "error") {
+    return {
+      complete: false,
+      errorTag: `[agent_error] ${last.errorMessage ?? "(no errorMessage)"}`,
+    };
+  }
+  const detail = last
+    ? last.role === "assistant"
+      ? `assistant/${last.stopReason ?? "?"}`
+      : (last.role ?? "?")
+    : "empty";
+  return {
+    complete: false,
+    errorTag: `[incomplete] turn ended mid-step (last=${detail})`,
+  };
+}
+
 interface ActiveBatch {
   threadId: string;
   ids: number[];
-  /** Order matters: each steer becomes its own user-message entry in pi's
-   *  session, so we map row → entry id by dispatch-order index after the
-   *  batch ends. Set was wrong for this; an array preserves order. */
-  steerIds: number[];
+  /** Each steer is one user-message entry in pi's session, mapped to row ids
+   *  by dispatch-order index after the batch ends. A steer may carry several
+   *  rows (the drained resend+fresh rows go out as one combined steer = one
+   *  entry), so each element is the list of row ids sharing that entry. Live
+   *  per-plugin steers (`notify`) push a single-row group. */
+  steerGroups: number[][];
   /** Canonical pi session id for this thread; assigned in processBatch
    *  before spawn, used to locate the JSONL post-batch. */
   sessionId: string;
   phase: "spawning" | "streaming" | "completing" | "exited";
   cancelled: boolean;
   rpc: PiRpcClient | null;
+  /** True when this batch's prompt is the continuation nudge (continue rows
+   *  present); resend + fresh rows are then steered in as one combined steer
+   *  via {@link AgentRunner.drainQueuedAsSteers}. */
+  isContinue: boolean;
+  /** Rows whose text is rendered into the initial prompt (resend + fresh rows
+   *  on a non-continue batch). They map to the first user-message entry;
+   *  continue rows do not. Empty on a continue batch (the prompt is just the
+   *  nudge). */
+  promptRowIds: number[];
+  /** Continue rows — already delivered on a prior batch (their `pi_entry_id`
+   *  is set). Their text is NOT in the prompt (only the continuation nudge). */
+  continueIds: Set<number>;
+  /** Count of user messages pi has appended this batch (prompt = 1, then one
+   *  per delivered steer). Drives the post-batch delivery split. */
+  deliveredCount: number;
 }
 
 export interface RunnerOpts {
@@ -239,7 +317,8 @@ export class AgentRunner extends EventEmitter {
         attempts: 0,
       };
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
-      active.steerIds.push(id);
+      const group = [id];
+      active.steerGroups.push(group);
       try {
         active.rpc.sendSteer(steerText);
         // The row was enqueued as 'queued' but dequeueBatch never saw it;
@@ -251,10 +330,10 @@ export class AgentRunner extends EventEmitter {
           "steer dispatched",
         );
       } catch (err) {
-        // Pop the id we just pushed. Safe under single-threaded JS because
+        // Drop the group we just pushed. Safe under single-threaded JS because
         // notify() runs to completion before the next call interleaves.
-        const idx = active.steerIds.lastIndexOf(id);
-        if (idx >= 0) active.steerIds.splice(idx, 1);
+        const idx = active.steerGroups.indexOf(group);
+        if (idx >= 0) active.steerGroups.splice(idx, 1);
         this.opts.log.error({ err, threadId, id }, "steer failed; row kept pending");
       }
       return id;
@@ -295,7 +374,15 @@ export class AgentRunner extends EventEmitter {
         await this.waitForWork();
         continue;
       }
-      const batch = this.opts.db.dequeueBatch(threadId);
+      // Continue rows (a delivery that was interrupted) must resume in
+      // isolation: they form their own prompt — a single continuation nudge —
+      // and are never mixed with other work. If any exist they take priority;
+      // the remaining resend + fresh rows are steered in afterwards as one
+      // combined steer (drainQueuedAsSteers). Otherwise the normal path claims
+      // all queued rows (resend + fresh) into a single concatenated prompt.
+      const continueBatch = this.opts.db.dequeueBatch(threadId, true);
+      const isContinue = continueBatch.length > 0;
+      const batch = isContinue ? continueBatch : this.opts.db.dequeueBatch(threadId);
       if (batch.length === 0) continue;
       // Resolve the thread's canonical session id before spawning. First
       // batch on a thread → generate a UUID and persist; subsequent batches
@@ -309,11 +396,19 @@ export class AgentRunner extends EventEmitter {
       const active: ActiveBatch = {
         threadId,
         ids: batch.map((m) => m.id),
-        steerIds: [],
+        steerGroups: [],
         sessionId,
         phase: "spawning",
         cancelled: false,
         rpc: null,
+        isContinue,
+        promptRowIds: batch
+          .filter((m) => m.retryMode !== "continue")
+          .map((m) => m.id),
+        continueIds: new Set(
+          batch.filter((m) => m.retryMode === "continue").map((m) => m.id),
+        ),
+        deliveredCount: 0,
       };
       this.active.set(threadId, active);
       try {
@@ -345,48 +440,71 @@ export class AgentRunner extends EventEmitter {
       threadId,
     );
     mkdirSync(sessionDir, { recursive: true });
-    const sessionFile = join(sessionDir, `${sessionId}.jsonl`);
-
-    // Snapshot pre-batch user-message count so we can slice off the new
-    // entries pi appends during this batch and map them to row ids.
-    // Returns 0 when the file doesn't yet exist (first batch on this thread).
-    const preBatchUserCount = countUserMessageEntries(sessionFile);
 
     let rpc: PiRpcClient | null = null;
     try {
       rpc = this.spawnPi(threadId, sessionDir, sessionId, log);
       active.rpc = rpc;
 
-      const promptText = batch
-        .map((m) => `${buildHarnessMetadata(m, this.opts.timezone)}\n${m.text}`)
-        .join("\n\n");
+      // Real-time delivery + entry-id capture from the pi event stream:
+      //  - each user message pi appends (the prompt, then each steer) fires
+      //    onUserMessageStart → we count deliveries in dispatch order;
+      //  - the harness-bridge extension reports each user entry's id, which we
+      //    write to the matching row immediately (so a row that later fails
+      //    still carries its pi_entry_id → it retries as 'continue').
+      rpc.onUserMessageStart(() => {
+        active.deliveredCount++;
+      });
+      rpc.onHarnessEntry(({ index, entryId }) => {
+        for (const id of this.rowsForUserIndex(active, index)) {
+          this.opts.db.setRowEntryId(id, sessionId, entryId);
+        }
+      });
+
+      // Continue rows are not re-rendered — a single generic nudge stands in
+      // for all of them (their original text is already in pi's history).
+      // Fresh/resend rows render their full text (+ Retry: true when attempts>0).
+      const parts: string[] = [];
+      if (active.continueIds.size > 0) parts.push(buildContinuationNudge(this.opts.timezone));
+      for (const m of batch) {
+        if (m.retryMode === "continue") continue;
+        parts.push(`${buildHarnessMetadata(m, this.opts.timezone)}\n${m.text}`);
+      }
+      const promptText = parts.join("\n\n");
 
       log.info(
-        { threadId, sessionId, count: batch.length, plugin: batch[0]!.pluginId },
+        {
+          threadId,
+          sessionId,
+          count: batch.length,
+          continue: active.continueIds.size,
+          isContinue: active.isContinue,
+          plugin: batch[0]!.pluginId,
+        },
         "prompt",
       );
 
-      let endedCleanly = false;
+      let endMessages: PiMessage[] | null = null;
       const agentEnded = new Promise<void>((resolve) => {
-        rpc!.onAgentEnd(() => {
-          endedCleanly = true;
+        rpc!.onAgentEnd((messages) => {
+          endMessages = messages;
           resolve();
         });
       });
       await rpc.sendPrompt(promptText);
       active.phase = "streaming";
+      // On a continue batch the resend + fresh rows were deliberately left
+      // behind (continueOnly dequeue). Now that pi is streaming, steer them in
+      // as one combined message so they ride this batch instead of waiting.
+      if (active.isContinue) this.drainQueuedAsSteers(active, log);
       // Race agent_end against pi exit; if pi exits first without emitting
       // agent_end, treat it as a crash.
       await Promise.race([agentEnded, rpc.waitExit()]);
       // Pi responds to an abort frame by emitting agent_end cleanly, so the
       // race resolves successfully on user-cancel too. Route to the catch
-      // branch (which sees `active.cancelled`) instead of marking done.
+      // branch (which sees `active.cancelled`) instead of finalizing.
       if (active.cancelled) {
         throw new Error("batch aborted");
-      }
-      if (!endedCleanly) {
-        const stderr = rpc.stderrSnapshot()?.slice(-512) ?? "";
-        throw new Error(`[crash] pi exited without agent_end. stderr: ${stderr}`);
       }
       active.phase = "completing";
       rpc.endStdin();
@@ -394,63 +512,23 @@ export class AgentRunner extends EventEmitter {
       await rpc.waitExit();
       clearTimeout(exitTimer);
 
-      // Pi emits `agent_end` whenever its agent loop terminates — including
-      // when the loop exited because the model call returned an error (e.g.
-      // a 400 usage-limit response). In that case the final assistant entry
-      // in the session JSONL carries `stopReason: "error"` with an
-      // `errorMessage`. Surface it as a batch failure instead of marking the
-      // rows done.
-      const finalOutcome = readFinalAssistantOutcomeAfter(
-        sessionFile,
-        preBatchUserCount,
-      );
-      if (finalOutcome?.stopReason === "error") {
-        throw new Error(
-          `[agent_error] pi ended with stopReason=error: ${finalOutcome.errorMessage ?? "(no errorMessage)"}`,
-        );
+      // Verdict: completion comes purely from the shape of the agent_end
+      // frame's messages (no JSONL read). No agent_end at all ⇒ crash.
+      let complete: boolean;
+      let errorTag: string;
+      if (endMessages === null) {
+        complete = false;
+        const stderr = rpc.stderrSnapshot()?.slice(-512) ?? "";
+        errorTag = `[crash] pi exited without agent_end. stderr: ${stderr}`;
+      } else {
+        ({ complete, errorTag } = endOfTurn(endMessages));
       }
-
-      // Read pi's session JSONL post-`agent_end` and map the user-message
-      // entries appended during this batch back to row ids:
-      //   - all rows in active.ids share the first new entry id (one
-      //     concatenated prompt → one user message),
-      //   - active.steerIds[i] gets the (i+1)-th new entry id (each steer
-      //     becomes its own user message; stdin is serial so pi appends
-      //     them in dispatch order).
-      const newEntryIds = readUserEntryIdsAfter(sessionFile, preBatchUserCount);
-      const entryMap = new Map<number, string>();
-      const e0 = newEntryIds[0];
-      if (e0) for (const id of active.ids) entryMap.set(id, e0);
-      active.steerIds.forEach((rowId, i) => {
-        const eid = newEntryIds[i + 1];
-        if (eid) entryMap.set(rowId, eid);
-      });
-      if (!e0 || newEntryIds.length < 1 + active.steerIds.length) {
-        log.warn(
-          {
-            threadId,
-            sessionFile,
-            expected: 1 + active.steerIds.length,
-            got: newEntryIds.length,
-          },
-          "fewer user-message entries than expected; some pi_entry_ids will be NULL",
-        );
-      }
-
-      this.opts.db.markBatchDone(
-        [...active.ids, ...active.steerIds],
-        sessionId,
-        entryMap,
-      );
-      log.debug(
-        { threadId, batch: batch.length, steers: active.steerIds.length },
-        "batch done",
-      );
+      this.finalizeBatch(active, complete, errorTag, log);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (active.cancelled) {
         this.opts.db.markBatchCancelled(
-          [...active.ids, ...active.steerIds],
+          [...active.ids, ...active.steerGroups.flat()],
           sessionId,
         );
         log.info({ threadId }, "batch cancelled");
@@ -458,19 +536,113 @@ export class AgentRunner extends EventEmitter {
         const stderr = rpc?.stderrSnapshot()?.slice(-512);
         const tagged = msg.startsWith("[") ? msg : `[runner_error] ${msg}`;
         const errFull = stderr ? `${tagged}\n--stderr--\n${stderr}` : tagged;
-        // Steers that were delivered live to this pi process count as a
-        // failed attempt too — otherwise a row that's been steered into N
-        // consecutive failing batches never accrues attempts and never
-        // reaches a failed status. attempts++ matters even though they
-        // were never in_flight.
         const r = this.opts.db.markBatchFailed(
-          [...active.ids, ...active.steerIds],
+          [...active.ids, ...active.steerGroups.flat()],
           errFull,
           this.maxAttempts,
           sessionId,
         );
-        log.error({ err: msg, threadId, retrying: r.retrying.length, dead: r.dead.length }, "batch failed");
+        log.error(
+          { err: msg, threadId, retrying: r.retrying.length, dead: r.dead.length },
+          "batch failed",
+        );
       }
+    }
+  }
+
+  /**
+   * Map a user-message dispatch index to the row id(s) sharing that entry.
+   * Index 0 is the prompt (the resend/fresh rows on a non-continue batch;
+   * empty on a continue batch, whose prompt is just the nudge). Index N≥1 is
+   * the N-th steer — a single-row group for a live `notify` steer, or the
+   * whole drained resend+fresh group for a continue batch.
+   */
+  private rowsForUserIndex(active: ActiveBatch, index: number): number[] {
+    if (index === 0) return active.promptRowIds;
+    return active.steerGroups[index - 1] ?? [];
+  }
+
+  /** Rows that actually reached the model this batch: continue rows (delivered
+   *  on a prior batch) plus every user-message index pi appended. */
+  private deliveredRowIds(active: ActiveBatch): Set<number> {
+    const delivered = new Set<number>(active.continueIds);
+    if (active.deliveredCount >= 1) for (const id of active.promptRowIds) delivered.add(id);
+    for (let k = 1; k < active.deliveredCount; k++) {
+      for (const id of active.steerGroups[k - 1] ?? []) delivered.add(id);
+    }
+    return delivered;
+  }
+
+  /**
+   * Split the batch's rows by delivery and outcome:
+   *   - rows that never reached the model → `[not_delivered]` (retry as resend);
+   *   - delivered rows → done when the turn completed, else failed with
+   *     `errorTag` (their pi_entry_id is already set → retry as continue).
+   */
+  private finalizeBatch(
+    active: ActiveBatch,
+    complete: boolean,
+    errorTag: string,
+    log: Logger,
+  ): void {
+    const allIds = [...active.ids, ...active.steerGroups.flat()];
+    const delivered = this.deliveredRowIds(active);
+    const undelivered = allIds.filter((id) => !delivered.has(id));
+    const deliveredIds = allIds.filter((id) => delivered.has(id));
+
+    if (undelivered.length > 0) {
+      this.opts.db.markBatchFailed(
+        undelivered,
+        "[not_delivered] message missing from session after agent_end",
+        this.maxAttempts,
+        active.sessionId,
+      );
+    }
+    if (deliveredIds.length === 0) {
+      // nothing landed; the undelivered branch already handled the rows
+    } else if (complete) {
+      this.opts.db.markBatchDone(deliveredIds, active.sessionId);
+    } else {
+      this.opts.db.markBatchFailed(
+        deliveredIds,
+        errorTag,
+        this.maxAttempts,
+        active.sessionId,
+      );
+    }
+    log.debug(
+      {
+        threadId: active.threadId,
+        complete,
+        delivered: deliveredIds.length,
+        undelivered: undelivered.length,
+      },
+      complete && undelivered.length === 0 ? "batch done" : "batch finalized",
+    );
+  }
+
+  /**
+   * Dequeue the thread's remaining resend + fresh rows and inject them as a
+   * single combined steer (one user-message entry) into the live continue
+   * batch. Called once the batch is streaming. The rows are tracked as one
+   * group in `steerGroups` before sending, so a broken pipe leaves them
+   * classified as not-delivered (→ resend) by the post-batch split rather than
+   * orphaned in_flight. resend rows carry `Retry: true` via their metadata.
+   */
+  private drainQueuedAsSteers(active: ActiveBatch, log: Logger): void {
+    const rows = this.opts.db.dequeueBatch(active.threadId);
+    if (rows.length === 0) return;
+    active.steerGroups.push(rows.map((m) => m.id));
+    const steerText = rows
+      .map((m) => `${buildHarnessMetadata(m, this.opts.timezone)}\n${m.text}`)
+      .join("\n\n");
+    try {
+      active.rpc!.sendSteer(steerText);
+      log.debug({ threadId: active.threadId, drained: rows.length }, "drained queued as one steer");
+    } catch (err) {
+      // Pipe broke; pi is gone. The group stays in steerGroups — the delivery
+      // split marks it not-delivered → resend on the next batch.
+      log.error({ err, threadId: active.threadId, count: rows.length }, "drain steer failed");
     }
   }
 
@@ -673,103 +845,6 @@ function assembleSystemPrompt(agentDir: string, threadId: string): string {
 function existsDir(p: string): boolean {
   try {
     return statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Pi session JSONL helpers. Each line is one `SessionEntry` (or a
- * `SessionHeader` first line). We only care about user-message entries —
- * `{type:"message", id, message:{role:"user", ...}}` — because every batch
- * (initial concatenated prompt + each steer) becomes exactly one user
- * message, and pi appends them in dispatch order. Other entry types
- * (assistant/toolResult messages, compaction, branch_summary, …) are
- * skipped so they don't shift our index mapping.
- */
-function countUserMessageEntries(path: string): number {
-  if (!existsSync(path)) return 0;
-  let n = 0;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (isUserMessageLine(line)) n++;
-  }
-  return n;
-}
-
-function readUserEntryIdsAfter(path: string, skip: number): string[] {
-  if (!existsSync(path)) return [];
-  const ids: string[] = [];
-  let seen = 0;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (!isUserMessageLine(line)) continue;
-    if (seen++ < skip) continue;
-    try {
-      const parsed = JSON.parse(line) as { id?: string };
-      if (typeof parsed.id === "string") ids.push(parsed.id);
-    } catch {
-      /* malformed — skip; downstream warns when length < expected */
-    }
-  }
-  return ids;
-}
-
-/**
- * Find the last assistant message entry appended after the first
- * {skipUserMsgs} user messages and return its `stopReason` / `errorMessage`.
- * Pi sets `stopReason: "error"` on the final assistant entry when its agent
- * loop bailed out due to a model/API error (the loop still terminates and
- * pi still emits `agent_end`, so the RPC handshake completes cleanly).
- */
-function readFinalAssistantOutcomeAfter(
-  path: string,
-  skipUserMsgs: number,
-): { stopReason?: string; errorMessage?: string } | null {
-  if (!existsSync(path)) return null;
-  let userSeen = 0;
-  let last: { stopReason?: string; errorMessage?: string } | null = null;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (!line || !line.includes(`"type":"message"`)) continue;
-    let parsed: {
-      type?: string;
-      message?: {
-        role?: string;
-        stopReason?: string;
-        errorMessage?: string;
-      };
-    };
-    try {
-      parsed = JSON.parse(line) as typeof parsed;
-    } catch {
-      continue;
-    }
-    if (parsed.type !== "message") continue;
-    const role = parsed.message?.role;
-    if (role === "user") {
-      userSeen++;
-      continue;
-    }
-    if (userSeen <= skipUserMsgs) continue;
-    if (role === "assistant") {
-      last = {
-        stopReason: parsed.message?.stopReason,
-        errorMessage: parsed.message?.errorMessage,
-      };
-    }
-  }
-  return last;
-}
-
-function isUserMessageLine(line: string): boolean {
-  if (!line) return false;
-  // Cheap pre-filter to avoid JSON.parse on every non-message line.
-  if (!line.includes(`"type":"message"`)) return false;
-  if (!line.includes(`"role":"user"`)) return false;
-  try {
-    const e = JSON.parse(line) as {
-      type?: string;
-      message?: { role?: string };
-    };
-    return e.type === "message" && e.message?.role === "user";
   } catch {
     return false;
   }

@@ -149,6 +149,20 @@ export interface AgentSummary {
   failedPlugins: string[];
 }
 
+/**
+ * How a previously-failed row should be re-dispatched, derived (not stored)
+ * from the row's persisted state at dequeue time:
+ *   - `"continue"` — the row's user message already reached the model (its
+ *     `pi_entry_id` is set), so the LLM turn was interrupted *after* delivery.
+ *     Re-send a short continuation nudge, NOT the original text (which is
+ *     already in pi's session history).
+ *   - `"resend"` — the row was requeued but never delivered (`pi_entry_id`
+ *     is NULL, `attempts > 0`). Re-send the full original text with
+ *     `Retry: true`.
+ * `undefined` ⇒ a fresh row (never attempted).
+ */
+export type RetryMode = "resend" | "continue";
+
 export interface BatchMessage {
   id: number;
   enqueuedAt: number;
@@ -162,6 +176,9 @@ export interface BatchMessage {
    *  failed (or the runner crashed mid-batch), so the agent may have
    *  taken partial actions on the prior attempt. */
   attempts: number;
+  /** Retry routing for a re-dispatched row; see {@link RetryMode}. Undefined
+   *  for fresh rows. */
+  retryMode?: RetryMode;
 }
 
 /**

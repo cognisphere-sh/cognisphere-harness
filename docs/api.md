@@ -435,23 +435,31 @@ Response:
 
 `piSessionId` and `piEntryId` link the row to a position in pi's session
 JSONL: `<agentDir>/sessions/<threadId>/<piSessionId>.jsonl`, with
-`piEntryId` pointing at the user-message entry inside that file. Both are
-`null` until the row's batch completes (or for rows that failed before pi
-appended an entry). Multiple rows in the same batch share a single
-`piEntryId` (the runner concatenates queued events into one prompt);
-each row added via live steer gets its own `piEntryId`.
+`piEntryId` pointing at the user-message entry inside that file.
+`piEntryId` is written **in real time** as the message is delivered to the
+model (via a harness-owned pi extension), so it is populated while the row
+is still `in_flight` and on rows whose batch later failed — it is `null`
+only for a row that never reached the model. Multiple rows in the same
+prompt share a single `piEntryId` (the runner concatenates queued events
+into one prompt); each row added via live steer gets its own. A set
+`piEntryId` also marks the row as already-delivered: if it is later
+requeued, the runner retries it in *continue* mode (a short nudge) rather
+than resending the original text.
 
 `total` is the count after filters are applied (before paging) so the
 UI can render a pager.
 
 Requeue returns `{ ok: true, id: <rowId> }` — the row id is preserved
 (no new row is created). It 404s if the target row does not exist or is
-not in `status=failed`.
+not in `status=failed`. `piEntryId` is preserved, so a row that was
+delivered before it dead-lettered requeues in *continue* mode rather than
+resending its text.
 
 Status-set takes `{ "status": "queued" | "done" | "failed" | "cancelled" }`
 and returns `{ ok: true, status }`. Setting `queued` resets `attempts`
-and clears `error` (same effect as requeue). `in_flight` cannot be set
-from the UI — it belongs to the runner.
+and clears `error` (same effect as requeue), and likewise preserves
+`piEntryId`. `in_flight` cannot be set from the UI — it belongs to the
+runner.
 
 Delete returns `{ ok: true }`. Both delete and status-set 409 when the
 target row is currently `in_flight` (abort the batch first), 404 when
