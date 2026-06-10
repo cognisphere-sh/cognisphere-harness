@@ -50,6 +50,7 @@ const COLS = [
   { key: "channel", width: 140 },
   { key: "thread", width: 160 },
   { key: "silent", width: 48 },
+  { key: "noSteer", width: 60 },
   { key: "text", width: 280 },
   { key: "metadata", width: 200 },
   { key: "chat", width: 80 },
@@ -387,6 +388,7 @@ export function EventsTable({ agentId }: Props) {
                 Thread
               </SortableTh>
               <Th>Silent</Th>
+              <Th>No-Steer</Th>
               <Th>Text</Th>
               <Th>Metadata</Th>
               <Th>Chat</Th>
@@ -799,6 +801,12 @@ function Row({
       </td>
       <td className="px-3 py-1.5 text-center text-muted-foreground">
         {row.isSilent ? "•" : ""}
+      </td>
+      <td
+        className="px-3 py-1.5 text-center text-muted-foreground"
+        title={row.doNotSteer ? "doNotSteer: never steered into a live batch" : undefined}
+      >
+        {row.doNotSteer ? "•" : ""}
       </td>
       <td className="px-3 py-1.5">
         <TruncatedCell text={row.text}>{row.text}</TruncatedCell>

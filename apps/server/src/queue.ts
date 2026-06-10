@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS events (
   channel_id     TEXT NOT NULL,
   thread_id      TEXT NOT NULL,
   is_silent      INTEGER NOT NULL DEFAULT 0,
+  do_not_steer   INTEGER NOT NULL DEFAULT 0,
   text           TEXT NOT NULL,
   metadata       TEXT,
   status         TEXT NOT NULL,
@@ -53,6 +54,7 @@ export interface EventRow {
   channel_id: string;
   thread_id: string;
   is_silent: number;
+  do_not_steer: number;
   text: string;
   metadata: string | null;
   status: EventStatus;
@@ -99,6 +101,7 @@ export interface EnqueueArgs {
   metadata: Record<string, unknown> | null;
   priority: number;
   isSilent: boolean;
+  doNotSteer: boolean;
 }
 
 export interface ListEventsOpts {
@@ -139,6 +142,9 @@ export class AgentDb {
     this.db.exec(SCHEMA);
     this.migrateAddColumn("events", "pi_session_id", "TEXT");
     this.migrateAddColumn("events", "pi_entry_id", "TEXT");
+    // Steer opt-out: a row flagged here is never injected into a live batch by
+    // the drain path — it waits for the next batch (see dequeueBatch).
+    this.migrateAddColumn("events", "do_not_steer", "INTEGER NOT NULL DEFAULT 0");
     // Per-thread model override (NULL ⇒ inherit the agent's agent.json model).
     this.migrateAddColumn("threads", "model_provider", "TEXT");
     this.migrateAddColumn("threads", "model_id", "TEXT");
@@ -167,8 +173,8 @@ export class AgentDb {
       .prepare(
         `INSERT INTO events
            (ts, updated_at, plugin_id, channel_id, thread_id, is_silent,
-            text, metadata, status, priority, attempts)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0)`,
+            do_not_steer, text, metadata, status, priority, attempts)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0)`,
       )
       .run(
         now,
@@ -177,6 +183,7 @@ export class AgentDb {
         args.channelId,
         args.threadId,
         args.isSilent ? 1 : 0,
+        args.doNotSteer ? 1 : 0,
         args.text,
         args.metadata ? JSON.stringify(args.metadata) : null,
         args.priority,
@@ -206,25 +213,32 @@ export class AgentDb {
    * Claim queued rows for one thread and flip them to `in_flight` in a single
    * transaction.
    *
-   * When `continueOnly` is true, claim only *continue* rows — those already
-   * delivered to the model on a prior batch (`pi_entry_id IS NOT NULL`). The
-   * runner sends these as their own prompt (a continuation nudge), isolated
-   * from any other work, then steers the remaining rows in. A plain call
-   * (`continueOnly = false`) claims everything still queued — i.e. resend +
-   * fresh rows — which the runner concatenates into one prompt.
+   * Options:
+   *  - `continueOnly` — claim only *continue* rows (already delivered on a
+   *    prior batch, `pi_entry_id IS NOT NULL`). The runner sends these as their
+   *    own prompt (a continuation nudge), isolated from other work.
+   *  - `excludeDoNotSteer` — skip rows flagged `do_not_steer`. Used by the
+   *    drain path (`drainQueuedAsSteers`), which injects claimed rows as a
+   *    *steer* into a live batch: a `doNotSteer` row must not be steered, so it
+   *    is left queued for the next batch. The batch-start claim does NOT set
+   *    this — `doNotSteer` only forbids steering into a live batch, not forming
+   *    a fresh prompt.
+   *
+   * A plain call (no options) claims everything still queued — resend + fresh
+   * rows — which the runner concatenates into one prompt.
    */
-  dequeueBatch(threadId: string, continueOnly = false): BatchMessage[] {
+  dequeueBatch(
+    threadId: string,
+    opts: { continueOnly?: boolean; excludeDoNotSteer?: boolean } = {},
+  ): BatchMessage[] {
+    const conds = ["thread_id = ?", "status = 'queued'"];
+    if (opts.continueOnly) conds.push("pi_entry_id IS NOT NULL");
+    if (opts.excludeDoNotSteer) conds.push("do_not_steer = 0");
+    const where = conds.join(" AND ");
     const txn = this.db.transaction((): BatchMessage[] => {
       const rows = this.db
         .prepare<unknown[], EventRow>(
-          continueOnly
-            ? `SELECT * FROM events
-               WHERE thread_id = ? AND status = 'queued'
-                 AND pi_entry_id IS NOT NULL
-               ORDER BY priority DESC, id ASC`
-            : `SELECT * FROM events
-               WHERE thread_id = ? AND status = 'queued'
-               ORDER BY priority DESC, id ASC`,
+          `SELECT * FROM events WHERE ${where} ORDER BY priority DESC, id ASC`,
         )
         .all(threadId);
       if (rows.length === 0) return [];
@@ -502,16 +516,28 @@ export class AgentDb {
 
   // ── DLQ-style actions on failed rows ──────────────────────
 
-  /** Reset a failed row back to queued. Returns the row id, or null if not
-   *  found / not failed. `pi_entry_id` is deliberately preserved: if the row
-   *  was delivered before it dead-lettered, its text is already in pi's
-   *  session history, so the requeued attempt must continue (nudge) rather
-   *  than resend and duplicate it. Clearing it would reintroduce that bug. */
+  /** Revive a failed (dead-lettered) row back to queued as a **warned resend**.
+   *  `pi_entry_id` is cleared and `attempts` is set to 1 (not 0), so the row
+   *  re-dispatches in resend mode — full original text carrying `Retry: true`
+   *  — rather than continue mode (a contentless nudge).
+   *
+   *  A DLQ row only reaches here via operator action, long after the automatic
+   *  continue-retries already failed `maxAttempts` times; re-nudging just
+   *  repeats the strategy that failed and is fragile to a stale/compacted
+   *  session, whereas a resend re-establishes the actual content and the
+   *  `Retry: true` line guards against re-doing partial work. `attempts = 1`
+   *  both selects resend mode (`deriveRetryMode`) and renders `Retry: true`
+   *  (`buildHarnessMetadata`), while leaving `maxAttempts − 1` further tries.
+   *  The next delivery re-sets `pi_entry_id`, so any subsequent *automatic*
+   *  retry resumes in continue mode as usual — this only forces one resend.
+   *
+   *  Returns the row id, or null if not found / not failed. */
   requeueFailed(id: number): number | null {
     const info = this.db
       .prepare(
         `UPDATE events
-           SET status = 'queued', attempts = 0, error = NULL, updated_at = ?
+           SET status = 'queued', attempts = 1, error = NULL,
+               pi_entry_id = NULL, updated_at = ?
          WHERE id = ? AND status = 'failed'`,
       )
       .run(Date.now(), id);
@@ -566,13 +592,15 @@ export class AgentDb {
     if (cur.status === "in_flight") return "in_flight";
     const now = Date.now();
     if (next === "queued") {
-      // `pi_entry_id` is preserved (not in the SET list) so a delivered row
-      // forced back to queued continues rather than resends — see
-      // requeueFailed for the rationale.
+      // Operator-forced revival is a **warned resend**, same as requeueFailed:
+      // clear `pi_entry_id` and set `attempts = 1` so the row re-dispatches as
+      // full text with `Retry: true`, never a continue nudge. Continue mode is
+      // reserved for the automatic in-loop retry; no manual action produces it.
       this.db
         .prepare(
           `UPDATE events
-             SET status = 'queued', attempts = 0, error = NULL, updated_at = ?
+             SET status = 'queued', attempts = 1, error = NULL,
+                 pi_entry_id = NULL, updated_at = ?
            WHERE id = ?`,
         )
         .run(now, id);

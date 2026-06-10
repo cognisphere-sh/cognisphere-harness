@@ -144,13 +144,13 @@ function endOfTurn(messages: PiMessage[]): { complete: boolean; errorTag: string
 
 interface ActiveBatch {
   threadId: string;
-  ids: number[];
-  /** Each steer is one user-message entry in pi's session, mapped to row ids
-   *  by dispatch-order index after the batch ends. A steer may carry several
-   *  rows (the drained resend+fresh rows go out as one combined steer = one
-   *  entry), so each element is the list of row ids sharing that entry. Live
-   *  per-plugin steers (`notify`) push a single-row group. */
-  steerGroups: number[][];
+  /** User-message groups in dispatch order. `[0]` is the prompt's rows (the
+   *  resend + fresh rows; empty on a continue batch, whose prompt is just the
+   *  nudge). `[k≥1]` is the k-th steer's rows — a single-row group for a live
+   *  `notify` steer, or the whole drained resend+fresh set for a continue
+   *  batch's combined steer. Maps each user-message entry pi appends to the
+   *  row ids sharing it (stdin is serial → append order = dispatch order). */
+  messageGroups: number[][];
   /** Canonical pi session id for this thread; assigned in processBatch
    *  before spawn, used to locate the JSONL post-batch. */
   sessionId: string;
@@ -161,13 +161,10 @@ interface ActiveBatch {
    *  present); resend + fresh rows are then steered in as one combined steer
    *  via {@link AgentRunner.drainQueuedAsSteers}. */
   isContinue: boolean;
-  /** Rows whose text is rendered into the initial prompt (resend + fresh rows
-   *  on a non-continue batch). They map to the first user-message entry;
-   *  continue rows do not. Empty on a continue batch (the prompt is just the
-   *  nudge). */
-  promptRowIds: number[];
   /** Continue rows — already delivered on a prior batch (their `pi_entry_id`
-   *  is set). Their text is NOT in the prompt (only the continuation nudge). */
+   *  is set). NOT part of `messageGroups`: their text is not re-rendered (only
+   *  the continuation nudge) and they keep their prior entry id, so they map to
+   *  no user-message index this batch. Counted as delivered unconditionally. */
   continueIds: Set<number>;
   /** Count of user messages pi has appended this batch (prompt = 1, then one
    *  per delivered steer). Drives the post-batch delivery split. */
@@ -296,6 +293,7 @@ export class AgentRunner extends EventEmitter {
       metadata: payload.metadata ?? null,
       priority: payload.priority ?? 0,
       isSilent: payload.isSilent === true,
+      doNotSteer: payload.doNotSteer === true,
     });
 
     const active = this.active.get(threadId);
@@ -318,7 +316,7 @@ export class AgentRunner extends EventEmitter {
       };
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
       const group = [id];
-      active.steerGroups.push(group);
+      active.messageGroups.push(group);
       try {
         active.rpc.sendSteer(steerText);
         // The row was enqueued as 'queued' but dequeueBatch never saw it;
@@ -332,8 +330,8 @@ export class AgentRunner extends EventEmitter {
       } catch (err) {
         // Drop the group we just pushed. Safe under single-threaded JS because
         // notify() runs to completion before the next call interleaves.
-        const idx = active.steerGroups.indexOf(group);
-        if (idx >= 0) active.steerGroups.splice(idx, 1);
+        const idx = active.messageGroups.indexOf(group);
+        if (idx >= 0) active.messageGroups.splice(idx, 1);
         this.opts.log.error({ err, threadId, id }, "steer failed; row kept pending");
       }
       return id;
@@ -380,7 +378,7 @@ export class AgentRunner extends EventEmitter {
       // the remaining resend + fresh rows are steered in afterwards as one
       // combined steer (drainQueuedAsSteers). Otherwise the normal path claims
       // all queued rows (resend + fresh) into a single concatenated prompt.
-      const continueBatch = this.opts.db.dequeueBatch(threadId, true);
+      const continueBatch = this.opts.db.dequeueBatch(threadId, { continueOnly: true });
       const isContinue = continueBatch.length > 0;
       const batch = isContinue ? continueBatch : this.opts.db.dequeueBatch(threadId);
       if (batch.length === 0) continue;
@@ -395,16 +393,17 @@ export class AgentRunner extends EventEmitter {
       }
       const active: ActiveBatch = {
         threadId,
-        ids: batch.map((m) => m.id),
-        steerGroups: [],
+        // messageGroups[0] = the prompt's rows (resend + fresh; empty on a
+        // continue batch). Steers append groups [1..]. Continue rows are
+        // tracked separately in continueIds (see the ActiveBatch doc).
+        messageGroups: [
+          batch.filter((m) => m.retryMode !== "continue").map((m) => m.id),
+        ],
         sessionId,
         phase: "spawning",
         cancelled: false,
         rpc: null,
         isContinue,
-        promptRowIds: batch
-          .filter((m) => m.retryMode !== "continue")
-          .map((m) => m.id),
         continueIds: new Set(
           batch.filter((m) => m.retryMode === "continue").map((m) => m.id),
         ),
@@ -493,10 +492,14 @@ export class AgentRunner extends EventEmitter {
       });
       await rpc.sendPrompt(promptText);
       active.phase = "streaming";
-      // On a continue batch the resend + fresh rows were deliberately left
-      // behind (continueOnly dequeue). Now that pi is streaming, steer them in
-      // as one combined message so they ride this batch instead of waiting.
-      if (active.isContinue) this.drainQueuedAsSteers(active, log);
+      // Drain anything queued for this thread into the live batch as one
+      // combined steer: on a continue batch the resend + fresh rows left behind
+      // by the continueOnly dequeue, and on any batch the rows that arrived
+      // during the spawn window (before phase flipped to "streaming"). Steering
+      // them now keeps FIFO — they land ahead of any later live steer instead
+      // of waiting for the next batch. doNotSteer rows are skipped (left queued)
+      // inside drainQueuedAsSteers.
+      this.drainQueuedAsSteers(active, log);
       // Race agent_end against pi exit; if pi exits first without emitting
       // agent_end, treat it as a crash.
       await Promise.race([agentEnded, rpc.waitExit()]);
@@ -528,7 +531,7 @@ export class AgentRunner extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       if (active.cancelled) {
         this.opts.db.markBatchCancelled(
-          [...active.ids, ...active.steerGroups.flat()],
+          [...active.continueIds, ...active.messageGroups.flat()],
           sessionId,
         );
         log.info({ threadId }, "batch cancelled");
@@ -537,7 +540,7 @@ export class AgentRunner extends EventEmitter {
         const tagged = msg.startsWith("[") ? msg : `[runner_error] ${msg}`;
         const errFull = stderr ? `${tagged}\n--stderr--\n${stderr}` : tagged;
         const r = this.opts.db.markBatchFailed(
-          [...active.ids, ...active.steerGroups.flat()],
+          [...active.continueIds, ...active.messageGroups.flat()],
           errFull,
           this.maxAttempts,
           sessionId,
@@ -558,17 +561,17 @@ export class AgentRunner extends EventEmitter {
    * whole drained resend+fresh group for a continue batch.
    */
   private rowsForUserIndex(active: ActiveBatch, index: number): number[] {
-    if (index === 0) return active.promptRowIds;
-    return active.steerGroups[index - 1] ?? [];
+    return active.messageGroups[index] ?? [];
   }
 
   /** Rows that actually reached the model this batch: continue rows (delivered
    *  on a prior batch) plus every user-message index pi appended. */
   private deliveredRowIds(active: ActiveBatch): Set<number> {
     const delivered = new Set<number>(active.continueIds);
-    if (active.deliveredCount >= 1) for (const id of active.promptRowIds) delivered.add(id);
-    for (let k = 1; k < active.deliveredCount; k++) {
-      for (const id of active.steerGroups[k - 1] ?? []) delivered.add(id);
+    // messageGroups[k] is delivered once pi has appended k+1 user messages, so
+    // every group index < deliveredCount has landed (group 0 = prompt).
+    for (let k = 0; k < active.deliveredCount; k++) {
+      for (const id of active.messageGroups[k] ?? []) delivered.add(id);
     }
     return delivered;
   }
@@ -585,7 +588,7 @@ export class AgentRunner extends EventEmitter {
     errorTag: string,
     log: Logger,
   ): void {
-    const allIds = [...active.ids, ...active.steerGroups.flat()];
+    const allIds = [...active.continueIds, ...active.messageGroups.flat()];
     const delivered = this.deliveredRowIds(active);
     const undelivered = allIds.filter((id) => !delivered.has(id));
     const deliveredIds = allIds.filter((id) => delivered.has(id));
@@ -622,17 +625,20 @@ export class AgentRunner extends EventEmitter {
   }
 
   /**
-   * Dequeue the thread's remaining resend + fresh rows and inject them as a
-   * single combined steer (one user-message entry) into the live continue
-   * batch. Called once the batch is streaming. The rows are tracked as one
-   * group in `steerGroups` before sending, so a broken pipe leaves them
-   * classified as not-delivered (→ resend) by the post-batch split rather than
-   * orphaned in_flight. resend rows carry `Retry: true` via their metadata.
+   * Claim the thread's currently-queued *steerable* rows and inject them as a
+   * single combined steer (one user-message entry) into the live batch. Called
+   * once the batch is streaming — covers a continue batch's left-behind
+   * resend+fresh rows and any batch's spawn-window arrivals. `excludeDoNotSteer`
+   * leaves `doNotSteer` rows queued for the next batch (they opt out of being
+   * steered into a live turn). The rows are tracked as one group in
+   * `messageGroups` before sending, so a broken pipe leaves them classified as
+   * not-delivered (→ resend) by the post-batch split rather than orphaned
+   * in_flight. resend rows carry `Retry: true` via their metadata.
    */
   private drainQueuedAsSteers(active: ActiveBatch, log: Logger): void {
-    const rows = this.opts.db.dequeueBatch(active.threadId);
+    const rows = this.opts.db.dequeueBatch(active.threadId, { excludeDoNotSteer: true });
     if (rows.length === 0) return;
-    active.steerGroups.push(rows.map((m) => m.id));
+    active.messageGroups.push(rows.map((m) => m.id));
     const steerText = rows
       .map((m) => `${buildHarnessMetadata(m, this.opts.timezone)}\n${m.text}`)
       .join("\n\n");
@@ -640,7 +646,7 @@ export class AgentRunner extends EventEmitter {
       active.rpc!.sendSteer(steerText);
       log.debug({ threadId: active.threadId, drained: rows.length }, "drained queued as one steer");
     } catch (err) {
-      // Pipe broke; pi is gone. The group stays in steerGroups — the delivery
+      // Pipe broke; pi is gone. The group stays in messageGroups — the delivery
       // split marks it not-delivered → resend on the next batch.
       log.error({ err, threadId: active.threadId, count: rows.length }, "drain steer failed");
     }

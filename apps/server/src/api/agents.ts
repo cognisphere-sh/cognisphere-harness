@@ -459,6 +459,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
         channelId: row.channel_id,
         threadId: row.thread_id,
         isSilent: row.is_silent === 1,
+        doNotSteer: row.do_not_steer === 1,
         text: row.text,
         metadata: parseMetadata(row.metadata),
         status: row.status,

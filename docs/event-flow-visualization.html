@@ -184,13 +184,13 @@
     <div class="step"><div class="stepn">3</div><div class="stepb">
       <div class="t">Steer-or-wake decision <span class="crumb">runner.ts:301</span></div>
       <div class="d">Is there an <b>active streaming batch</b> on the same thread, with <code>doNotSteer !== true</code>?
-      <br>• <b>Yes</b> → build <code>&lt;harness-metadata&gt;</code>+text, <span class="fn">rpc.sendSteer()</span> into the live child, push a single-row group onto <code>steerGroups</code>, <span class="fn">markInFlight([id])</span>.
-      <br>• <b>No</b> → <span class="fn">signalAll()</span> wakes an idle worker. (Silent / doNotSteer rows never wake a worker — they ride the next batch.)</div>
+      <br>• <b>Yes</b> → build <code>&lt;harness-metadata&gt;</code>+text, <span class="fn">rpc.sendSteer()</span> into the live child, push a single-row group onto <code>messageGroups</code>, <span class="fn">markInFlight([id])</span>.
+      <br>• <b>No</b> → <span class="fn">signalAll()</span> is called <em>unconditionally</em> (incl. silent &amp; doNotSteer rows). What actually gates work is downstream: a <b>silent</b> row is skipped by <code>peekHighestPriorityThread</code> (filters <code>is_silent=0</code>) so it can't start a batch alone — it rides the next non-silent batch. A <b>doNotSteer</b> row is <em>not</em> gated here: on an idle thread it starts its own batch immediately; it only declines to inject into a currently-live child.</div>
     </div></div>
 
     <div class="step"><div class="stepn">4</div><div class="stepb">
       <div class="t">Worker claims a thread <span class="crumb">runner.ts:364</span></div>
-      <div class="d"><span class="fn">peekHighestPriorityThread(exclude=active)</span> returns a thread with queued, non-silent rows no other worker owns. Then the <b>continue-first</b> claim: <span class="fn">dequeueBatch(threadId, continueOnly=true)</span>. If it yields rows → <em>continue batch</em>; else <span class="fn">dequeueBatch(threadId)</span> claims all resend+fresh rows. Claimed rows flip to <span class="pill p-inflight">in_flight</span> in one transaction.</div>
+      <div class="d"><span class="fn">peekHighestPriorityThread(exclude=active)</span> returns a thread with queued, non-silent rows no other worker owns. Then the <b>continue-first</b> claim: <span class="fn">dequeueBatch(threadId, {continueOnly:true})</span>. If it yields rows → <em>continue batch</em>; else <span class="fn">dequeueBatch(threadId)</span> claims all resend+fresh rows. Claimed rows flip to <span class="pill p-inflight">in_flight</span> in one transaction.</div>
     </div></div>
 
     <div class="step"><div class="stepn">5</div><div class="stepb">
@@ -205,7 +205,7 @@
 
     <div class="step"><div class="stepn">7</div><div class="stepb">
       <div class="t">Assemble prompt &amp; send <span class="crumb">runner.ts:467</span></div>
-      <div class="d">Continue rows → one <span class="fn">buildContinuationNudge()</span> (not re-rendered). Fresh/resend rows → each renders <code>&lt;harness-metadata&gt;</code>+text (resend carries <code>Retry: true</code> when <code>attempts&gt;0</code>). <span class="fn">rpc.sendPrompt()</span>; phase → <code>streaming</code>. On a continue batch, <span class="fn">drainQueuedAsSteers()</span> injects the remaining resend+fresh rows as one combined steer.</div>
+      <div class="d">Continue rows → one <span class="fn">buildContinuationNudge()</span> (not re-rendered). Fresh/resend rows → each renders <code>&lt;harness-metadata&gt;</code>+text (resend carries <code>Retry: true</code> when <code>attempts&gt;0</code>). <span class="fn">rpc.sendPrompt()</span>; phase → <code>streaming</code>. Then <span class="fn">drainQueuedAsSteers()</span> runs on <b>every</b> batch — it sweeps the continue batch's left-behind rows <em>and</em> any rows that queued during the spawn window, injecting them as one combined steer (FIFO, ahead of later live steers). <code>doNotSteer</code> rows are excluded (stay queued for the next batch).</div>
     </div></div>
 
     <div class="step"><div class="stepn">8</div><div class="stepb">
@@ -324,7 +324,7 @@
     <tr><td><span class="pill p-inflight">in_flight</span> → <span class="pill p-queued">queued</span></td><td>fail, <code>attempts&lt;max</code></td><td><code>markBatchFailed</code> → <code>retrying[]</code></td><td><code>attempts++</code>, <code>error</code> set; eligible for re-claim</td></tr>
     <tr><td><span class="pill p-inflight">in_flight</span> → <span class="pill p-failed">failed</span></td><td>fail, <code>attempts≥max</code></td><td><code>markBatchFailed</code> → <code>dead[]</code></td><td>dead-letter; operator can requeue/discard</td></tr>
     <tr><td><span class="pill p-inflight">in_flight</span> → <span class="pill p-cancelled">cancelled</span></td><td>user abort / runner stop / plugin cancel</td><td><code>markBatchCancelled</code></td><td>no attempt bump, no retry</td></tr>
-    <tr><td><span class="pill p-failed">failed</span> → <span class="pill p-queued">queued</span></td><td>operator requeue / force-status</td><td><code>requeueFailed</code> / <code>setStatus</code></td><td>resets <code>attempts=0</code>, <b>preserves <code>pi_entry_id</code></b> (→ continue)</td></tr>
+    <tr><td><span class="pill p-failed">failed</span> → <span class="pill p-queued">queued</span></td><td>operator requeue / force-status</td><td><code>requeueFailed</code> / <code>setStatus</code></td><td><b>clears <code>pi_entry_id</code></b>, sets <code>attempts=1</code> → warned resend</td></tr>
     <tr><td>orphaned <span class="pill p-inflight">in_flight</span> → fail</td><td>crash recovery at boot</td><td><code>sweepInFlight</code></td><td>each crash counts as one attempt</td></tr>
   </table>
 </section>
@@ -342,12 +342,13 @@
       <br>→ Else <b>wake</b> a worker via <code>signalAll()</code>.
     </div>
     <div class="deci">
-      <div class="q">D2 · Silent / doNotSteer suppression</div>
-      <code>peekHighestPriorityThread</code> filters <code>is_silent=0</code>. A silent row <b>never wakes a worker on its own</b> — it waits for the next non-silent batch on the same thread. Used for scheduler late-firings.
+      <div class="q">D2 · isSilent ≠ doNotSteer (two distinct gates)</div>
+      <b>isSilent</b>: <code>peekHighestPriorityThread</code> filters <code>is_silent=0</code>, so it <b>can't start a batch alone</b> — rides the next non-silent batch (scheduler late-firings). It <em>can</em> still steer into a live batch (steer condition ignores silent).
+      <br><b>doNotSteer</b>: only blocks injecting into a <em>live</em> child — both the live <code>notify</code> steer and the drain (it's persisted as <code>do_not_steer</code>; <code>dequeueBatch({excludeDoNotSteer})</code>). On an idle thread it still starts its own batch immediately — <code>signalAll()</code> runs for it too.
     </div>
     <div class="deci">
       <div class="q">D3 · Continue-first claim <span class="crumb">runner.ts:383</span></div>
-      <code>dequeueBatch(threadId, continueOnly=true)</code> first. If it returns rows → <b>continue batch</b> (prompt = nudge only); resend+fresh rows are steered in afterward. Continue rows are <b>never mixed</b> into a concatenated prompt.
+      <code>dequeueBatch(threadId, {continueOnly:true})</code> first. If it returns rows → <b>continue batch</b> (prompt = nudge only); resend+fresh rows are steered in afterward. Continue rows are <b>never mixed</b> into a concatenated prompt.
     </div>
     <div class="deci">
       <div class="q">D4 · Retry mode per row <span class="crumb">deriveRetryMode() queue.ts:73</span></div>
@@ -429,10 +430,10 @@ Retry: true
       <tr><td>Batch failed (error/incomplete), delivered rows</td><td><code>markBatchFailed</code> bounces to <code>queued</code>; <code>pi_entry_id</code> set</td><td><span class="pill p-done" style="color:var(--green);border-color:var(--green)">continue</span></td></tr>
       <tr><td>Batch failed, undelivered rows</td><td><code>[not_delivered]</code> → requeued; <code>pi_entry_id</code> null</td><td><span class="pill p-inflight">resend</span></td></tr>
       <tr><td>Server crash mid-batch</td><td><code>sweepInFlight</code> at boot → <code>markBatchFailed</code></td><td>continue or resend per <code>pi_entry_id</code></td></tr>
-      <tr><td>Operator requeues a dead row</td><td><code>requeueFailed</code> — resets attempts, <b>preserves <code>pi_entry_id</code></b></td><td>continue if it was delivered</td></tr>
+      <tr><td>Operator requeues a dead row (DLQ)</td><td><code>requeueFailed</code> — <b>clears <code>pi_entry_id</code></b>, sets <code>attempts=1</code></td><td><span class="pill p-inflight">warned resend</span> (full text + Retry:true), then continue</td></tr>
       <tr><td>Steer into N consecutive failing batches</td><td>steer ids folded into <code>markBatchFailed</code></td><td>attempts accrue → eventually DLQ</td></tr>
     </table>
-    <div class="note r"><b>Bug it prevents:</b> if <code>requeueFailed</code> / <code>setStatus(queued)</code> cleared <code>pi_entry_id</code>, a delivered-then-dead-lettered row would <b>resend and duplicate</b> a message already in pi's history. The column is deliberately omitted from those SET clauses.</div>
+    <div class="note"><b>Two regimes for the marker:</b> the <em>automatic</em> retry loop (<code>markBatchFailed</code> bouncing a delivered row) <b>preserves</b> <code>pi_entry_id</code> → continue, so it never resends-and-duplicates text already in pi's history. The <em>manual</em> DLQ revive (<code>requeueFailed</code> / <code>setStatus(queued)</code>) deliberately <b>clears</b> it → one <b>warned resend</b> (full text + <code>Retry:true</code>): continue already failed <code>maxAttempts</code>× and a bare nudge is fragile to a stale/compacted session. The next delivery re-sets <code>pi_entry_id</code>, so any further automatic retry resumes in continue mode.</div>
   </div>
 
   <h3>Retry decision flow</h3>
@@ -467,6 +468,7 @@ Retry: true
     <tr><td><code>ts</code> / <code>updated_at</code></td><td>INTEGER</td><td>enqueue time / last mutation (drives UI sort)</td></tr>
     <tr><td><code>plugin_id</code> / <code>channel_id</code> / <code>thread_id</code></td><td>TEXT</td><td>routing identity; <code>thread_id</code> serializes work</td></tr>
     <tr><td><code>is_silent</code></td><td>INTEGER</td><td>1 ⇒ never wakes a worker alone (rides next batch)</td></tr>
+    <tr><td><code>do_not_steer</code></td><td>INTEGER</td><td>1 ⇒ never steered into a live batch (drain skips it via <code>excludeDoNotSteer</code>); only delivered in a fresh prompt</td></tr>
     <tr><td><code>text</code> / <code>metadata</code></td><td>TEXT</td><td>payload; metadata JSON → PascalCase harness-metadata fields</td></tr>
     <tr><td><b><code>status</code></b></td><td>TEXT</td><td>the lifecycle state (§3)</td></tr>
     <tr><td><code>priority</code></td><td>INTEGER</td><td>dequeue ordering (<code>DESC, id ASC</code>)</td></tr>
@@ -492,8 +494,7 @@ Retry: true
       <table>
         <tr><th>Field</th><th>Holds</th></tr>
         <tr><td><code>threadId</code></td><td>the thread being processed</td></tr>
-        <tr><td><code>ids[]</code></td><td>row ids in the initial claimed batch</td></tr>
-        <tr><td><code>steerGroups[][]</code></td><td>ordered groups of row ids, one per steer entry</td></tr>
+        <tr><td><code>messageGroups[][]</code></td><td><code>[0]</code> = prompt rows, <code>[k≥1]</code> = k-th steer's rows</td></tr>
         <tr><td><code>sessionId</code></td><td>canonical pi session UUID</td></tr>
         <tr><td><code>phase</code></td><td><code>spawning→streaming→completing→exited</code></td></tr>
       </table>
@@ -503,8 +504,7 @@ Retry: true
         <tr><th>Field</th><th>Holds</th></tr>
         <tr><td><code>cancelled</code></td><td>abort/stop flag → cancel branch</td></tr>
         <tr><td><code>isContinue</code></td><td>prompt is the continuation nudge</td></tr>
-        <tr><td><code>promptRowIds[]</code></td><td>rows rendered into prompt (user index 0)</td></tr>
-        <tr><td><code>continueIds</code> (Set)</td><td>delivered-on-prior-batch rows</td></tr>
+        <tr><td><code>continueIds</code> (Set)</td><td>delivered-on-prior-batch rows (not in <code>messageGroups</code>)</td></tr>
         <tr><td><code>deliveredCount</code></td><td>user messages pi has appended this run</td></tr>
       </table>
     </div>
@@ -601,7 +601,7 @@ Retry: true
         <tr><td><code>spawnPi()</code></td><td>build argv + env, spawn child</td></tr>
         <tr><td><code>finalizeBatch()</code></td><td>delivery split → done/failed</td></tr>
         <tr><td><code>deliveredRowIds()</code></td><td>which rows reached the model</td></tr>
-        <tr><td><code>drainQueuedAsSteers()</code></td><td>combined steer on continue batch</td></tr>
+        <tr><td><code>drainQueuedAsSteers()</code></td><td>combined steer (every batch); skips doNotSteer</td></tr>
         <tr><td><code>rowsForUserIndex()</code></td><td>user index → row id group</td></tr>
         <tr><td><code>abort()</code> / <code>pauseDequeue()</code> / <code>wake()</code></td><td>lifecycle controls</td></tr>
       </table>
@@ -660,7 +660,7 @@ Retry: true
     <tr><td class="kvar">status</td><td>events column</td><td>The single source of lifecycle truth.</td></tr>
     <tr><td class="kvar">is_silent</td><td>events column</td><td>Suppresses worker wake; rides next non-silent batch.</td></tr>
     <tr><td class="kvar">deliveredCount</td><td>ActiveBatch</td><td>Count of user messages pi appended; drives the delivery split (index 0 = prompt, k≥1 = k-th steer).</td></tr>
-    <tr><td class="kvar">steerGroups</td><td>ActiveBatch</td><td>Ordered row-id groups, one per steer entry — maps each steer to its <code>pi_entry_id</code> by dispatch order.</td></tr>
+    <tr><td class="kvar">messageGroups</td><td>ActiveBatch</td><td>Ordered row-id groups: <code>[0]</code> = prompt, <code>[k≥1]</code> = k-th steer. Maps each user-message entry to its rows (and <code>pi_entry_id</code>) by dispatch order.</td></tr>
     <tr><td class="kvar">continueIds</td><td>ActiveBatch</td><td>Rows delivered on a prior batch — counted as delivered up front, never re-rendered.</td></tr>
     <tr><td class="kvar">isContinue</td><td>ActiveBatch</td><td>Prompt is the nudge; resend+fresh rows get drained in as a combined steer.</td></tr>
     <tr><td class="kvar">cancelled</td><td>ActiveBatch</td><td>Routes the post-race path to <code>markBatchCancelled</code> instead of finalize.</td></tr>
@@ -683,11 +683,9 @@ Retry: true
 
 <span class="c">// 2. After agent_end: who actually reached the model?</span>
 <span class="f">deliveredRowIds</span>(active) {
-  <span class="k">const</span> delivered = <span class="k">new</span> Set(active.continueIds);          <span class="c">// prior-batch rows</span>
-  <span class="k">if</span> (active.deliveredCount &gt;= 1) <span class="c">// prompt landed (user index 0)</span>
-    active.promptRowIds.forEach(id =&gt; delivered.add(id));
-  <span class="k">for</span> (<span class="k">let</span> k = 1; k &lt; active.deliveredCount; k++)        <span class="c">// each steer</span>
-    (active.steerGroups[k-1] ?? []).forEach(id =&gt; delivered.add(id));
+  <span class="k">const</span> delivered = <span class="k">new</span> Set(active.continueIds);          <span class="c">// prior-batch rows (unconditional)</span>
+  <span class="k">for</span> (<span class="k">let</span> k = 0; k &lt; active.deliveredCount; k++)        <span class="c">// group 0 = prompt, k≥1 = steers</span>
+    (active.messageGroups[k] ?? []).forEach(id =&gt; delivered.add(id));
   <span class="k">return</span> delivered;
 }
 
@@ -717,9 +715,9 @@ Retry: true
   <pre>db.<span class="f">enqueue</span>(…);                          <span class="c">// durable FIRST, always</span>
 <span class="k">const</span> active = this.active.get(threadId);
 <span class="k">if</span> (active &amp;&amp; active.phase === <span class="s">"streaming"</span> &amp;&amp; !payload.doNotSteer &amp;&amp; active.rpc) {
-  active.steerGroups.<span class="f">push</span>([id]);          <span class="c">// track BEFORE dispatch</span>
+  active.messageGroups.<span class="f">push</span>([id]);       <span class="c">// track BEFORE dispatch</span>
   <span class="k">try</span> { active.rpc.<span class="f">sendSteer</span>(steerText); db.<span class="f">markInFlight</span>([id]); }
-  <span class="k">catch</span> { active.steerGroups.splice(idx,1); }  <span class="c">// pipe broke → keep pending</span>
+  <span class="k">catch</span> { active.messageGroups.splice(idx,1); }  <span class="c">// pipe broke → keep pending</span>
 } <span class="k">else</span> this.<span class="f">signalAll</span>();                 <span class="c">// wake an idle worker</span></pre>
 </section>
 

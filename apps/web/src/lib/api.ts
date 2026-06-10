@@ -255,6 +255,9 @@ export interface EventRow {
   channelId: string;
   threadId: string;
   isSilent: boolean;
+  /** Row opted out of being steered into a live batch (never injected
+   *  mid-turn; only delivered as part of a fresh prompt). */
+  doNotSteer: boolean;
   text: string;
   metadata: Record<string, unknown> | null;
   status: EventStatus;

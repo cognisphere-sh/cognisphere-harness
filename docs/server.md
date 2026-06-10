@@ -388,8 +388,10 @@ Per-agent SQLite WAL at `<agent>/sessions/.events.db`. Two tables:
 
 - `events` — every event ever produced by `notify()`. Columns:
   `(id, ts, updated_at, plugin_id, channel_id, thread_id, is_silent,
-  text, metadata, status, priority, attempts, error, pi_session_id,
-  pi_entry_id)`. The last two link the row to a position in pi's
+  do_not_steer, text, metadata, status, priority, attempts, error,
+  pi_session_id, pi_entry_id)`. `do_not_steer` persists the
+  `NotifyPayload.doNotSteer` flag so the drain path can honor it
+  (see `dequeueBatch` / §4.8). `pi_session_id` / `pi_entry_id` link the row to a position in pi's
   session JSONL (file = `<threadDir>/<pi_session_id>.jsonl`, entry
   = `pi_entry_id`). `pi_entry_id` is written **in real time** during the
   batch (via `setRowEntryId`, fed by the harness-bridge extension — see
@@ -450,17 +452,21 @@ Load-bearing methods:
   never claim the same thread. Filters `status='queued' AND is_silent=0`
   (silent rows never wake a worker on their own; they ride along with
   the next non-silent batch).
-- `dequeueBatch(threadId, continueOnly = false) → BatchMessage[]` — pulls
+- `dequeueBatch(threadId, opts?) → BatchMessage[]` — pulls
   `status='queued'` rows for one thread and flips them to
-  `status='in_flight'` in a single transaction. With `continueOnly`, claims
-  only *continue* rows (`pi_entry_id IS NOT NULL` — already delivered on a
-  prior batch). The runner calls this first: if continue rows exist they form
-  their own prompt (a continuation nudge), isolated from all other work, and
-  the remaining resend + fresh rows are steered in afterwards. A plain call
-  claims everything still queued (resend + fresh), which the runner
-  concatenates into one prompt. Each `BatchMessage` carries a derived
-  `retryMode` (`pi_entry_id` set → `"continue"`, else `attempts > 0` →
-  `"resend"`, else fresh).
+  `status='in_flight'` in a single transaction. Options: `continueOnly`
+  claims only *continue* rows (`pi_entry_id IS NOT NULL` — already delivered
+  on a prior batch); `excludeDoNotSteer` skips `do_not_steer` rows. The
+  runner calls `{continueOnly}` first: if continue rows exist they form their
+  own prompt (a continuation nudge), isolated from all other work, and the
+  remaining resend + fresh rows are steered in afterwards (via the drain,
+  which sets `{excludeDoNotSteer}` so a `doNotSteer` row stays queued for the
+  next batch instead of being steered into a live turn). A plain call claims
+  everything still queued (resend + fresh, including `doNotSteer` rows — they
+  may form a fresh prompt, just not a steer), which the runner concatenates
+  into one prompt. Each `BatchMessage` carries a derived `retryMode`
+  (`pi_entry_id` set → `"continue"`, else `attempts > 0` → `"resend"`, else
+  fresh).
 - `setRowEntryId(rowId, sessionId, entryId)` — bind one row to its pi session
   entry, called by the runner in real time as the harness-bridge extension
   reports each user-message entry id. This is what makes `pi_entry_id`
@@ -484,9 +490,15 @@ Load-bearing methods:
   `pi_entry_id` is persisted live, a swept row that was already delivered
   still retries as continue.
 - `requeueFailed(id) → id | null`, `removeFailed(id)` — operator-facing
-  controls on failed rows. Requeue preserves the row id and its
-  `pi_entry_id` (just resets status/attempts/error) — so a delivered row
-  requeues as continue, not a duplicate resend. Discard hard-deletes.
+  controls on failed rows. Requeue preserves the row id but **clears
+  `pi_entry_id` and sets `attempts = 1`**, so a revived dead-letter row
+  re-dispatches as a **warned resend** (full original text + `Retry: true`),
+  not a continue nudge: the automatic continue-retries already failed
+  `maxAttempts` times, and a bare nudge is fragile to a stale/compacted
+  session, so the manual revive re-establishes the content once. The very
+  next delivery re-sets `pi_entry_id`, so any *further* automatic retry
+  resumes in continue mode as usual. `setStatus(id, 'queued')` does the same.
+  Discard hard-deletes.
 - `deleteThread(threadId) → { events }` — hard-delete every `events` row
   for a thread and its `threads` row, in one transaction. The HTTP
   layer that calls this also `rm -r`'s the on-disk session directory,
@@ -570,8 +582,8 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
    signalled.
 2. `peekHighestPriorityThread(exclude=active.keys())` — returns a thread
    id with pending non-silent rows that no other worker is processing.
-3. `dequeueBatch(threadId, continueOnly=true)` first. If it returns rows, this
-   is a **continue batch** (the prompt is just the nudge); otherwise
+3. `dequeueBatch(threadId, {continueOnly:true})` first. If it returns rows,
+   this is a **continue batch** (the prompt is just the nudge); otherwise
    `dequeueBatch(threadId)` claims the remaining resend + fresh rows for a
    normal concatenated prompt. Continue rows are never mixed with other work.
 4. Spawn `pi --mode rpc` (see §4.8.1). The seeded harness-bridge agent
@@ -582,19 +594,25 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
    re-rendered (their text is already in pi's history). Otherwise each resend
    and fresh row renders its `<harness-metadata>` + text (resend rows carry
    `Retry: true` via `attempts > 0`), joined with `\n\n`.
-6. `rpc.sendPrompt(promptText)`. Phase becomes `streaming`. On a continue
-   batch, `drainQueuedAsSteers` then claims the thread's remaining resend +
-   fresh rows and injects them as **one combined steer** (a single
-   user-message entry carrying all of them) so they ride this batch.
+6. `rpc.sendPrompt(promptText)`. Phase becomes `streaming`. Then
+   `drainQueuedAsSteers` (run on **every** batch) claims the thread's remaining
+   steerable queued rows — a continue batch's left-behind resend + fresh rows,
+   and on any batch the rows that arrived during the spawn window (while phase
+   was still `spawning`, so `notify` couldn't steer them) — and injects them as
+   **one combined steer** (a single user-message entry carrying all of them) so
+   they ride this batch instead of waiting for the next one. This keeps FIFO:
+   a row enqueued before streaming began lands ahead of any later live steer.
+   `doNotSteer` rows are excluded (`{excludeDoNotSteer}`) — they stay queued
+   for the next batch, honoring their opt-out of being steered into a live turn.
 7. `Promise.race(agentEnded, rpc.waitExit())` — guards against pi
    crashing before emitting `agent_end`.
 8. Throughout the batch, `onUserMessageStart` counts deliveries in dispatch
    order and `onHarnessEntry` writes each delivered row's `pi_entry_id` via
    `setRowEntryId` (so the link exists even if the batch later fails). User
-   entry 0 maps to the prompt rows (`promptRowIds` — empty on a continue
-   batch); entry i≥1 maps to the i-th steer's row *group* (`steerGroups[i-1]`
-   — one row for a live `notify` steer, the whole drained set for the combined
-   steer). Continue rows keep the entry id they were given on a prior batch.
+   entry `i` maps to `messageGroups[i]`: index 0 is the prompt rows (empty on a
+   continue batch); index `i≥1` is the i-th steer's row *group* (one row for a
+   live `notify` steer, the whole drained set for the combined steer). Continue
+   rows keep the entry id they were given on a prior batch.
 9. On clean end (`agent_end` received): close stdin, await pi's exit (5s
    SIGKILL guard), then `finalizeBatch`. Completion is judged purely from the
    **shape** of the `agent_end` messages (`endOfTurn`): complete iff the last
@@ -719,7 +737,7 @@ Then:
 - Checks if there's an active streaming batch on the same thread.
 - If yes **and** `doNotSteer !== true`: builds `<harness-metadata>` +
   text, calls `rpc.sendSteer` against the live child, pushes a single-row
-  group onto `active.steerGroups` (so it gets marked done with the batch).
+  group onto `active.messageGroups` (so it gets marked done with the batch).
 - Else: `signalAll()` to wake an idle worker.
 
 This means callers (admin plugin, scheduler, telegram, …) never need to
@@ -727,25 +745,35 @@ ask "is this a new prompt or a steer?". They call `notify()`; the
 runner decides. There is no operator-only steer endpoint — admin is
 just another plugin calling `ctx.notify()`.
 
-`steerGroups` is an ordered array of row-id groups (not a flat `Set`) so the
-live `pi_entry_id` capture can map each steer to the user-message entry pi
-appended for it (stdin is serial → pi appends in dispatch order, so the i-th
-steer is the (i+1)-th user message). Each group is the set of rows sharing
-one steer entry: a live `notify` steer pushes a single-row group; the
-continue batch's drained resend+fresh rows push one multi-row group (they go
-out as a single combined steer → one entry). Steers push their group *before*
-dispatching; if the write throws, the group is removed and those rows stay
-pending (picked up next batch). If the batch later fails, the groups are
+`messageGroups` is an ordered array of row-id groups (not a flat `Set`)
+mapping each user-message entry pi appends to the rows sharing it: index `0`
+is the prompt's rows, index `k≥1` is the k-th steer (stdin is serial → pi
+appends in dispatch order). Each steer group is the set of rows sharing one
+entry: a live `notify` steer pushes a single-row group; the drain pushes one
+multi-row group (its rows go out as a single combined steer → one entry).
+Steers push their group *before* dispatching; if the write throws, the group
+is removed and those rows stay pending (picked up next batch). If the batch
+later fails, the groups are
 folded into the delivery split along with the prompt rows — a steer that
 never landed retries as resend; one that landed but the turn was cut off
 retries as continue. Either way attempts accrue and the row eventually
 reaches the DLQ.
 
-Silent (`isSilent: true`) and `doNotSteer: true` notifications never
-wake a worker on their own — they wait for the next non-silent batch
-on the same thread (or for an explicit caller-driven trigger). This is
-how scheduler late-firings should land in the *next* prompt without
-yanking the current one.
+`isSilent` and `doNotSteer` are two distinct, independent levers:
+
+- **`isSilent: true`** — never *wakes a worker* on its own:
+  `peekHighestPriorityThread` filters `is_silent = 0`, so an all-silent
+  thread is parked until a non-silent row arrives and it rides that batch.
+  (A silent row can still be *steered* into a live batch — the steer path
+  doesn't check `isSilent`.)
+- **`doNotSteer: true`** — never *steered into a live batch*: `notify`
+  skips the live steer, and the drain skips it too (`do_not_steer` is
+  persisted; `dequeueBatch({excludeDoNotSteer})`). It is only ever delivered
+  as part of a fresh batch's prompt, never injected mid-turn. It does **not**
+  suppress waking a worker — on an idle thread it starts its own batch.
+
+Scheduler late-firings typically set both, so they land in the *next* prompt
+without yanking the current turn.
 
 #### 4.8.3 `pauseDequeue()` and the stale-swap protocol
 
@@ -952,7 +980,7 @@ The shared type surface every component imports from. Notable shapes:
 Same as 5.1 step 4, except an active streaming batch exists on the
 same `threadId` and `payload.doNotSteer !== true`. The runner *also*
 calls `rpc.sendSteer` against the live child. The row id is added to
-`active.steerGroups` (as a single-row group) and merged into the "done"
+`active.messageGroups` (as a single-row group) and merged into the "done"
 set on batch completion.
 If the batch fails, the steer ids ride along into `markBatchFailed` so
 their attempts get bumped (rows that have been steered into N
