@@ -169,6 +169,18 @@ interface ActiveBatch {
   /** Count of user messages pi has appended this batch (prompt = 1, then one
    *  per delivered steer). Drives the post-batch delivery split. */
   deliveredCount: number;
+  /** entryIds already bound to a row this batch. The harness-bridge sweeps
+   *  pi's *entire* session JSONL (one file reused across all of a thread's
+   *  batches), so on batch ≥2 it re-reports every historical user entry at a
+   *  session-absolute index. We therefore ignore the reported index and bind
+   *  each genuinely-new entryId — one not seen before for this batch — to the
+   *  next unfilled message group in arrival order. This dedup is the seen-set;
+   *  `nextGroupForEntry` is the arrival-order cursor into `messageGroups`. */
+  seenEntryIds: Set<string>;
+  /** Index of the next `messageGroups` slot to bind a new entryId to. Advances
+   *  in dispatch order (group 0 = prompt, then steers), mirroring the order pi
+   *  appends user entries to the session. */
+  nextGroupForEntry: number;
 }
 
 export interface RunnerOpts {
@@ -408,6 +420,11 @@ export class AgentRunner extends EventEmitter {
           batch.filter((m) => m.retryMode === "continue").map((m) => m.id),
         ),
         deliveredCount: 0,
+        // Pre-seed with entryIds already bound on this thread (prior batches),
+        // so the bridge's re-report of historical entries from the reused
+        // session JSONL is skipped — only this batch's new entries bind.
+        seenEntryIds: new Set(this.opts.db.entryIdsForThread(threadId)),
+        nextGroupForEntry: 0,
       };
       this.active.set(threadId, active);
       try {
@@ -441,21 +458,38 @@ export class AgentRunner extends EventEmitter {
     mkdirSync(sessionDir, { recursive: true });
 
     let rpc: PiRpcClient | null = null;
+    let childExited = false;
     try {
       rpc = this.spawnPi(threadId, sessionDir, sessionId, log);
       active.rpc = rpc;
+      // Mark the child exited as soon as it closes, so the finally-block
+      // teardown can skip the stdin-close/wait/SIGKILL dance on an
+      // already-dead child (idempotency guard).
+      void rpc.waitExit().then(() => {
+        childExited = true;
+      });
 
       // Real-time delivery + entry-id capture from the pi event stream:
       //  - each user message pi appends (the prompt, then each steer) fires
       //    onUserMessageStart → we count deliveries in dispatch order;
       //  - the harness-bridge extension reports each user entry's id, which we
-      //    write to the matching row immediately (so a row that later fails
+      //    bind to the matching row immediately (so a row that later fails
       //    still carries its pi_entry_id → it retries as 'continue').
       rpc.onUserMessageStart(() => {
         active.deliveredCount++;
       });
-      rpc.onHarnessEntry(({ index, entryId }) => {
-        for (const id of this.rowsForUserIndex(active, index)) {
+      // The bridge's reported `index` is session-absolute and unusable here:
+      // pi reuses one session JSONL across a thread's batches, so on batch ≥2
+      // it re-reports every historical user entry. We ignore the index and
+      // instead bind each genuinely-new entryId — deduped via seenEntryIds —
+      // to the next unfilled message group in arrival order (which matches the
+      // order pi appends entries: prompt, then each steer).
+      rpc.onHarnessEntry(({ entryId }) => {
+        if (active.seenEntryIds.has(entryId)) return;
+        active.seenEntryIds.add(entryId);
+        const group = this.rowsForUserIndex(active, active.nextGroupForEntry);
+        active.nextGroupForEntry++;
+        for (const id of group) {
           this.opts.db.setRowEntryId(id, sessionId, entryId);
         }
       });
@@ -510,10 +544,8 @@ export class AgentRunner extends EventEmitter {
         throw new Error("batch aborted");
       }
       active.phase = "completing";
-      rpc.endStdin();
-      const exitTimer = setTimeout(() => rpc!.kill("SIGKILL"), 5000);
-      await rpc.waitExit();
-      clearTimeout(exitTimer);
+      await this.ensureChildExited(rpc, log);
+      childExited = true;
 
       // Verdict: completion comes purely from the shape of the agent_end
       // frame's messages (no JSONL read). No agent_end at all ⇒ crash.
@@ -550,6 +582,37 @@ export class AgentRunner extends EventEmitter {
           "batch failed",
         );
       }
+    } finally {
+      // Guarantee the child is dead before the worker loop releases this
+      // thread from `active`. The happy path already awaited exit (childExited
+      // is set); on a runner_error / abort / throw the child may still be alive
+      // and healthy, so close its stdin and SIGKILL-escalate if it lingers.
+      // Without this the thread would be freed while a zombie pi keeps
+      // appending to the session JSONL — and a worker could immediately spawn a
+      // second pi against the same `--session` file, corrupting it.
+      if (rpc && !childExited) {
+        await this.ensureChildExited(rpc, log);
+      }
+    }
+  }
+
+  /**
+   * Close pi's stdin and wait for it to exit, SIGKILL-escalating if it doesn't
+   * leave within 5s. Idempotent: `endStdin` no-ops on an already-ended pipe,
+   * `waitExit` returns the same cached exit promise (safe to await again), and
+   * the SIGKILL timer is cleared the moment exit resolves so a dead child is
+   * never signalled.
+   */
+  private async ensureChildExited(rpc: PiRpcClient, log: Logger): Promise<void> {
+    rpc.endStdin();
+    const exitTimer = setTimeout(() => {
+      log.warn("pi did not exit within 5s; sending SIGKILL");
+      rpc.kill("SIGKILL");
+    }, 5000);
+    try {
+      await rpc.waitExit();
+    } finally {
+      clearTimeout(exitTimer);
     }
   }
 

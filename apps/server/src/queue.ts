@@ -198,9 +198,11 @@ export class AgentDb {
   peekHighestPriorityThread(excludeThreads: Set<string>): string | null {
     const rows = this.db
       .prepare<unknown[], { thread_id: string }>(
-        `SELECT DISTINCT thread_id FROM events
+        `SELECT thread_id, MAX(priority) AS p, MIN(id) AS first_id
+         FROM events
          WHERE status = 'queued' AND is_silent = 0
-         ORDER BY priority DESC, id ASC`,
+         GROUP BY thread_id
+         ORDER BY p DESC, first_id ASC`,
       )
       .all();
     for (const r of rows) {
@@ -283,15 +285,33 @@ export class AgentDb {
    * wins).
    */
   setRowEntryId(rowId: number, sessionId: string, entryId: string): void {
+    // Defensive: never rebind a row whose pi_entry_id is already set. The
+    // runner already dedups entryIds per batch, but this guards against a row
+    // being bound twice (e.g. a stale absolute-index report or a logic error)
+    // — once a row carries an entry id it stays put.
     this.db
       .prepare(
         `UPDATE events
             SET pi_session_id = COALESCE(?, pi_session_id),
                 pi_entry_id   = ?,
                 updated_at    = ?
-          WHERE id = ?`,
+          WHERE id = ? AND pi_entry_id IS NULL`,
       )
       .run(sessionId, entryId, Date.now(), rowId);
+  }
+
+  /** All distinct `pi_entry_id`s already bound to rows on this thread. The
+   *  runner pre-seeds its per-batch seen-set with these so the harness-bridge's
+   *  re-report of historical entries (it sweeps the whole reused session JSONL)
+   *  is ignored — only entryIds new to this thread bind to this batch's rows. */
+  entryIdsForThread(threadId: string): string[] {
+    const rows = this.db
+      .prepare<unknown[], { pi_entry_id: string }>(
+        `SELECT DISTINCT pi_entry_id FROM events
+          WHERE thread_id = ? AND pi_entry_id IS NOT NULL`,
+      )
+      .all(threadId);
+    return rows.map((r) => r.pi_entry_id);
   }
 
   /**

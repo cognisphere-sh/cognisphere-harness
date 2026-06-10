@@ -45,7 +45,8 @@ many independent agents. Each agent:
   scheduler, admin, …).
 - Runs one **`pi --mode rpc`** child process per batch of inbound
   messages, with a fresh context window each spawn but a continued
-  session via `--continue` against a per-thread session directory.
+  session via an explicit `--session <file>` (the harness owns the
+  per-thread session filename; `--continue` is dropped — see §4.8.1).
 - Serializes work per-thread via a per-agent SQLite queue with a small
   worker pool. Concurrent batches across threads are allowed up to
   `maxConcurrentSlots`.
@@ -167,8 +168,10 @@ Conventions worth knowing:
   generated on the thread's first batch and persisted in `.events.db`'s
   `threads` table — and passes the full path to pi via `--session`. Pi
   creates the file on its first append and writes the SessionHeader and
-  every entry; the harness only reads the file (post-batch, to capture
-  per-row pi entry ids).
+  every entry; the harness never reads the file. Per-row pi entry ids are
+  captured **live** during the batch: the seeded harness-bridge extension
+  reports each user-message entry id over the RPC stream as pi appends it,
+  and the runner binds it to the matching row (§4.7/§4.8).
 - `.vertex-sa.json` is materialized on agent start when the provider is
   `google-vertex` (the operator pastes the SA blob into Models settings;
   the runner writes it to disk at 0600 so pi's GCP libraries can read
@@ -451,7 +454,11 @@ Load-bearing methods:
   the worker calls this with the active threads excluded so two workers
   never claim the same thread. Filters `status='queued' AND is_silent=0`
   (silent rows never wake a worker on their own; they ride along with
-  the next non-silent batch).
+  the next non-silent batch). It groups the runnable rows by thread
+  (`GROUP BY thread_id`) and orders by `MAX(priority) DESC, MIN(id) ASC`,
+  so it returns the thread holding the globally highest-priority pending
+  row, tie-broken by oldest enqueue — not an arbitrary per-thread
+  priority. The first non-excluded thread in that order wins.
 - `dequeueBatch(threadId, opts?) → BatchMessage[]` — pulls
   `status='queued'` rows for one thread and flips them to
   `status='in_flight'` in a single transaction. Options: `continueOnly`
@@ -608,13 +615,21 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
    crashing before emitting `agent_end`.
 8. Throughout the batch, `onUserMessageStart` counts deliveries in dispatch
    order and `onHarnessEntry` writes each delivered row's `pi_entry_id` via
-   `setRowEntryId` (so the link exists even if the batch later fails). User
-   entry `i` maps to `messageGroups[i]`: index 0 is the prompt rows (empty on a
-   continue batch); index `i≥1` is the i-th steer's row *group* (one row for a
-   live `notify` steer, the whole drained set for the combined steer). Continue
-   rows keep the entry id they were given on a prior batch.
+   `setRowEntryId` (so the link exists even if the batch later fails). The
+   bridge reports a session-absolute `index`, but the runner **ignores it**:
+   pi reuses one session JSONL across all of a thread's batches, so on batch ≥2
+   the bridge re-reports every historical user entry. Instead the runner binds
+   each *genuinely-new* `entryId` — deduped against `seenEntryIds` (pre-seeded
+   from `db.entryIdsForThread`, the entry ids already bound on this thread) — to
+   the next unfilled `messageGroups` slot in arrival order (`nextGroupForEntry`,
+   a cursor that advances per new entry). Arrival order matches pi's append
+   order, so group 0 (the prompt rows; empty on a continue batch) binds first,
+   then index `i≥1` is the i-th steer's row *group* (one row for a live `notify`
+   steer, the whole drained set for the combined steer). `setRowEntryId` also
+   guards `AND pi_entry_id IS NULL`, so a row is never rebound. Continue rows
+   keep the entry id they were given on a prior batch.
 9. On clean end (`agent_end` received): close stdin, await pi's exit (5s
-   SIGKILL guard), then `finalizeBatch`. Completion is judged purely from the
+   SIGKILL guard, via `ensureChildExited`), then `finalizeBatch`. Completion is judged purely from the
    **shape** of the `agent_end` messages (`endOfTurn`): complete iff the last
    message is an assistant with `stopReason: "stop"`. Rows are split by
    delivery: any row whose user message never arrived → `markBatchFailed`
@@ -632,6 +647,16 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
     no retry, all rows (initial batch + delivered steers) included.
 11. After every batch: emit `batch-completed` so the AgentManager can
     fire a deferred stale-swap if one is pending.
+
+`processBatch` guarantees the child is dead before the worker loop releases
+the thread from `active`, on **every** exit path. The clean path already
+awaited exit; a `finally` block covers the rest — on a `runner_error`, abort,
+or thrown exception the child may still be alive, so it runs `ensureChildExited`
+(stdin-closed, awaited, SIGKILL-escalated after 5s). A `childExited` flag set
+when `rpc.waitExit()` resolves makes this idempotent (the teardown is skipped
+on an already-dead child). Without it the thread could be freed while a zombie
+pi kept appending to the session JSONL — and a worker could spawn a second pi
+against the same `--session` file, corrupting it.
 
 `<harness-metadata>` is built by `buildHarnessMetadata` in `runner.ts`:
 a fenced block with `Timestamp`, `Plugin`, `Channel`, optional
