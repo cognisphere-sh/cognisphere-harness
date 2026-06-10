@@ -426,8 +426,9 @@ Per-agent SQLite WAL at `<agent>/sessions/.events.db`. Two tables:
 
 `status` advances through the lifecycle: `queued` → `in_flight` →
 `done` (success), or back to `queued` on retry, or to `failed` (out
-of attempts), or to `cancelled` (user abort, plugin-driven cancel,
-runner stop). Rows persist after completion so the UI can render
+of attempts), or to `cancelled` (user abort, plugin-driven cancel —
+*not* runner stop, which requeues instead so the rows retry after
+restart). Rows persist after completion so the UI can render
 history. The pre-v2 split into `messages`, `dead_letter`, and an
 append-only `events` audit log is dropped at schema init
 (`DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS dead_letter;
@@ -482,8 +483,8 @@ Load-bearing methods:
   `pi_session_id` via `COALESCE`. Per-row `pi_entry_id`s are no longer passed
   here (written live via `setRowEntryId`). Rows stay in place.
 - `markBatchCancelled(ids[], sessionId)` — terminal cancellation for
-  user abort, plugin-driven cancel, runner stop. Records `sessionId`
-  via COALESCE.
+  user abort, plugin-driven cancel. A runner stop does not route here
+  (it requeues via `markBatchFailed`). Records `sessionId` via COALESCE.
 - `markBatchFailed(ids[], err, maxAttempts, sessionId) → { retrying[], dead[] }` —
   bumps attempts; rows past the cap get `status='failed'`, otherwise
   bounce back to `status='queued'` with `error` populated. `sessionId`
@@ -645,6 +646,12 @@ Worker loop per slot (`maxSlots = max(1, agentJson.maxConcurrentSlots ??
     `active.cancelled` throws into the catch branch, which calls
     `markBatchCancelled(ids, sessionId)` — terminal status `cancelled`,
     no retry, all rows (initial batch + delivered steers) included.
+    On `stop()` (server shutdown/restart, manual agent stop) the runner
+    *also* sets `active.shutdown = true` (unless the batch was already
+    user-aborted), and the catch branch routes through `markBatchFailed`
+    with `[shutdown] runner stopped mid-batch` instead: the rows requeue
+    (one attempt consumed) and re-dispatch after restart — delivered rows
+    as continue (their `pi_entry_id` was written live), the rest as resend.
 11. After every batch: emit `batch-completed` so the AgentManager can
     fire a deferred stale-swap if one is pending.
 
@@ -840,7 +847,7 @@ UI / operator can see their error and fix them in place. States are
 | `boot()` | Scan `<root>/agents/*` and `loadAgent(id)` each one. Missing root → no agents. |
 | `loadAgent(id)` (private) | Insert an `AgentInstance` shell, then call `startAgent`. Even if start fails, the shell stays in the map so the agent is visible. |
 | `manualStart(id)` | `stopped`/`failed` → `running` / `failed`. Throws if already running. |
-| `manualStop(id)` | `running` → `stopped`. Aborts active batches (sends abort to live pi children). |
+| `manualStop(id)` | `running` → `stopped`. Interrupts active batches (sends abort to live pi children); their rows requeue and retry on the next start. |
 | `restartAgent(id)` | Stop (if running) → re-read disk → start. Picks up agent.json / secrets / models edits. |
 | `reloadAgent(id)` | **Soft reload.** Invalidate the secrets cache; if the agent is running and has active batches, mark it stale + `pauseDequeue()` and wait for natural drain before swapping the runner. Zero-interruption — no `Retry: true` events. |
 | `reloadPlugin(id, pid)` | Bounce a single plugin in place. Invalidate secrets cache, stop the plugin instance (5s timeout), re-run `startPluginInstance`. The runner is not touched; the agent stays `running`. |
@@ -1077,6 +1084,11 @@ A `SIGINT`/`SIGTERM` triggers `am.shutdown()` → stop every running
 agent (which stops every plugin via timeout-guarded
 `Promise.race(instance.stop(), 5s)`, then stops the runner, then
 cleans up provider artifacts), close all DBs, `process.exit(0)`.
+In-flight batches are interrupted, not cancelled: `runner.stop()`
+requeues their rows (`[shutdown]` error, one attempt consumed), so
+on the next boot delivered rows resume in continue mode and
+undelivered ones resend — same classification as crash recovery
+(§5.3), just marked at stop time instead of swept at start.
 
 ### 5.5 Soft reload (`reloadAgent`)
 

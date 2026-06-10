@@ -337,9 +337,10 @@ export class AgentDb {
     txn();
   }
 
-  /** Terminal cancellation (user abort, plugin-driven cancel, runner stop).
-   *  `sessionId` is recorded so the operator can still link the row to a
-   *  session even when no entry id was captured. */
+  /** Terminal cancellation (user abort, plugin-driven cancel). A runner
+   *  stop does NOT route here — it requeues via markBatchFailed so the
+   *  rows retry after restart. `sessionId` is recorded so the operator can
+   *  still link the row to a session even when no entry id was captured. */
   markBatchCancelled(ids: number[], sessionId: string | null): void {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => "?").join(",");

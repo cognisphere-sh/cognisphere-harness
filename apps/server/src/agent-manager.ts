@@ -82,7 +82,8 @@ export class LifecycleError extends Error {
  * Lifecycle:
  *   - boot()                   → load every agent dir; failed agents stay listed.
  *   - manualStart(id)          → from "stopped" / "failed" → "running" / "failed".
- *   - manualStop(id)           → from "running" → "stopped" (aborts active batches).
+ *   - manualStop(id)           → from "running" → "stopped" (interrupts active
+ *                                batches; their rows requeue for the next start).
  *   - restartAgent(id)         → stop (if running) → re-read disk → start.
  *   - reloadAgent(id)          → soft: mark stale, pause new dequeues, swap
  *                                runner once active batches drain naturally.

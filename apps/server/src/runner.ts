@@ -156,6 +156,11 @@ interface ActiveBatch {
   sessionId: string;
   phase: "spawning" | "streaming" | "completing" | "exited";
   cancelled: boolean;
+  /** True when the cancel came from runner.stop() (server shutdown/restart,
+   *  manual agent stop) rather than a user/plugin abort. The rows are then
+   *  requeued via markBatchFailed — delivered rows retry as continue, the
+   *  rest as resend — instead of being terminally cancelled. */
+  shutdown: boolean;
   rpc: PiRpcClient | null;
   /** True when this batch's prompt is the continuation nudge (continue rows
    *  present); resend + fresh rows are then steered in as one combined steer
@@ -279,6 +284,9 @@ export class AgentRunner extends EventEmitter {
     );
     this.status = "stopped";
     for (const a of this.active.values()) {
+      // A batch the user already aborted stays a cancellation; everything
+      // else is a shutdown interruption and will be requeued for retry.
+      if (!a.cancelled) a.shutdown = true;
       a.cancelled = true;
       a.rpc?.sendAbort();
     }
@@ -414,6 +422,7 @@ export class AgentRunner extends EventEmitter {
         sessionId,
         phase: "spawning",
         cancelled: false,
+        shutdown: false,
         rpc: null,
         isContinue,
         continueIds: new Set(
@@ -561,7 +570,21 @@ export class AgentRunner extends EventEmitter {
       this.finalizeBatch(active, complete, errorTag, log);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (active.cancelled) {
+      if (active.cancelled && active.shutdown) {
+        // Runner stop (server restart / manual agent stop) interrupted the
+        // batch — requeue rather than cancel. Delivered rows already carry
+        // their pi_entry_id, so they retry as continue; the rest as resend.
+        const r = this.opts.db.markBatchFailed(
+          [...active.continueIds, ...active.messageGroups.flat()],
+          "[shutdown] runner stopped mid-batch",
+          this.maxAttempts,
+          sessionId,
+        );
+        log.info(
+          { threadId, retrying: r.retrying.length, dead: r.dead.length },
+          "batch interrupted by stop; requeued",
+        );
+      } else if (active.cancelled) {
         this.opts.db.markBatchCancelled(
           [...active.continueIds, ...active.messageGroups.flat()],
           sessionId,
