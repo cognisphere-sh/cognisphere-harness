@@ -23,6 +23,7 @@ interface GwsConfig {
   pollIntervalSec?: number;
   gmailQuery?: string;
   firstOfThreadOnly?: boolean;
+  allowedSenders?: string;
 }
 
 interface GwsSecrets {
@@ -75,6 +76,12 @@ export default class GwsPlugin implements Plugin {
           description:
             "Backlog mode: emit every message in matching threads but only wake on the first message of each thread (where messageId == threadId); other messages are delivered silently as context. Skip threads already in state/ingested-threads.jsonl, and append each new threadId to that ledger after emit.",
         },
+        allowedSenders: {
+          type: "string",
+          default: "*",
+          description:
+            "Comma-separated list of allowed sender patterns; `*` is a wildcard (e.g. `*@abc.com`). Only messages whose `From` address matches an entry are read/emitted; all others are ignored (and marked read). The default `*` (and an empty string) allows every sender.",
+        },
       },
       additionalProperties: false,
     },
@@ -94,6 +101,7 @@ export default class GwsPlugin implements Plugin {
   private pollIntervalMs = 60_000;
   private gmailQuery = "is:unread in:inbox";
   private firstOfThreadOnly = false;
+  private allowedSenderPatterns: RegExp[] = [];
   private agentEmail = "";
 
   async start(ctx: PluginInstanceContext): Promise<void> {
@@ -102,6 +110,7 @@ export default class GwsPlugin implements Plugin {
     this.pollIntervalMs = (cfg.pollIntervalSec ?? 60) * 1000;
     this.gmailQuery = cfg.gmailQuery ?? "is:unread in:inbox";
     this.firstOfThreadOnly = cfg.firstOfThreadOnly === true;
+    this.allowedSenderPatterns = parseSenderPatterns(cfg.allowedSenders ?? "*");
 
     await this.verifyAuth();
     await this.loadAgentEmail();
@@ -170,6 +179,18 @@ export default class GwsPlugin implements Plugin {
     }
     this.agentEmail = email;
     ctx.log.info({ agentEmail: email }, "gws agent email resolved");
+  }
+
+  /** True when no allow-list is configured, or when any address in the `From`
+   *  header matches a configured sender pattern. Disallowed senders are never
+   *  read or emitted (their messages are still marked read so the poll query
+   *  stops re-matching them). */
+  private senderAllowed(from: string): boolean {
+    if (this.allowedSenderPatterns.length === 0) return true;
+    const emails = extractEmails(from);
+    return emails.some((e) =>
+      this.allowedSenderPatterns.some((re) => re.test(e)),
+    );
   }
 
   private async verifyAuth(): Promise<void> {
@@ -339,13 +360,20 @@ export default class GwsPlugin implements Plugin {
     // its `To` — older messages are never re-emitted.
     let toEmit: GmailMessage[];
     if (this.firstOfThreadOnly) {
-      toEmit = [...ordered].reverse();
+      toEmit = [...ordered]
+        .reverse()
+        .filter((m) =>
+          this.senderAllowed(collectHeaders(m.payload).get("from") ?? ""),
+        );
     } else {
       const last = ordered[ordered.length - 1]!;
-      const to = collectHeaders(last.payload).get("to") ?? "";
+      const headers = collectHeaders(last.payload);
+      const to = headers.get("to") ?? "";
+      const from = headers.get("from") ?? "";
       toEmit =
         hasLabel(last, UNREAD_LABEL) &&
-        extractEmails(to).includes(this.agentEmail)
+        extractEmails(to).includes(this.agentEmail) &&
+        this.senderAllowed(from)
           ? [last]
           : [];
     }
@@ -481,6 +509,24 @@ function hasLabel(m: GmailMessage, label: string): boolean {
 function extractEmails(header: string): string[] {
   const matches = header.match(/[\w!#$%&'*+/=?^`{|}~.-]+@[\w.-]+/g) ?? [];
   return matches.map((e) => e.toLowerCase());
+}
+
+/** Parse a comma-separated allow-list of sender patterns into anchored,
+ *  case-insensitive regexes. `*` is the only wildcard (matches any run of
+ *  characters); every other regex metacharacter is escaped literally. Blank
+ *  entries are dropped, so an empty / whitespace-only config yields no
+ *  patterns (which `senderAllowed` treats as "allow every sender"). */
+function parseSenderPatterns(raw: string): RegExp[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0)
+    .map((pattern) => {
+      const escaped = pattern
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*/g, ".*");
+      return new RegExp(`^${escaped}$`);
+    });
 }
 
 /** Strip characters that would break a directory name; `<Subject>` is used
