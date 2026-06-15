@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CogniSphere — Codebase Audit &amp; Revamp Plan</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#283040; --accent:#58a6ff; --accent2:#7ee787;
+    --crit:#ff5c5c; --high:#ff9f43; --med:#ffd23f; --low:#79c0ff; --good:#3fb950;
+    --chip:#21262d;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;font-size:15px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{display:grid;grid-template-columns:280px 1fr;max-width:1400px;margin:0 auto;min-height:100vh}
+  /* sidebar */
+  nav{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;padding:28px 18px;border-right:1px solid var(--line);background:var(--panel)}
+  nav h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:22px 0 8px}
+  nav a{display:block;color:var(--muted);padding:4px 8px;border-radius:6px;font-size:13.5px}
+  nav a:hover{background:var(--panel2);color:var(--ink);text-decoration:none}
+  nav .brand{font-weight:700;font-size:16px;color:var(--ink);margin-bottom:4px}
+  nav .sub{font-size:12px;color:var(--muted);margin-bottom:6px}
+  /* main */
+  main{padding:42px 52px;max-width:1040px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.02em}
+  h2.sec{font-size:23px;margin:54px 0 14px;padding-top:14px;border-top:1px solid var(--line);letter-spacing:-.01em}
+  h3{font-size:18px;margin:30px 0 10px}
+  p{margin:10px 0}
+  code{font-family:var(--mono);font-size:.86em;background:var(--chip);padding:1.5px 6px;border-radius:5px;color:#d2a8ff}
+  pre{background:#0a0e14;border:1px solid var(--line);border-radius:9px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.55;color:#c9d1d9}
+  pre .c{color:#6e7681}
+  pre .k{color:#ff7b72}
+  pre .s{color:#a5d6ff}
+  pre .f{color:#d2a8ff}
+  .lead{font-size:17px;color:var(--muted);max-width:80ch}
+  .grid{display:grid;gap:14px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:22px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:16px 18px}
+  .card .n{font-size:30px;font-weight:700;letter-spacing:-.02em}
+  .card .l{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .pill{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:20px;vertical-align:middle}
+  .crit{background:rgba(255,92,92,.16);color:var(--crit);border:1px solid rgba(255,92,92,.4)}
+  .high{background:rgba(255,159,67,.14);color:var(--high);border:1px solid rgba(255,159,67,.38)}
+  .med{background:rgba(255,210,63,.13);color:var(--med);border:1px solid rgba(255,210,63,.34)}
+  .low{background:rgba(121,192,255,.13);color:var(--low);border:1px solid rgba(121,192,255,.34)}
+  .good{background:rgba(63,185,80,.14);color:var(--good);border:1px solid rgba(63,185,80,.4)}
+  .done{background:rgba(63,185,80,.16);color:var(--good);border:1px solid rgba(63,185,80,.45)}
+  .tag{display:inline-block;font-size:11px;color:var(--muted);background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:1px 7px;margin-left:6px}
+  .tag.fixed{color:var(--good);border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.1)}
+  /* finding */
+  .find{background:var(--panel);border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:18px 20px;margin:18px 0}
+  .find.f-crit{border-left-color:var(--crit)}
+  .find.f-high{border-left-color:var(--high)}
+  .find.f-med{border-left-color:var(--med)}
+  .find.f-low{border-left-color:var(--low)}
+  .find.f-done{border-left-color:var(--good);opacity:.96}
+  .find.f-done h4 .pill.crit{opacity:.55}
+  .resnote{margin-top:10px;padding:11px 14px;background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.32);border-radius:8px;font-size:14px}
+  .resnote b{color:var(--good)}
+  .resnote .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:5px}
+  .find h4{margin:0 0 4px;font-size:16.5px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+  .find .loc{font-family:var(--mono);font-size:12px;color:var(--muted);margin:2px 0 10px}
+  .find .fix{margin-top:10px;padding:10px 14px;background:rgba(63,185,80,.07);border:1px solid rgba(63,185,80,.22);border-radius:8px;font-size:14px}
+  .find .fix b{color:var(--good)}
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+  tr:hover td{background:var(--panel)}
+  .muted{color:var(--muted)}
+  .callout{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:20px 0}
+  .callout.warn{border-color:rgba(255,159,67,.35);background:rgba(255,159,67,.06)}
+  .callout.idea{border-color:rgba(126,231,135,.3);background:rgba(126,231,135,.05)}
+  ul{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  .step{display:flex;gap:14px;margin:14px 0;align-items:flex-start}
+  .step .num{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:#06101f;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:14px}
+  .step .body{flex:1}
+  .step .body b{font-size:15px}
+  footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+  @media(max-width:920px){.wrap{grid-template-columns:1fr}nav{display:none}main{padding:28px 20px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <div class="brand">CogniSphere</div>
+  <div class="sub">Codebase Audit &amp; Revamp Plan</div>
+  <div class="sub muted">2026-06-10 · 4-subsystem deep audit</div>
+  <h2>Overview</h2>
+  <a href="#summary">Executive summary</a>
+  <a href="#scorecard">Subsystem scorecard</a>
+  <a href="#arch">Architecture at a glance</a>
+  <h2>Findings</h2>
+  <a href="#critical">① Critical &amp; data-loss</a>
+  <a href="#security">② Security</a>
+  <a href="#reliability">③ Reliability &amp; lifecycle</a>
+  <a href="#perf">④ Performance</a>
+  <a href="#dx">⑤ Developer experience</a>
+  <a href="#ux">⑥ User experience (web)</a>
+  <a href="#docs">⑦ Documentation drift</a>
+  <h2>Revamp</h2>
+  <a href="#sdk">Plugin SDK proposal</a>
+  <a href="#roadmap">Roadmap alignment</a>
+  <a href="#plan">Prioritized action plan</a>
+</nav>
+
+<main>
+  <h1>CogniSphere — Codebase Audit &amp; Revamp Plan</h1>
+  <p class="lead">A deep read of the server core, HTTP/persistence layer, plugin system + agent templates, and the React web client — cross-checked against <code>docs/hld.md</code>, <code>docs/server.md</code>, <code>docs/v0-deferred.md</code>, and the forward-looking <code>docs/improvement-design.md</code>. Every finding below was verified against the actual source; the four critical items were re-read line-by-line before inclusion.</p>
+
+  <div class="callout idea" style="display:flex;gap:14px;align-items:flex-start">
+    <span class="pill done" style="flex:0 0 auto;margin-top:3px">Update · 2026-06-10</span>
+    <div><strong>3 of 4 critical findings resolved.</strong> <b>C-1</b> (harness-bridge entry-index), <b>C-2</b> (runner child-leak / double-spawn), and <b>C-3</b> (queue priority inversion) have been fixed in code, verified (C-3 with a repro), and pass <code>npm run check</code> (typecheck + lint, root + web). The directly-related <code>docs/server.md</code> drift was corrected in the same change. Remaining critical: <b>C-4</b> (file-serving XSS), tracked in Phase 1 of the <a href="#plan">action plan</a>.</div>
+  </div>
+
+  <!-- ============ SUMMARY ============ -->
+  <h2 class="sec" id="summary">Executive summary</h2>
+  <p>The harness is a well-conceived multi-agent platform: a small, genuinely clean plugin contract (<code>manifest + start(ctx) + stop()</code> with <code>ctx.notify()</code> as the single outbound primitive), a durable per-agent SQLite queue, and a per-batch <code>pi --mode rpc</code> child model. The bones are good — the lost-wakeup-free worker wait loop, the U+2028-safe RPC framing, and the live entry-id capture design are all things many teams get wrong and this codebase gets right.</p>
+  <p>The risk is concentrated in <strong>four places that can silently lose or misroute a user's message</strong>, plus a same-origin XSS that turns the (intended) web UI into a full account-takeover vector. None of these are visible in normal happy-path testing, which is exactly why they're dangerous. Below them sits a broad layer of medium-severity reliability gaps (no batch watchdog, no missed-fire recovery, swallowed startup errors) and a clear, high-leverage structural opportunity: <strong>~70% of the bugs in the four plugins live in boilerplate the plugin contract doesn't provide</strong> — a thin Plugin SDK would erase most of them at once.</p>
+
+  <div class="grid cards">
+    <div class="card"><div class="n" style="color:var(--crit)">4 <span style="font-size:15px;color:var(--good)">· 3✓</span></div><div class="l">Critical</div></div>
+    <div class="card"><div class="n" style="color:var(--high)">11</div><div class="l">High</div></div>
+    <div class="card"><div class="n" style="color:var(--med)">24</div><div class="l">Medium</div></div>
+    <div class="card"><div class="n" style="color:var(--low)">22</div><div class="l">Low</div></div>
+    <div class="card"><div class="n" style="color:var(--good)">3</div><div class="l">Resolved</div></div>
+  </div>
+
+  <div class="callout warn">
+    <strong>The one-paragraph version for a busy reader:</strong> <span class="tag fixed">✓ done</span> the <a href="#critical">harness-bridge entry-index bug</a> (silently corrupted message→session links and broke smart-retry on <em>the second message of every conversation</em>), <span class="tag fixed">✓ done</span> the <a href="#critical">runner child-leak / same-session double-spawn</a> (JSONL corruption + zombie <code>pi</code> processes), and <span class="tag fixed">✓ done</span> the <a href="#critical">queue priority inversion</a>. <strong>Next:</strong> close the <a href="#security">file-serving XSS</a> (account takeover) and the secrets-wipe / path-hardening items. Everything else is real but can be sequenced behind these.</p>
+  </div>
+
+  <!-- ============ SCORECARD ============ -->
+  <h2 class="sec" id="scorecard">Subsystem scorecard</h2>
+  <table>
+    <thead><tr><th>Subsystem</th><th>Grade</th><th>Strongest</th><th>Weakest</th></tr></thead>
+    <tbody>
+      <tr><td><b>Runner / queue / RPC</b><br><span class="muted">core orchestration</span></td><td><span class="pill med">B−</span></td><td>Solid concurrency primitives; durable queue; clever live entry-id capture</td><td>Error paths leak children &amp; can double-spawn; no batch watchdog; routing logic owned by the wrong (ephemeral) object</td></tr>
+      <tr><td><b>HTTP API / stores</b><br><span class="muted">agents, files, auth, models</span></td><td><span class="pill med">B−</span></td><td>Auth gating consistent; SQL allowlisted; timing-safe token compare</td><td>Same-origin XSS via raw file serving; non-atomic secret writes can wipe credentials; symlink escape; 994-line god-router</td></tr>
+      <tr><td><b>Plugins / templates</b><br><span class="muted">gws, telegram, scheduler, admin</span></td><td><span class="pill high">C+</span></td><td>Contract is small and clean; dropping a dir auto-discovers it</td><td>No SDK — every plugin re-implements polling/state/attachments by hand and 4 of them got delivery semantics wrong; prompt/seed docs contradict the runner</td></tr>
+      <tr><td><b>Web client</b><br><span class="muted">React + TanStack Query</span></td><td><span class="pill med">B</span></td><td>Centralized typed API layer; consistent query keys; no real XSS holes</td><td>Auth store &amp; 401 handler disconnected (redirect loop); error states missing on 3 pages; everything is full-payload polling where SSE fits</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ ARCH ============ -->
+  <h2 class="sec" id="arch">Architecture at a glance</h2>
+  <p>One Node process owns everything: the plugin registry, every agent's SQLite queue, all in-process plugin instances, and the HTTP server. Each agent spawns one short-lived <code>pi</code> child per batch.</p>
+  <pre><span class="c">┌─ Node process ─────────────────────────────────────────────┐</span>
+  HTTP (Hono: /api /admin /healthz · raw dispatch: /webhook/…)
+        │
+        ▼
+  AgentManager ── SecretsStore · ModelsStore · PluginRegistry
+    └─ agents: Map&lt;id, AgentInstance&gt;
+         ├─ agentJson, state, <span class="f">db: AgentDb</span>  <span class="c">← outlives the runner</span>
+         ├─ plugins: Map&lt;id, PluginEntry&gt;   <span class="c">in-process actors</span>
+         └─ <span class="f">runner: AgentRunner</span>          <span class="c">← ephemeral, rebuilt on reload</span>
+              ├─ workers (Promise[])      per-thread exclusion
+              └─ active: Map&lt;threadId, ActiveBatch&gt;
+                        │
+                        ▼ spawn per batch
+                 <span class="f">pi --mode rpc</span>  (JSON-RPC over stdio, dies on agent_end)</pre>
+  <p>The single most consequential structural observation in this audit: <strong>the durable queue (<code>AgentDb</code>) deliberately outlives the runner, but the only write path into it goes through the runner's <code>notify()</code></strong>, which throws while the runner isn't <code>running</code>. That inversion is the root cause of two separate message-loss windows (boot and reload). See <a href="#reliability">R-2</a> and the <a href="#plan">action plan</a>.</p>
+
+  <!-- ============ CRITICAL ============ -->
+  <h2 class="sec" id="critical">① Critical &amp; data-loss findings</h2>
+  <p class="muted">These are silent — they don't throw, don't log loudly, and don't show up in single-message testing. They corrupt state or lose work on the second message, on a retry, on a restart, or on an error path.</p>
+
+  <div class="find f-done">
+    <h4><span class="pill crit">Critical</span> <span class="pill done">✓ Resolved</span> C-1 · harness-bridge reports session-absolute entry indexes; the runner maps them batch-relative</h4>
+    <div class="loc">apps/server/agents/templates/base/extensions/harness-bridge.ts:30,37,45,51 · runner.ts:457,563 · queue.ts:285</div>
+    <p>The bridge resets <code>reported = 0</code> on every <code>agent_start</code> and then sweeps <em>all</em> user entries in the session file, emitting absolute index <code>i</code>:</p>
+    <pre>pi.on(<span class="s">"agent_start"</span>, (_e, ctx) => { reported = <span class="s">0</span>; sweep(ctx); });
+<span class="c">// sweep:</span> for (let i = reported; i &lt; userEntries.length; i++)
+    ctx.ui.setStatus(KEY, JSON.stringify({ kind:<span class="s">"user_entry"</span>, index: i, entryId: entry.id }));</pre>
+    <p>But each thread reuses <em>one</em> session JSONL across all its batches (<code>--session &lt;sessionId&gt;.jsonl</code>), and pi's <code>getEntries()</code> returns the entire loaded file. So on batch ≥2 of any thread — i.e. <strong>the second message of every conversation</strong> — the sweep re-reports the historical user entries at indexes <code>0..n-1</code>, and the runner writes a <em>batch-1</em> entry id onto <em>batch-2</em>'s rows (<code>setRowEntryId</code> updates unconditionally). The real new prompt arrives at index <code>n</code>, maps to no group, and its true entry id is dropped.</p>
+    <p>Because smart-retry classifies a row as "already delivered → continue (generic nudge, original text never re-sent)" purely from <code>pi_entry_id IS NOT NULL</code>, a row that <em>never reached the model</em> can be pre-marked delivered and, on failure, silently dropped instead of resent. This is data loss masquerading as a successful retry.</p>
+    <div class="fix"><b>Fix:</b> capture a baseline user-entry count at extension load (before any prompt) and report <code>index − baseline</code>, never emitting entries that predate the run — or have the runner record the pre-spawn user-entry count and subtract it. Add a guard in <code>setRowEntryId</code> rejecting an index already bound.</div>
+    <div class="resnote"><b>✓ Resolved.</b> Chose the ordering-independent strategy: the runner now <em>ignores</em> the bridge's absolute <code>index</code> and binds each genuinely-new <code>entryId</code> to the next message group in arrival order, deduped via <code>ActiveBatch.seenEntryIds</code> (pre-seeded from the new <code>queue.entryIdsForThread()</code>). <code>setRowEntryId</code> gained an <code>AND pi_entry_id IS NULL</code> guard so a binding is never overwritten. Verified against vendored pi that the prompt is appended at <code>message_end</code> (after <code>agent_start</code>), confirming the approach holds regardless of event timing. Unblocks the §5 smart-retry work.
+      <div class="meta">runner.ts (onHarnessEntry, ActiveBatch) · queue.ts (entryIdsForThread, setRowEntryId guard) · bridge unchanged · npm run check ✓</div>
+    </div>
+  </div>
+
+  <div class="find f-done">
+    <h4><span class="pill crit">Critical</span> <span class="pill done">✓ Resolved</span> C-2 · Runner error paths never kill/await the <code>pi</code> child → leaked processes + same-session double-spawn</h4>
+    <div class="loc">apps/server/src/runner.ts:514 (happy-path guard) vs 530–553 (catch — no kill)</div>
+    <p>The happy path escalates to <code>SIGKILL</code> after 5s (<code>const exitTimer = setTimeout(() =&gt; rpc.kill("SIGKILL"), 5000)</code>). The <strong>catch path does neither</strong> — on <code>[runner_error]</code> (e.g. <code>sendPrompt</code> rejected while the child is alive and healthy) or on abort, it marks the batch failed/cancelled and falls through to <code>active.delete(threadId)</code> in the surrounding flow without ending stdin or awaiting exit:</p>
+    <pre>} <span class="k">catch</span> (err) {
+    <span class="c">// marks batch failed/cancelled… and that's it.</span>
+    <span class="c">// child is never endStdin()'d, never killed, never awaited.</span>
+}</pre>
+    <p>Two consequences: (a) a zombie <code>pi</code> process is abandoned; (b) freeing the thread lets a worker immediately dequeue the same thread and <strong>spawn a second <code>pi</code> against the same <code>--session</code> JSONL while the first is still appending</strong> — concurrent write corruption of the conversation file.</p>
+    <div class="fix"><b>Fix:</b> wrap <code>processBatch</code> in a <code>finally</code> that, if the child hasn't exited, calls <code>endStdin()</code> then <code>await Promise.race([rpc.waitExit(), timeout])</code> with SIGKILL escalation <em>before</em> the thread is released from <code>active</code>.</div>
+    <div class="resnote"><b>✓ Resolved.</b> Added an <code>ensureChildExited</code> helper (end stdin, await exit, 5s SIGKILL) and a <code>finally</code> in <code>processBatch</code> that runs it on <em>every</em> exit path — success, <code>runner_error</code>, abort, throw — before the worker loop releases the thread from <code>active</code>. Idempotent via a <code>childExited</code> flag (no double-kill/await); relies on rpc.ts's cached exit promise and try/catch-wrapped <code>kill</code>/<code>endStdin</code> so teardown is safe on an already-dead child. Closes both the zombie leak and the concurrent-JSONL-write window.
+      <div class="meta">runner.ts (ensureChildExited, childExited flag, processBatch finally) · npm run check ✓</div>
+    </div>
+  </div>
+
+  <div class="find f-done">
+    <h4><span class="pill crit">Critical</span> <span class="pill done">✓ Resolved</span> C-3 · <code>peekHighestPriorityThread</code> priority ordering is broken (verified inversion)</h4>
+    <div class="loc">apps/server/src/queue.ts:198–210</div>
+    <pre>SELECT <span class="k">DISTINCT</span> thread_id FROM events
+WHERE status=<span class="s">'queued'</span> AND is_silent=<span class="s">0</span>
+ORDER BY priority DESC, id ASC</pre>
+    <p>SQLite permits <code>ORDER BY</code> on a non-selected column under <code>DISTINCT</code> and uses an <em>arbitrary</em> row's priority per thread. Empirically: thread A with rows <code>(prio 0, prio 9)</code> vs thread B <code>(prio 5)</code> returns <strong>B first</strong> — the thread holding the globally highest-priority message loses. Latent today (no plugin sets a non-zero priority yet) but the column and the documented contract both exist, so the first plugin that uses priority will hit a silent scheduling bug.</p>
+    <div class="fix"><b>Fix:</b> <code>SELECT thread_id, MAX(priority) p, MIN(id) first_id FROM events WHERE status='queued' AND is_silent=0 GROUP BY thread_id ORDER BY p DESC, first_id ASC</code>.</div>
+    <div class="resnote"><b>✓ Resolved.</b> Applied the <code>GROUP BY</code> query exactly as suggested. Verified with a standalone better-sqlite3 repro: the A=(prio 0, prio 9) vs B=(prio 5) case now returns <b>A</b> (was B). <code>dequeueBatch</code>'s within-thread ordering was already correct, so no change there.
+      <div class="meta">queue.ts (peekHighestPriorityThread) · repro confirmed · npm run check ✓</div>
+    </div>
+  </div>
+
+  <div class="find f-crit">
+    <h4><span class="pill crit">Critical</span> C-4 · Stored XSS → full account takeover via raw file serving</h4>
+    <div class="loc">apps/server/src/api/files.ts:115–135, 223–228</div>
+    <p><code>GET /:id/fs/raw</code> serves agent-dir files <code>inline</code> with a sniffed mime type — <code>image/svg+xml</code> for <code>.svg</code>, <code>text/html</code> for <code>.html</code>:</p>
+    <pre>const disposition = c.req.query(<span class="s">"download"</span>)
+    ? <span class="s">`attachment; filename="${filename}"`</span>
+    : <span class="s">`inline; filename="${filename}"`</span>;  <span class="c">// default</span></pre>
+    <p>Agent-dir files are written by an LLM that ingests untrusted external input (email bodies, Telegram messages). A prompt-injected instruction that makes the agent write <code>payload.html</code> into its workspace yields script executing <strong>on the harness origin</strong> when the operator opens the link — with the <code>pi_sid</code> cookie attached to same-origin fetches, i.e. full authenticated control of every <code>/api/*</code> route (read secret structure, rewrite <code>agent.json</code>, delete threads). The <code>filename</code> is also interpolated unescaped into <code>content-disposition</code>.</p>
+    <div class="fix"><b>Fix:</b> force <code>attachment</code> disposition (or add <code>Content-Security-Policy: sandbox</code> + <code>X-Content-Type-Options: nosniff</code>) for <code>text/html</code> and <code>image/svg+xml</code>; quote/strip <code>"</code> in the filename.</div>
+  </div>
+
+  <!-- ============ SECURITY ============ -->
+  <h2 class="sec" id="security">② Security findings</h2>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> S-1 · Corrupt <code>secrets.json</code> read as <code>{}</code> → next save permanently wipes all secrets</h4>
+    <div class="loc">apps/server/src/api/secrets.ts:177 (catch→{}) + 137 (non-atomic write)</div>
+    <p><code>readSecrets</code> swallows parse errors (<code>catch { return {}; }</code>). <code>PUT /api/secrets</code> reads existing, merges the request body, then <code>writeFileSync</code>s — a plain write, not write-temp-then-rename. So a crash mid-write truncates the file; the next save then reads it as empty and rewrites it containing <em>only</em> the keys in that request, silently destroying every other agent's credentials. Note the inconsistency: the runtime <code>SecretsStore.load()</code> and <code>ModelsStore.load()</code> both <em>throw</em> on bad JSON — only the secrets API treats corruption as "empty".</p>
+    <div class="fix"><b>Fix:</b> make <code>readSecrets</code> throw (→500) on unparseable non-empty files, and write atomically (<code>writeFileSync(tmp)</code> + <code>renameSync</code>) for <code>secrets.json</code>, <code>models.json</code>, <code>users.json</code>, <code>agent.json</code>, and plugin configs. Route the secrets API through <code>SecretsStore</code> rather than re-reading the file.</div>
+  </div>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> S-2 · Telegram document <code>file_name</code> used unsanitized → path traversal write primitive</h4>
+    <div class="loc">apps/server/plugins/telegram/index.ts:259–261, 285–287</div>
+    <p><code>file_name</code> is set by whoever sends the document and flows straight into <code>join(inboxDir, filename)</code>. With the default empty <code>allowedChatIds</code>, anyone can send <code>../../system_prompts/0-base_prompt.md</code> and overwrite files in the agent dir — a prompt-injection-grade write primitive. Separately, all attachments share one flat <code>inboxDir</code> keyed by <code>message_id</code> (unique only per chat), so files from two chats overwrite each other. (gws avoids this with per-message subdirs.)</p>
+    <div class="fix"><b>Fix:</b> <code>basename(file_name)</code> + the same <code>sanitizeFilename</code> gws uses, and write under <code>inbox/&lt;chatId&gt;/&lt;messageId&gt;/</code>.</div>
+  </div>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> S-3 · Symlink escape defeats <code>resolveSafe</code> containment on every <code>/fs/*</code> route</h4>
+    <div class="loc">apps/server/src/api/files.ts:195–201</div>
+    <p>The containment check is purely lexical (<code>normalize</code> + <code>relative</code> + <code>startsWith("..")</code>), with no <code>realpathSync</code>. A symlink inside the agent dir (creatable by the agent's own shell tools) pointing outside lets the authenticated UI read, overwrite (<code>PUT</code>), and recursively delete (<code>DELETE …?recursive</code>) targets outside the dir — <code>.secrets/secrets.json</code>, pi's plaintext <code>~/.pi/agent/auth.json</code> OAuth tokens. <code>docs/api.md:476</code> claims containment the code doesn't deliver.</p>
+    <div class="fix"><b>Fix:</b> after the lexical check, <code>realpathSync</code> the deepest existing ancestor and re-verify it's under <code>realpathSync(root)</code>; or <code>lstat</code> and refuse to follow symlinks.</div>
+  </div>
+
+  <div class="find f-med">
+    <h4><span class="pill med">Medium</span> S-4 · No login throttling; plaintext passwords; default <code>admin/changeme</code> never enforced away</h4>
+    <div class="loc">apps/server/src/api/auth.ts:37–39, 106–114, 188–202</div>
+    <p><code>POST /api/auth/login</code> is public with zero rate-limiting or lockout, passwords are stored plaintext, and the file auto-creates as <code>admin/changeme</code>. A server the project's own warning calls "exposed" is brute-forceable at network speed against a known default. Plaintext-at-rest is a documented v0 tradeoff; the missing throttle and the absence of a startup refusal (or loud <code>/healthz</code> flag) while the placeholder credential is live are not.</p>
+    <div class="fix"><b>Fix:</b> in-memory per-IP/username failure counter with exponential backoff; hash passwords (even unsalted scrypt is a one-file change); refuse to bind non-loopback while <code>admin/changeme</code> still verifies.</div>
+  </div>
+
+  <div class="find f-med">
+    <h4><span class="pill med">Medium</span> S-5 · Webhook dispatcher leaks distinct 404 bodies → unauthenticated agent/plugin enumeration</h4>
+    <div class="loc">apps/server/src/api/webhook.ts:37–51 · auth.ts:219–226 (cookie missing <code>Secure</code>)</div>
+    <p>Distinct unauthenticated 404s (<code>unknown agent: &lt;id&gt;</code> vs <code>unknown plugin or no http handler: &lt;pid&gt;</code>) let anyone enumerate valid agent ids and installed plugins by prefix scanning, with no body-size cap or rate limit before the plugin sees the request. Separately, the session cookie sets <code>SameSite=Lax</code> but not <code>Secure</code>, so under TLS termination the cookie still travels over a plain-HTTP same-host request; CSRF rests entirely on <code>Lax</code>.</p>
+    <div class="fix"><b>Fix:</b> single constant 404 body for all webhook miss cases; set <code>secure</code> on the cookie when the request is HTTPS; optional per-plugin shared-secret path segment.</div>
+  </div>
+
+  <!-- ============ RELIABILITY ============ -->
+  <h2 class="sec" id="reliability">③ Reliability &amp; lifecycle findings</h2>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> R-1 · No batch watchdog — a hung <code>pi</code> child holds a worker slot forever</h4>
+    <div class="loc">apps/server/src/runner.ts:493 (<code>await rpc.sendPrompt</code>), 505 · rpc.ts:177</div>
+    <p><code>sendPrompt</code> and the <code>Promise.race([agentEnded, waitExit()])</code> have no timeout; pending promises reject only on child <code>close</code>/<code>error</code>. A child that is alive but unresponsive (wedged model call, deadlocked extension) blocks <code>processBatch</code> indefinitely — and with the default <code>maxConcurrentSlots: 1</code>, that stalls the entire agent until an operator manually aborts.</p>
+    <div class="fix"><b>Fix:</b> a configurable per-batch deadline (<code>agentJson.batchTimeoutMs</code>) that triggers the abort→SIGKILL path. The HLD already specifies "after 30 min hard-kill" — it just isn't implemented.</div>
+  </div>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> R-2 · Notification loss windows — <code>ctx.notify</code> silently drops messages when the runner is null or not yet started</h4>
+    <div class="loc">apps/server/src/agent-manager.ts:605–616 · runner.ts:284</div>
+    <p>Two windows: <strong>(a) boot</strong> — plugins are <code>start()</code>ed before <code>runner.start()</code>, so anything a plugin delivers during its own startup (a long-poll that already consumed messages from the external service) hits <code>runner.notify</code>'s <code>throw "not running"</code>, is logged, and lost. <strong>(b) reload/stale-swap</strong> — <code>stopAgent</code> sets <code>inst.runner = null</code>; the optional chain <code>inst.runner?.notify(...)</code> makes it a silent no-op, not even an error. The queue is alive and persistent through both windows; only the write path is gone.</p>
+    <div class="fix"><b>Fix (root cause):</b> move thread-id computation + durable enqueue <em>out of</em> the ephemeral runner up to <code>AgentInstance</code>/manager level (the runner then only consumes the queue and handles live steering). This makes notifications loss-free by construction. See <a href="#plan">P-2</a>.</div>
+  </div>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> R-3 · Scheduler has no missed-fire recovery — reminders during downtime silently evaporate</h4>
+    <div class="loc">apps/server/plugins/scheduler/index.ts:96–110</div>
+    <p><code>reload()</code> just constructs <code>new Cron(...)</code> per schedule. Croner only schedules <em>future</em> occurrences; nothing persists last-fire/next-fire and <code>start()</code> does no catch-up. A one-shot reminder whose moment passes during a restart never fires — not even later, because nobody records that it was missed. For a reminder system this is a core correctness gap. Compounding it: <code>fire()</code> has no try/catch and croner isn't set <code>catch:true</code>, so a <code>notify()</code> throw (runner swapping) escapes into croner's timer context and the fire is lost.</p>
+    <div class="fix"><b>Fix:</b> persist <code>lastFiredAt</code> per schedule; on start, compare <code>Cron.nextRun(lastFiredAt)</code> to now and fire missed occurrences (at minimum for <code>onetime</code> schedules). Wrap <code>fire()</code> in try/catch.</div>
+  </div>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> R-4 · Telegram: in-memory offset → duplicate delivery after every restart; <code>timeoutMs</code> ignored → silent poll stall</h4>
+    <div class="loc">apps/server/plugins/telegram/index.ts:134, 153, 191–208, 305</div>
+    <p>Three compounding issues. <strong>Offset</strong> is <code>private offset = 0</code>, never persisted; the startup comment claims it "drops pending updates" but the code only calls <code>getMe</code>. After a restart with recent traffic, every update Telegram still holds (up to 24h) is redelivered. <strong>Timeout</strong> — the poll loop passes <code>timeoutMs</code> but <code>api()</code> never reads it, so a wedged <code>getUpdates</code> connection stalls the loop forever with no log. <strong>Loss</strong> — offset is advanced <em>before</em> handling, so a transient <code>notify</code>/enqueue failure is swallowed and the message is gone.</p>
+    <div class="fix"><b>Fix:</b> persist <code>offset</code> to <code>state/offset.json</code> after each batch; honor <code>timeoutMs</code> via <code>AbortSignal.timeout</code>; distinguish transient enqueue failure (don't advance offset) from a malformed-update poison pill.</div>
+  </div>
+
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> R-5 · gws default mode drops non-latest unread mail, then marks it all read (unrecoverable)</h4>
+    <div class="loc">apps/server/plugins/gws/index.ts:344–351, 434–437</div>
+    <p>Default mode only ever considers the thread's <em>latest</em> message (<code>const last = ordered[ordered.length-1]</code>) but marks <em>every</em> unread message in the thread read. Two arrivals between polls where the latest is Cc-only: the earlier message addressed to the agent is never delivered and is permanently marked read. There's also no dedupe ledger in default mode, so a crash between <code>notify</code> and <code>markRead</code> re-delivers.</p>
+    <div class="fix"><b>Fix:</b> emit every unread message addressed to the agent (wake on the newest, older ones silent); only mark read what was actually emitted; consult a <code>MessageId</code>-keyed seen-set in default mode too.</div>
+  </div>
+
+  <div class="find f-med">
+    <h4><span class="pill med">Medium</span> R-6 · <code>agent.json</code> is never schema-validated → malformed config fails deep in the batch path</h4>
+    <div class="loc">apps/server/src/agent-manager.ts:366 (bare cast) · runner.ts:681, 801</div>
+    <p>Plugin configs get ajv validation; <code>AgentJson</code> itself is a bare <code>JSON.parse(raw) as AgentJson</code>. A missing <code>model</code> survives start and then throws <code>Cannot read properties of undefined</code> in <code>spawnPi</code> on <em>every</em> batch, burning retries to the dead-letter queue. A typo'd <code>threadIdStrategy</code> falls through <code>computeThreadId</code>'s switch with no <code>default</code>, failing the SQLite bind inside <code>notify</code> → caught by R-2's wrapper → message lost.</p>
+    <div class="fix"><b>Fix:</b> ajv-validate <code>AgentJson</code> in step 1 of <code>startAgent</code> (ajv is already constructed); add a <code>default:</code> throw to <code>computeThreadId</code>.</div>
+  </div>
+
+  <div class="find f-med">
+    <h4><span class="pill med">Medium</span> R-7 · Several startup paths throw outside the catch → agent left "stopped" with <code>error: null</code></h4>
+    <div class="loc">apps/server/src/agent-manager.ts:424–433 · telegram/index.ts:123–145 (opposite failure mode)</div>
+    <p>In <code>startAgent</code>, the <code>mkdirSync</code> + <code>AgentDb</code> constructor + <code>backfillThreadSessions</code> sit outside the catch-and-record pattern that steps 1–2 use carefully. If the DB file is corrupt/locked they throw, <code>startAgent</code> rejects, <code>loadAgent</code> only logs, and the UI shows a healthy "stopped" agent with no hint why. Telegram has the <em>opposite</em> failure mode: missing/bad token → <code>warn</code> + <code>return</code>, so <code>start()</code> resolves and the plugin is recorded <code>running</code> while delivering nothing. (gws does it right — it throws detailed errors.) The codebase needs one rule: <strong>fail-to-start = throw</strong>.</p>
+    <div class="fix"><b>Fix:</b> wrap the remaining <code>startAgent</code> steps in the catch-and-record pattern; make telegram <code>throw</code> on <code>getMe</code> failure and declare <code>required: ["TELEGRAM_BOT_TOKEN"]</code>.</div>
+  </div>
+
+  <div class="find f-med">
+    <h4><span class="pill med">Medium</span> R-8 · Web: session expiry triggers an infinite login redirect bounce</h4>
+    <div class="loc">apps/web/src/lib/api.ts:41 · App.tsx:66 · pages/login.tsx:24</div>
+    <p>The 401 handler navigates to <code>/login</code> but never flips the zustand auth store. <code>LoginPage</code> sees <code>status === "authed"</code> (stale) and <code>&lt;Navigate to="/"&gt;</code>s back; the polled queries (3–5s) 401 again → <code>/login</code> → bounce indefinitely. The handler also fires for the login POST's own 401.</p>
+    <div class="fix"><b>Fix:</b> in the handler, <code>useAuth.setState({ user:null, status:"anon" })</code> before navigating, and skip the handler for the login endpoint.</div>
+  </div>
+
+  <div class="callout">
+    <strong>Also tracked (Low):</strong> re-entrant <code>shutdown</code> on a second SIGTERM (double <code>db.close()</code> throws) ·  failed stale-swap permanently wedges the runner in <code>dequeuePaused</code> with <code>staleReason</code> already cleared · fire-and-forget steers misbind rows if pi drops one · duplicate scheduler names leak ghost timers · scheduler state file has two uncoordinated read-modify-write writers (lost-update race).
+  </div>
+
+  <!-- ============ PERF ============ -->
+  <h2 class="sec" id="perf">④ Performance findings</h2>
+  <table>
+    <thead><tr><th>Sev</th><th>Where</th><th>Issue → fix</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill high">High</span></td><td>chat-window.tsx:115</td><td>Chat re-downloads the <em>entire</em> session JSONL every 3s and re-renders every bubble (each re-parses markdown), no virtualization → multi-MB transfers + full reconcile on long sessions. <b>Fix:</b> <code>React.memo</code> bubbles by entry id, incremental <code>?afterEntryId=</code> endpoint or ETag/304, virtualize the list.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>agents.ts:394, 605; files.ts:125</td><td>Unbounded synchronous <code>readFileSync</code> + unpaginated JSON on session/usage/raw endpoints; usage re-parses every line of every jsonl per request with no mtime cache (unlike <code>totalCost</code>, which has one). <b>Fix:</b> stream <code>/raw</code>, add tail/limit params, reuse the <code>(path,mtime)</code> cache, cap PUT/upload bodies.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>events-table.tsx:141; chat-window.tsx:464</td><td>Events table: 2s full refetch into 100 unmemoized rows, each holding 3 mutation hooks + up to 6 Radix tooltips (~300 mutations, ~600 portals/page). Hidden Usage panel keeps polling at 5s; chat tab runs 5 overlapping poll loops. <b>Fix:</b> memoize rows, hoist mutations, gate hidden-panel polling, consolidate to one SSE channel.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>queue.ts:12, 663</td><td><code>events</code> table grows unbounded; <code>search</code> does <code>LIKE '%needle%'</code> full scans with unescaped <code>%</code>/<code>_</code>. <b>Fix:</b> retention sweep at DB open (delete terminal rows older than N days); escape LIKE metacharacters.</td></tr>
+      <tr><td><span class="pill low">Low</span></td><td>runner.ts:836, 702</td><td>Every batch spawn re-reads + re-concatenates all <code>system_prompts/*.md</code> and re-scans <code>extensions/</code> synchronously on the shared event loop. <b>Fix:</b> cache the assembled prompt (minus ThreadId suffix) and extension args per runner instance — already rebuilt on reload, so snapshot semantics match.</td></tr>
+      <tr><td><span class="pill low">Low</span></td><td>gws/index.ts:308; agents.ts:819</td><td>gws fetches the full thread body every tick to use only the last message, and modifies labels one-call-per-message; backlog ledger re-parsed every tick. Module-level cost/warming caches never evicted on thread delete (monotonic memory growth). <b>Fix:</b> <code>messages.batchModify</code>, cache the append-only ledger, evict caches under deleted thread dirs.</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ DX ============ -->
+  <h2 class="sec" id="dx">⑤ Developer-experience findings</h2>
+
+  <div class="find f-med">
+    <h4><span class="pill med">Medium</span> D-1 · <code>agents.ts</code> is a 994-line router with an embedded analytics engine</h4>
+    <div class="loc">apps/server/src/api/agents.ts:537–905</div>
+    <p>~370 lines of usage aggregation, tail-reading, a cost cache + background warm-up scheduler (with <code>setImmediate</code> queueing and module-level mutable state) live <em>below the router</em> in a route file. The router should be parameter-parsing + delegation, like every sibling in the directory.</p>
+    <div class="fix"><b>Fix:</b> extract <code>session-usage.ts</code> with its own tests; the global caches become instance state there.</div>
+  </div>
+
+  <div class="find f-med">
+    <h4><span class="pill med">Medium</span> D-2 · Duplicated logic that has already drifted into bugs</h4>
+    <div class="loc">models.ts:123 vs agents.ts:305 · api/secrets.ts:156 vs secrets.ts:122 · plugin-registry.ts scan vs rescan</div>
+    <p>The "provider configured" predicate exists twice and already diverged — the thread-model route never checks OAuth, so an operator on Claude Pro/Max OAuth gets <code>400 not configured</code> even though <code>GET /api/models</code> reports it ready (bug F4). Secrets-file parsing exists twice with <em>opposite</em> error semantics (throw vs silent <code>{}</code>) — the root of S-1. <code>PluginRegistry.scan</code> and <code>rescan</code> are ~80% duplicated and behave inconsistently (rescan can't shadow a builtin, contradicting the doc).</p>
+    <div class="fix"><b>Fix:</b> one <code>isProviderConfigured()</code>, one <code>applyMaskedPatch()</code>, route the secrets API through <code>SecretsStore</code>, and a single <code>loadEntry(dir,id,scope)</code> shared by scan/rescan.</div>
+  </div>
+
+  <div class="find f-low">
+    <h4><span class="pill low">Low</span> D-3 · ~24 copies of the agent-resolution preamble; core imports a concrete plugin's type</h4>
+    <div class="loc">agents.ts (~15×), files.ts (7×), admin.ts (2×) · agent-manager.ts:934 (<code>getAdminPlugin</code>)</div>
+    <p><code>const inst = am.get(id); if (!inst) return c.json({error:"unknown agent"},404);</code> appears ~24× with slight variants. A tiny Hono middleware on <code>/:id/*</code> resolving the instance into <code>c.set("agent", inst)</code> removes all of it. Separately, the manager hard-codes <code>import("../plugins/admin").default</code>, inverting the very plugin abstraction the rest of the file maintains.</p>
+    <div class="fix"><b>Fix:</b> agent-resolver middleware; declare an optional <code>deliver?()</code> capability on the <code>Plugin</code> interface and duck-type instead of importing the class.</div>
+  </div>
+
+  <div class="callout">
+    <strong>Also (Low):</strong> <code>config.ts</code> — <code>PORT=abc</code> → <code>NaN</code> with a cryptic failure; <code>BIND_HOST=0.0.0.0</code> bakes <code>http://0.0.0.0:port</code> into <code>PI_WEBHOOK_BASE</code>. <code>main.ts:105</code> monkey-patches <code>@hono/node-server</code>'s request listeners via an unsound cast (breaks silently on upgrade). <code>PluginInstanceContext.config: unknown</code> forces every plugin to cast — a generic <code>Plugin&lt;TConfig&gt;</code> removes the boilerplate. Web: dead code in <code>tool-call-card.tsx:198</code>, identical-branch ternary in <code>linkified-text.tsx:33</code>, and triple-duplicated <code>formatBytes</code> / secret-input / provider-filter logic across pages.
+  </div>
+
+  <!-- ============ UX ============ -->
+  <h2 class="sec" id="ux">⑥ User-experience findings (web client)</h2>
+  <div class="find f-high">
+    <h4><span class="pill high">High</span> U-1 · Query errors render misleading or permanently-stuck UI on three pages</h4>
+    <div class="loc">models.tsx:75 · agent-settings-pane.tsx:127 · index.tsx:28 · chat-window.tsx:445</div>
+    <p>With global <code>retry:false</code>, a fetch error leaves <code>isLoading=false</code> and <code>data=undefined</code>. The Models page then shows "loading…" <em>forever</em>; the settings pane shows a permanent spinner if any of its three queries fail; the agent list renders "No agents yet" (a false claim) on a failed <code>listAgents</code>. Only <code>UsagePanel</code> handles <code>error</code> correctly — that's the pattern to copy.</p>
+    <div class="fix"><b>Fix:</b> destructure <code>error</code> from each <code>useQuery</code> and render an error state with a retry button.</div>
+  </div>
+  <table>
+    <thead><tr><th>Sev</th><th>Where</th><th>Issue</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill med">Medium</span></td><td>file-editor.tsx:44</td><td>"Reload" button is a no-op for content — draft only syncs on path change, so a file the agent rewrote can't be re-read without selecting another file first.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>schema-form.tsx:416</td><td><code>JsonFallback</code> textarea never resyncs — "Reset" clears the dirty flag but leaves edited JSON, so the UI lies about what would be saved.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>chat-window.tsx:189</td><td>Deep-link highlight effect re-arms <code>setTimeout</code> ×20 and a 2.5s class-remove with no cleanup — leaks timers and mutates detached DOM after unmount.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>events-table.tsx:151</td><td>Plugin filter only offers plugins on the current page; picking one collapses the dropdown to just that plugin. Source from installed plugins instead.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>sidebar.tsx:165</td><td>Mobile drawer: no focus trap, no Escape, dismissal on a non-interactive <code>&lt;div&gt;</code> (keyboard-unreachable). Use the Radix <code>Dialog</code>/<code>Sheet</code> already in the tree.</td></tr>
+      <tr><td><span class="pill med">Medium</span></td><td>file-editor / settings</td><td>Unsaved edits silently discarded on file switch / when the upstream object changes mid-edit; no confirm, no <code>beforeunload</code>, no "remote changed" banner.</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">XSS review of the client itself came back clean: <code>react-markdown</code> escapes HTML and strips <code>javascript:</code>, the linkifier renders text nodes, and the HTML preview uses <code>srcDoc</code> + <code>sandbox=""</code>. The only residual is arbitrary remote <code>&lt;img src&gt;</code> from agent output (a tracking-beacon/IP-leak vector for an admin console) — consider restricting to same-origin/<code>data:</code>.</p>
+
+  <!-- ============ DOCS ============ -->
+  <h2 class="sec" id="docs">⑦ Documentation drift</h2>
+  <p>Per <code>CLAUDE.md §6</code>, docs are part of the surface area. Several load-bearing claims are now wrong:</p>
+  <ul>
+    <li><b>server.md:429</b> — describes a <code>DROP TABLE</code> at schema init that <strong>does not exist</strong> (schema is <code>CREATE … IF NOT EXISTS</code> only); an old-shape DB would collide, not reset.</li>
+    <li><span class="tag fixed">✓ fixed</span> <b>server.md:47, 169</b> — said sessions continue via <code>--continue</code> and the harness reads the JSONL post-batch; corrected in §1/§3 to describe explicit <code>--session &lt;file&gt;</code> and the live entry-id capture via harness-bridge (landed with the C-1 fix).</li>
+    <li><b>server.md:1495</b> — lists a <code>gmail (stub)</code> plugin that doesn't exist; <b>1477–1492</b> LOC counts are ~30–75% stale (runner 578→858, queue 395→692).</li>
+    <li><b>api.md §5</b> — <code>DELETE /api/agents/:id/fs/path</code> (a <em>recursive delete</em>) is completely undocumented; the <code>limit</code> clamp doc is wrong (code returns <code>LIMIT 0</code> for <code>0&lt;n&lt;1</code>); <code>/fs/*</code> containment is claimed but symlink-defeatable.</li>
+    <li><b>Seed prompts contradict the runner:</b> scheduler seed claims the harness substitutes <code>{{ThreadId}}</code> (it doesn't — it appends a literal footer); the base prompt's <code>telegram-cli send</code> example uses a non-existent subcommand (it's <code>send-message</code>); the gws seed documents a <code>ThreadId</code> metadata key the plugin never emits (it's <code>GmailThreadId</code>) and prefixes a Node binary with <code>bash</code>; the admin seed ("write your reply visibly") flatly contradicts the base model ("your text output is internal").</li>
+  </ul>
+
+  <!-- ============ SDK ============ -->
+  <h2 class="sec" id="sdk">Revamp: a Plugin SDK (highest structural leverage)</h2>
+  <div class="callout idea">
+    <p><strong>The core finding from the plugin audit:</strong> the <em>contract</em> is a B+ (small, clean, directory-as-identity), but the <em>SDK is missing</em>. About 70% of every plugin's bugs in this audit live in boilerplate the contract doesn't provide — each plugin re-implements the poll loop, state persistence, attachment handling, and secrets-missing behavior by hand, and they drifted into <em>different</em> wrong answers (telegram lost offset, gws lost non-latest mail, scheduler lost missed fires).</p>
+  </div>
+  <p>Adding a 5th plugin today means copy-pasting an existing one and inheriting its footguns. A thin SDK collapses that:</p>
+  <pre><span class="k">abstract class</span> <span class="f">PollingPlugin</span>&lt;TConfig&gt; <span class="k">implements</span> Plugin {
+  <span class="c">// owns: interval scheduling, stop flag, error backoff, structured logging</span>
+  abstract poll(ctx): Promise&lt;void&gt;;
+}
+ctx.state.<span class="f">readJson</span>(name)            <span class="c">// typed, returns null if absent</span>
+ctx.state.<span class="f">writeJsonAtomic</span>(name, v)   <span class="c">// tmp + rename, no torn writes</span>
+ctx.state.<span class="f">appendLedger</span>(name, id)     <span class="c">// dedupe seen-set, cached</span>
+ctx.<span class="f">saveAttachment</span>(name, buf)      <span class="c">// owns sanitize + per-source namespacing</span>
+                                  <span class="c">// + the &lt;name&gt;[relpath] inline-reference format</span></pre>
+  <p>This single module would have prevented S-2 (telegram traversal), R-4 (offset loss), R-5 (gws mark-read), R-3 (scheduler missed fires), the two-writer state race, and the triple-duplicated <code>formatTs</code> — and would make a new plugin a manifest + a <code>poll()</code> body. Pair it with a documented <strong>"fail-to-start = throw"</strong> rule and a one-command seed installer (so the manual <code>cp</code> workflow in <code>v0-deferred §3.1</code> stops being a footgun).</p>
+
+  <!-- ============ ROADMAP ============ -->
+  <h2 class="sec" id="roadmap">Roadmap alignment (<code>docs/improvement-design.md</code>)</h2>
+  <p>The team's own forward design is sound and the audit reinforces its sequencing. Two notes where the audit changes the picture:</p>
+  <ul>
+    <li><strong>§5 Smart retries depends on C-1.</strong> The whole continuation-vs-replay mechanism keys off <code>pi_entry_id IS NOT NULL</code> — but the harness-bridge index bug means that flag is set on the <em>wrong rows</em> from the second message onward. <strong>Fix C-1 before building further retry logic on top of the entry-id signal</strong>, or the smart-retry feature will silently drop messages it believes were delivered.</li>
+    <li><strong>§4 by-reference plugin layout</strong> (point pi at plugin <code>seed/</code> dirs instead of copying into every agent) is the right call and it eliminates a whole class of install-time drift. It also pairs naturally with the SDK above — both move plugins from "copied artifacts" to "referenced source."</li>
+    <li><strong>§1 memory &amp; §2 compaction as pi extensions</strong> are clean, self-contained, and reversible — exactly the kind of work to do <em>after</em> the critical fixes land, since they don't touch the hot path.</li>
+    <li><strong>§3 dreamer meta-agent</strong> is the big bet; the audit's note is just that it should consume the same usage/event data the retry-hygiene work (§5.3/5.4) makes legible — sequence it last, dry-run first, as the doc already says.</li>
+  </ul>
+
+  <!-- ============ PLAN ============ -->
+  <h2 class="sec" id="plan">Prioritized action plan</h2>
+  <p>Sequenced so each phase is independently shippable and the riskiest, most-silent bugs go first.</p>
+
+  <h3>Phase 1 — Stop silent data loss &amp; takeover (days)</h3>
+  <div class="step"><div class="num" style="background:var(--good);color:#06101f">✓</div><div class="body"><b>C-1 harness-bridge index</b> — <span class="tag fixed">done</span> runner binds new entryIds in arrival order (ordering-independent); <code>setRowEntryId</code> guarded against rebinding. <span class="tag">unblocks smart-retry</span></div></div>
+  <div class="step"><div class="num" style="background:var(--good);color:#06101f">✓</div><div class="body"><b>C-2 runner child lifecycle</b> — <span class="tag fixed">done</span> <code>finally</code> ends stdin + awaits exit + SIGKILL-escalates before releasing the thread. <span class="tag">JSONL corruption closed</span></div></div>
+  <div class="step"><div class="num" style="background:var(--good);color:#06101f">✓</div><div class="body"><b>C-3 queue priority</b> — <span class="tag fixed">done</span> <code>GROUP BY</code> aggregate ordering; verified with a repro.</div></div>
+  <div class="step"><div class="num">4</div><div class="body"><b>C-4 + S-1</b> <span class="tag">next</span> — force <code>attachment</code>/sandbox for HTML/SVG; atomic writes + throw-on-corrupt for all JSON stores. <span class="tag">security</span></div></div>
+  <div class="step"><div class="num">5</div><div class="body"><b>S-2/S-3</b> — telegram filename sanitization + <code>realpath</code> symlink containment on <code>/fs/*</code>.</div></div>
+
+  <h3>Phase 2 — Make failures legible &amp; bounded (1–2 weeks)</h3>
+  <div class="step"><div class="num">6</div><div class="body"><b>R-1 batch watchdog</b>, <b>R-6 validate <code>agent.json</code></b>, <b>R-7 fail-to-start = throw</b> (codify the rule, fix telegram + the unguarded <code>startAgent</code> steps).</div></div>
+  <div class="step"><div class="num">7</div><div class="body"><b>R-2 move enqueue out of the runner</b> — the structural fix that makes notifications loss-free by construction (also simplifies the runner API).</div></div>
+  <div class="step"><div class="num">8</div><div class="body"><b>U-1 / R-8 web</b> — error states on every query; connect the 401 handler to the auth store. <b>queue retention sweep</b> + LIKE escaping.</div></div>
+
+  <h3>Phase 3 — Extensibility &amp; DX (2–4 weeks)</h3>
+  <div class="step"><div class="num">9</div><div class="body"><b>Plugin SDK</b> (<code>PollingPlugin</code> + <code>ctx.state</code> + <code>saveAttachment</code>) and migrate the four plugins onto it — retires R-3/R-4/R-5/S-2 and the state-file races as a class.</div></div>
+  <div class="step"><div class="num">10</div><div class="body"><b>D-1/D-2/D-3</b> — extract <code>session-usage.ts</code>; dedupe the provider-configured / masked-patch / scan-rescan logic; agent-resolver middleware. <b>Fix all doc drift</b> in the same diffs.</div></div>
+  <div class="step"><div class="num">11</div><div class="body"><b>Perf</b> — SSE channel to replace the 5 overlapping pollers; incremental session endpoint + memoized/virtualized chat.</div></div>
+
+  <h3>Phase 4 — Roadmap features (per improvement-design.md)</h3>
+  <div class="step"><div class="num">12</div><div class="body">By-reference plugin layout (§4) → markdown memory (§1) → compaction extension (§2) → smart-retry continuation (§5, now safe on the fixed entry-id signal) → dreamer meta-agent (§3, dry-run first).</div></div>
+
+  <footer>
+    Generated 2026-06-10 from a four-way parallel audit of <code>apps/server/src</code>, <code>apps/server/plugins</code>, <code>apps/server/agents/templates</code>, and <code>apps/web/src</code>, cross-checked against <code>docs/{hld,server,api,v0-deferred,improvement-design}.md</code>. Every cited <code>file:line</code> was read directly; the four critical findings were re-verified line-by-line. Severities are the auditors' assessment of blast radius × likelihood, not a formal CVSS score.<br><br><b style="color:var(--good)">Resolution log — 2026-06-10:</b> C-1, C-2, C-3 fixed in code (runner.ts, queue.ts) with related <code>docs/server.md</code> drift corrected; all changes pass <code>npm run check</code>. C-3 additionally verified with a standalone repro. Remaining critical C-4 and the high/medium backlog are unchanged.
+  </footer>
+</main>
+</div>
+</body>
+</html>

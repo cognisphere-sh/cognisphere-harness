@@ -34,7 +34,7 @@ export interface PiMessage {
   errorMessage?: string;
 }
 
-/** Reported by the harness-bridge extension via `setStatus("pi-harness", …)`. */
+/** Reported by the harness-bridge extension via `setStatus("cognisphere", …)`. */
 export interface HarnessEntryReport {
   kind: "user_entry";
   index: number;
@@ -115,7 +115,7 @@ export class PiRpcClient {
   }
 
   /** Fires when the harness-bridge extension reports a user-message session
-   *  entry id over the `setStatus("pi-harness", …)` channel. */
+   *  entry id over the `setStatus("cognisphere", …)` channel. */
   onHarnessEntry(h: (report: HarnessEntryReport) => void): void {
     this.harnessEntryHandler = h;
   }
@@ -245,9 +245,9 @@ export class PiRpcClient {
 
   private handleExtensionUi(req: ExtensionUiRequest): void {
     // The harness-bridge extension reports session entry ids as a
-    // fire-and-forget `setStatus` keyed "pi-harness". Intercept those and
+    // fire-and-forget `setStatus` keyed "cognisphere". Intercept those and
     // route to the harness-entry handler instead of treating them as UI.
-    if (req.method === "setStatus" && req.statusKey === "pi-harness") {
+    if (req.method === "setStatus" && req.statusKey === "cognisphere") {
       if (req.statusText == null) return;
       try {
         const report = JSON.parse(req.statusText) as HarnessEntryReport;
@@ -259,7 +259,7 @@ export class PiRpcClient {
           this.harnessEntryHandler?.(report);
         }
       } catch {
-        this.log.debug({ statusText: req.statusText }, "bad pi-harness setStatus payload");
+        this.log.debug({ statusText: req.statusText }, "bad cognisphere setStatus payload");
       }
       return;
     }

@@ -55,7 +55,7 @@ export function Sidebar() {
             <Bot className="size-4" />
           </div>
           <div className="leading-tight">
-            <div className="text-sm font-semibold">pi-harness</div>
+            <div className="text-sm font-semibold">CogniSphere</div>
             <div className="text-[10px] text-muted-foreground">v0</div>
           </div>
         </Link>
@@ -76,7 +76,7 @@ export function Sidebar() {
           {data?.agents.length === 0 && (
             <li className="px-3 py-2 text-xs text-muted-foreground">
               No agents loaded. Create one under{" "}
-              <code className="rounded bg-muted px-1">~/.piharness/default/agents/</code>{" "}
+              <code className="rounded bg-muted px-1">~/.cognisphere/default/agents/</code>{" "}
               and restart the server.
             </li>
           )}

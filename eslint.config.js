@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/node_modules/**', '**/dist/**', 'apps/web/**', 'temp/**', 'pi-harness/**'],
+    ignores: ['**/node_modules/**', '**/dist/**', 'apps/web/**', 'temp/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

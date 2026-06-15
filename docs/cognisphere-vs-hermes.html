@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harness Showdown — hermes-agent vs CogniSphere</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0F172A; --bg-2:#0B1220; --surface:#131C2E; --surface-2:#172238;
+    --muted:#1B2540; --muted-bg:#1A2335; --fg:#F8FAFC; --fg-dim:#A8B3C7;
+    --fg-faint:#6B7791; --border:#27334A; --border-bright:#3A496A;
+    --hermes:#F59E0B;  /* amber */
+    --hermes-dim:#7c5212;
+    --pi:#22D3EE;      /* cyan */
+    --pi-dim:#0e5e6b;
+    --green:#22C55E; --red:#EF4444; --yellow:#EAB308; --violet:#A78BFA;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:
+      radial-gradient(1200px 600px at 12% -8%, rgba(245,158,11,.07), transparent 60%),
+      radial-gradient(1100px 600px at 88% -4%, rgba(34,211,238,.08), transparent 60%),
+      var(--bg);
+    color:var(--fg); font-family:var(--sans); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 24px}
+  a{color:var(--pi); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono)}
+  h1,h2,h3{font-family:var(--mono); font-weight:600; line-height:1.25; letter-spacing:-.01em}
+
+  /* ---------- Hero ---------- */
+  header.hero{padding:84px 0 48px; border-bottom:1px solid var(--border); position:relative; overflow:hidden}
+  .kicker{font-family:var(--mono); font-size:12.5px; letter-spacing:.22em; text-transform:uppercase; color:var(--fg-faint); margin-bottom:18px}
+  h1.title{font-size:clamp(30px,5vw,52px); margin:0 0 8px}
+  h1.title .vs{color:var(--fg-faint); font-weight:400}
+  h1.title .h{color:var(--hermes); text-shadow:0 0 22px rgba(245,158,11,.25)}
+  h1.title .p{color:var(--pi); text-shadow:0 0 22px rgba(34,211,238,.25)}
+  .sub{color:var(--fg-dim); max-width:760px; font-size:17px; margin-top:14px}
+  .meta-row{display:flex; flex-wrap:wrap; gap:10px; margin-top:26px}
+  .pill{font-family:var(--mono); font-size:12px; padding:6px 12px; border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); background:var(--surface)}
+  .pill b{color:var(--fg)}
+
+  /* ---------- Section ---------- */
+  section{padding:56px 0; border-bottom:1px solid var(--border)}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--green); margin:0 0 10px}
+  h2{font-size:clamp(22px,3vw,30px); margin:0 0 8px}
+  .lead{color:var(--fg-dim); max-width:820px; margin:0 0 28px}
+
+  /* ---------- Contender cards ---------- */
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:20px}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px}
+  .card.h{border-top:3px solid var(--hermes)}
+  .card.p{border-top:3px solid var(--pi)}
+  .card h3{font-size:19px; margin:0 0 2px; display:flex; align-items:center; gap:10px}
+  .dot{width:10px; height:10px; border-radius:3px; display:inline-block}
+  .dot.h{background:var(--hermes); box-shadow:0 0 10px var(--hermes)}
+  .dot.p{background:var(--pi); box-shadow:0 0 10px var(--pi)}
+  .card .tag{font-family:var(--mono); font-size:11.5px; color:var(--fg-faint); text-transform:uppercase; letter-spacing:.12em}
+  .stat-row{display:flex; gap:18px; flex-wrap:wrap; margin:18px 0 6px}
+  .stat{flex:1; min-width:120px}
+  .stat .n{font-family:var(--mono); font-size:24px; font-weight:600; color:var(--fg)}
+  .stat .n.h{color:var(--hermes)} .stat .n.p{color:var(--pi)}
+  .stat .l{font-size:12px; color:var(--fg-faint)}
+  ul.feat{list-style:none; padding:0; margin:16px 0 0; font-size:14.5px}
+  ul.feat li{padding:6px 0 6px 24px; position:relative; color:var(--fg-dim); border-top:1px solid var(--muted-bg)}
+  ul.feat li:first-child{border-top:none}
+  ul.feat li::before{content:""; position:absolute; left:4px; top:13px; width:8px; height:8px; border-radius:2px}
+  ul.feat li.pro::before{background:var(--green)}
+  ul.feat li.con::before{background:var(--red)}
+  ul.feat li.neu::before{background:var(--yellow)}
+  ul.feat li b{color:var(--fg)}
+
+  /* ---------- Scorecard ---------- */
+  .scoretable{width:100%; border-collapse:collapse; font-size:14.5px; margin-top:8px}
+  .scoretable th,.scoretable td{padding:14px 12px; text-align:left; border-bottom:1px solid var(--border)}
+  .scoretable thead th{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--fg-faint); font-weight:500}
+  .scoretable td.crit{color:var(--fg); font-weight:500}
+  .scoretable td.crit small{display:block; color:var(--fg-faint); font-weight:400; font-size:12px; font-family:var(--sans)}
+  .bar{display:flex; align-items:center; gap:10px}
+  .bar .track{flex:1; height:8px; background:var(--muted-bg); border-radius:6px; overflow:hidden; min-width:70px}
+  .bar .fill{height:100%; border-radius:6px}
+  .bar .fill.h{background:linear-gradient(90deg,var(--hermes-dim),var(--hermes))}
+  .bar .fill.p{background:linear-gradient(90deg,var(--pi-dim),var(--pi))}
+  .bar .v{font-family:var(--mono); font-size:13px; width:34px; text-align:right; color:var(--fg)}
+  .winchip{font-family:var(--mono); font-size:11px; padding:3px 8px; border-radius:6px; font-weight:600}
+  .winchip.h{color:var(--hermes); background:rgba(245,158,11,.12); border:1px solid var(--hermes-dim)}
+  .winchip.p{color:var(--pi); background:rgba(34,211,238,.12); border:1px solid var(--pi-dim)}
+  .winchip.tie{color:var(--fg-dim); background:var(--muted-bg); border:1px solid var(--border)}
+  tfoot td{font-family:var(--mono); font-weight:600; color:var(--fg); border-top:2px solid var(--border-bright)}
+  .totalpill{font-family:var(--mono); font-size:15px; padding:4px 10px; border-radius:7px}
+  .totalpill.h{color:var(--hermes); background:rgba(245,158,11,.1)}
+  .totalpill.p{color:var(--pi); background:rgba(34,211,238,.1)}
+
+  /* ---------- Dimension deep dives ---------- */
+  .dim{margin-top:30px; background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden}
+  .dim-head{display:flex; align-items:flex-start; gap:16px; padding:20px 24px; background:var(--surface-2); border-bottom:1px solid var(--border)}
+  .dim-num{font-family:var(--mono); font-size:13px; font-weight:600; color:var(--bg); background:var(--green); border-radius:8px; width:30px; height:30px; display:flex; align-items:center; justify-content:center; flex:none}
+  .dim-head h3{margin:0; font-size:18px}
+  .dim-head p{margin:3px 0 0; font-size:13.5px; color:var(--fg-faint)}
+  .dim-body{display:grid; grid-template-columns:1fr 1fr; gap:0}
+  .dim-col{padding:20px 24px}
+  .dim-col.h{border-right:1px solid var(--border)}
+  .dim-col .who{font-family:var(--mono); font-size:12px; letter-spacing:.1em; text-transform:uppercase; margin-bottom:10px; display:flex; align-items:center; gap:8px}
+  .dim-col.h .who{color:var(--hermes)}
+  .dim-col.p .who{color:var(--pi)}
+  .dim-col p{font-size:14px; color:var(--fg-dim); margin:0 0 10px}
+  .dim-col p:last-child{margin-bottom:0}
+  .dim-col .file{font-family:var(--mono); font-size:12px; color:var(--fg-faint); background:var(--bg-2); border:1px solid var(--border); border-radius:6px; padding:2px 6px; white-space:nowrap}
+  .verdict-line{padding:14px 24px; background:var(--bg-2); font-size:13.5px; border-top:1px solid var(--border); display:flex; gap:10px; align-items:baseline}
+  .verdict-line b{font-family:var(--mono); color:var(--green); font-size:12px; text-transform:uppercase; letter-spacing:.1em; flex:none}
+  .verdict-line span{color:var(--fg-dim)}
+
+  /* ---------- Recommendation ---------- */
+  .reco{background:linear-gradient(180deg,var(--surface-2),var(--surface)); border:1px solid var(--border-bright); border-radius:16px; padding:32px}
+  .reco h3{font-size:22px; margin:0 0 4px}
+  .reco .winner{color:var(--pi); text-shadow:0 0 20px rgba(34,211,238,.3)}
+  .reco-grid{display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:24px}
+  .blockbox{background:var(--bg-2); border:1px solid var(--border); border-radius:12px; padding:20px}
+  .blockbox h4{font-family:var(--mono); font-size:13px; text-transform:uppercase; letter-spacing:.1em; margin:0 0 14px; color:var(--fg-dim)}
+  .blockbox ol{margin:0; padding-left:20px; font-size:14px; color:var(--fg-dim)}
+  .blockbox ol li{margin-bottom:9px}
+  .blockbox ol li b{color:var(--fg)}
+  .steal{display:flex; gap:12px; align-items:flex-start; padding:12px 0; border-top:1px solid var(--muted-bg); font-size:14px; color:var(--fg-dim)}
+  .steal:first-of-type{border-top:none}
+  .steal .arrow{font-family:var(--mono); color:var(--hermes); flex:none; font-size:13px; padding-top:1px}
+  .steal b{color:var(--fg)}
+  .callout{margin-top:24px; padding:18px 22px; border-left:3px solid var(--green); background:rgba(34,197,94,.06); border-radius:0 10px 10px 0; font-size:14.5px; color:var(--fg-dim)}
+  .callout b{color:var(--fg)}
+
+  /* ---------- TL;DR matrix ---------- */
+  .matrix{width:100%; border-collapse:collapse; font-size:14px; margin-top:8px}
+  .matrix th,.matrix td{padding:12px; border:1px solid var(--border); text-align:left; vertical-align:top}
+  .matrix thead th{background:var(--surface-2); font-family:var(--mono); font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--fg-dim)}
+  .matrix th.h{color:var(--hermes)} .matrix th.p{color:var(--pi)}
+  .matrix td.dimname{font-weight:500; color:var(--fg); background:var(--surface)}
+  .matrix td small{color:var(--fg-faint)}
+
+  footer{padding:40px 0 60px; color:var(--fg-faint); font-size:13px; font-family:var(--mono)}
+
+  @media (max-width:820px){
+    .grid2,.dim-body,.reco-grid{grid-template-columns:1fr}
+    .dim-col.h{border-right:none; border-bottom:1px solid var(--border)}
+    .card.p{margin-top:0}
+    header.hero{padding:60px 0 40px}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker">Architecture Teardown · 2026-06-03</div>
+    <h1 class="title"><span class="h">hermes-agent</span> <span class="vs">vs</span> <span class="p">CogniSphere</span></h1>
+    <p class="sub">Two agent harnesses, two philosophies. One is a mature, batteries-included production platform with ~989K lines of Python. The other is a lean ~15K-line TypeScript orchestration layer built on fundamentals. This report grades both against the seven things you actually care about.</p>
+    <div class="meta-row">
+      <span class="pill"><b>7</b> evaluation criteria</span>
+      <span class="pill">scored <b>/10</b> per dimension</span>
+      <span class="pill">verdict + <b>migration path</b></span>
+      <span class="pill">evidence from source</span>
+    </div>
+  </div>
+</header>
+
+<!-- ===================== AT A GLANCE ===================== -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The Contenders</p>
+    <h2>At a glance</h2>
+    <p class="lead">Before the criteria, the shape of each system. Size and stack tell most of the story: one optimizes for capability and reach, the other for legibility and speed of change.</p>
+
+    <div class="grid2">
+      <!-- HERMES -->
+      <div class="card h">
+        <div class="tag">Contender A</div>
+        <h3><span class="dot h"></span>hermes-agent</h3>
+        <div class="stat-row">
+          <div class="stat"><div class="n h">~989K</div><div class="l">lines of code</div></div>
+          <div class="stat"><div class="n h">2,049</div><div class="l">Python modules</div></div>
+          <div class="stat"><div class="n h">Python</div><div class="l">+ TS TUI, Bash</div></div>
+        </div>
+        <ul class="feat">
+          <li class="pro"><b>Production-grade & mature</b> — WAL SQLite, s6-overlay supervision, multi-arch Docker, 1,385 tests</li>
+          <li class="pro"><b>34 messaging platforms</b> shipped (Telegram, Discord, Slack, WhatsApp, Matrix, Email, SMS…)</li>
+          <li class="pro"><b>Deep feature set</b> — curator, context compression, pluggable memory, 31 LLM providers</li>
+          <li class="con"><b>Heavyweight</b> — 6 entry points, 100+ files to grok before extending confidently</li>
+          <li class="neu"><b>Policy-driven</b> — 1,158-line AGENTS.md of hardline contributor rules</li>
+        </ul>
+      </div>
+
+      <!-- PI -->
+      <div class="card p">
+        <div class="tag">Contender B</div>
+        <h3><span class="dot p"></span>CogniSphere</h3>
+        <div class="stat-row">
+          <div class="stat"><div class="n p">~15.5K</div><div class="l">lines of code</div></div>
+          <div class="stat"><div class="n p">~20</div><div class="l">core server files</div></div>
+          <div class="stat"><div class="n p">TypeScript</div><div class="l">Node + Hono + SQLite</div></div>
+        </div>
+        <ul class="feat">
+          <li class="pro"><b>Minimal & legible</b> — single Node process, ~3.8K LOC server core, readable in an afternoon</li>
+          <li class="pro"><b>Clean plugin contract</b> — one TS interface (<code>start/stop/handleHttpRequest</code> + <code>ctx.notify</code>)</li>
+          <li class="pro"><b>File-resident state</b> — <code>tar</code> an agent dir and it's a backup; trivial multi-agent</li>
+          <li class="con"><b>Capability gaps</b> — no auto memory compaction; self-evolution designed but deferred in v0</li>
+          <li class="neu"><b>Delegates the hard part</b> — spawns <code>pi</code> subprocess per batch; LLM loop lives outside the harness</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SCORECARD ===================== -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The Verdict, Quantified</p>
+    <h2>Scorecard against your 7 criteria</h2>
+    <p class="lead">Scored 0–10 on each dimension you named. Higher is better. The totals are close — but <em>where</em> each system wins is the whole point: pi dominates the "simple & operable" axis you ranked first; hermes dominates the "deep intelligence" axis.</p>
+
+    <table class="scoretable">
+      <thead>
+        <tr><th style="width:31%">Criterion</th><th style="width:27%">hermes-agent</th><th style="width:27%">CogniSphere</th><th style="width:15%">Edge</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="crit">1 · Minimal & easy to extend<small>simplicity, LOC, modify-ability</small></td>
+          <td><div class="bar"><div class="track"><div class="fill h" style="width:40%"></div></div><span class="v">4</span></div></td>
+          <td><div class="bar"><div class="track"><div class="fill p" style="width:90%"></div></div><span class="v">9</span></div></td>
+          <td><span class="winchip p">pi +5</span></td>
+        </tr>
+        <tr>
+          <td class="crit">2 · Add event / notification sources<small>pluggable inputs</small></td>
+          <td><div class="bar"><div class="track"><div class="fill h" style="width:90%"></div></div><span class="v">9</span></div></td>
+          <td><div class="bar"><div class="track"><div class="fill p" style="width:80%"></div></div><span class="v">8</span></div></td>
+          <td><span class="winchip h">hermes +1</span></td>
+        </tr>
+        <tr>
+          <td class="crit">3 · Session mgmt by source / thread<small>routing &amp; isolation</small></td>
+          <td><div class="bar"><div class="track"><div class="fill h" style="width:80%"></div></div><span class="v">8</span></div></td>
+          <td><div class="bar"><div class="track"><div class="fill p" style="width:90%"></div></div><span class="v">9</span></div></td>
+          <td><span class="winchip p">pi +1</span></td>
+        </tr>
+        <tr>
+          <td class="crit">4 · Self-evolving<small>writes/curates its own skills</small></td>
+          <td><div class="bar"><div class="track"><div class="fill h" style="width:80%"></div></div><span class="v">8</span></div></td>
+          <td><div class="bar"><div class="track"><div class="fill p" style="width:30%"></div></div><span class="v">3</span></div></td>
+          <td><span class="winchip h">hermes +5</span></td>
+        </tr>
+        <tr>
+          <td class="crit">5 · Memory &amp; context compaction<small>summarization, recall</small></td>
+          <td><div class="bar"><div class="track"><div class="fill h" style="width:90%"></div></div><span class="v">9</span></div></td>
+          <td><div class="bar"><div class="track"><div class="fill p" style="width:30%"></div></div><span class="v">3</span></div></td>
+          <td><span class="winchip h">hermes +6</span></td>
+        </tr>
+        <tr>
+          <td class="crit">6 · Persistent sub-agents<small>durable delegation</small></td>
+          <td><div class="bar"><div class="track"><div class="fill h" style="width:60%"></div></div><span class="v">6</span></div></td>
+          <td><div class="bar"><div class="track"><div class="fill p" style="width:70%"></div></div><span class="v">7</span></div></td>
+          <td><span class="winchip p">pi +1</span></td>
+        </tr>
+        <tr>
+          <td class="crit">7 · Deploying multiple agents<small>fleet operability</small></td>
+          <td><div class="bar"><div class="track"><div class="fill h" style="width:60%"></div></div><span class="v">6</span></div></td>
+          <td><div class="bar"><div class="track"><div class="fill p" style="width:90%"></div></div><span class="v">9</span></div></td>
+          <td><span class="winchip p">pi +3</span></td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>Total</td>
+          <td><span class="totalpill h">50 / 70</span></td>
+          <td><span class="totalpill p">48 / 70</span></td>
+          <td><span class="winchip tie">~tie</span></td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div class="callout">
+      <b>Read the totals carefully.</b> Hermes wins on raw points (50 vs 48) because it's a finished product — but every point it leads by is on <em>intelligence</em> features (memory, compaction, self-evolution) that are <em>additive</em> to a codebase. Pi wins decisively on the <em>structural</em> properties (simplicity, fleet deployment) that are nearly impossible to retrofit. You can add a compaction module to a clean codebase; you cannot easily extract simplicity from 989K lines.
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DEEP DIVES ===================== -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Dimension by Dimension</p>
+    <h2>The seven criteria, in detail</h2>
+    <p class="lead">For each criterion: how each system actually implements it, where in the source it lives, and who wins.</p>
+
+    <!-- 1 -->
+    <div class="dim">
+      <div class="dim-head">
+        <div class="dim-num">1</div>
+        <div><h3>Minimal, simple, easy to modify &amp; extend</h3><p>How much you must understand before you can safely change things</p></div>
+      </div>
+      <div class="dim-body">
+        <div class="dim-col h">
+          <div class="who"><span class="dot h"></span>hermes-agent</div>
+          <p>A mature platform with breadth as its design goal. The agent loop alone lives in <span class="file">agent/conversation_loop.py</span> (~264KB) and <span class="file">run_agent.py</span>, with the gateway at <span class="file">gateway/run.py</span> (~24K LOC). Extension is well-abstracted — register a tool, subclass <span class="file">gateway/platforms/base.py</span> — but the surface is vast: <b>109 modules</b> in <code>agent/</code>, 126 plugins, 99 tool files.</p>
+          <p>Extensible? Absolutely. Minimal? No. Onboarding means reading dozens of files plus the 1,158-line AGENTS.md rulebook.</p>
+        </div>
+        <div class="dim-col p">
+          <div class="who"><span class="dot p"></span>CogniSphere</div>
+          <p>Built on fundamentals: filesystem, SQLite, subprocess, HTTP. The entire server is ~20 files / 3.8K LOC — <span class="file">main.ts</span>, <span class="file">runner.ts</span>, <span class="file">queue.ts</span>, <span class="file">agent-manager.ts</span>, <span class="file">plugin-registry.ts</span>. No orchestration framework, no DI container, no magic.</p>
+          <p>You can read the whole core in an afternoon and confidently change it. The deliberate trade: it offloads the LLM loop to the external <code>pi</code> binary, so the harness stays an orchestration shell.</p>
+        </div>
+      </div>
+      <div class="verdict-line"><b>Verdict</b><span>Pi wins decisively (9 vs 4). This is your #1 priority and it's the one property that can't be bolted on later.</span></div>
+    </div>
+
+    <!-- 2 -->
+    <div class="dim">
+      <div class="dim-head">
+        <div class="dim-num">2</div>
+        <div><h3>Adding new event / notification sources</h3><p>Wiring in chat, email, cron, webhooks as input channels</p></div>
+      </div>
+      <div class="dim-body">
+        <div class="dim-col h">
+          <div class="who"><span class="dot h"></span>hermes-agent</div>
+          <p><b>34 platform adapters already shipped.</b> A dynamic <span class="file">gateway/platform_registry.py</span> auto-registers anything subclassing the adapter ABC. Beyond messaging there's a durable cron daemon (<span class="file">cron/scheduler.py</span>), webhooks with HMAC auth, an API server, and Hermes-as-MCP-server (<span class="file">mcp_serve.py</span>). Plugin lifecycle hooks: <code>on_session_start</code>, <code>pre_llm_call</code>, etc.</p>
+        </div>
+        <div class="dim-col p">
+          <div class="who"><span class="dot p"></span>CogniSphere</div>
+          <p>One clean abstraction: implement the <code>Plugin</code> interface (<span class="file">types.ts</span>) and call <code>ctx.notify(event, payload)</code>. Drop a folder under <code>plugins/&lt;id&gt;/</code> and <span class="file">plugin-registry.ts</span> dynamic-imports it. Four ship today (admin, scheduler, telegram, gws/Gmail). Adding one is a single TS file — but you're <em>building</em> sources, not picking from 34.</p>
+        </div>
+      </div>
+      <div class="verdict-line"><b>Verdict</b><span>Hermes wins on batteries-included reach (9 vs 8); pi wins on per-source authoring simplicity. If you need Slack today, hermes has it; if you need a custom source, pi is faster to write.</span></div>
+    </div>
+
+    <!-- 3 -->
+    <div class="dim">
+      <div class="dim-head">
+        <div class="dim-num">3</div>
+        <div><h3>Session management by source &amp; thread</h3><p>Keying conversations to platform, channel, thread id</p></div>
+      </div>
+      <div class="dim-body">
+        <div class="dim-col h">
+          <div class="who"><span class="dot h"></span>hermes-agent</div>
+          <p>Sessions keyed <code>{user_id}@{platform}#{thread_id}</code>, persisted to a versioned SQLite store (<span class="file">hermes_state.py</span>, schema v14) with FTS5 full-text search. In-memory LRU cache of 128 live agents with a 1-hour idle TTL. Compression creates <code>parent_session_id</code> lineages so split sessions stay linked. Forum topics map to separate sessions automatically.</p>
+        </div>
+        <div class="dim-col p">
+          <div class="who"><span class="dot p"></span>CogniSphere</div>
+          <p>Routing is <b>explicit and configurable per agent</b> via <code>threadIdStrategy</code>: <code>single</code>, <code>plugin</code>, or <code>plugin_channel</code> (<code>${pluginId}:${channelId}</code>). A unified SQLite <code>events</code> table tracks every notification with <code>thread_id</code>, <code>status</code>, <code>priority</code>, plus a per-thread worker lock. Fully durable across restarts (no in-memory session store to lose).</p>
+        </div>
+      </div>
+      <div class="verdict-line"><b>Verdict</b><span>Pi edges it (9 vs 8) — the declarative <code>threadIdStrategy</code> is exactly the source/thread keying you asked for, with less code. Hermes is more battle-tested and adds FTS search.</span></div>
+    </div>
+
+    <!-- 4 -->
+    <div class="dim">
+      <div class="dim-head">
+        <div class="dim-num">4</div>
+        <div><h3>Self-evolving</h3><p>Agent writes, curates, and prunes its own skills/tools over time</p></div>
+      </div>
+      <div class="dim-body">
+        <div class="dim-col h">
+          <div class="who"><span class="dot h"></span>hermes-agent</div>
+          <p>The standout feature. A <b>Curator</b> (<span class="file">agent/curator.py</span>, ~1.8K LOC) runs in the background tracking per-skill usage in <code>.usage.json</code> and auto-transitions agent-created skills <code>active → stale → archived</code> (never deletes; restorable, pinnable). The agent writes/patches its own skills mid-run via a <code>skill_manage</code> tool. Trajectory capture (<span class="file">trajectory_compressor.py</span>) preps data for fine-tuning the next model generation.</p>
+        </div>
+        <div class="dim-col p">
+          <div class="who"><span class="dot p"></span>CogniSphere</div>
+          <p>The framework is <em>designed</em> for it — agents can author <code>skills/agent/</code>, <code>scripts/agent/</code>, and <code>extensions/agent/</code> on disk — but the autonomous loop (admin agent + platform plugin that CRUDs skills/agents) is <b>explicitly deferred in v0</b> (<span class="file">docs/v0-deferred.md</span>). No usage-driven curation, no auto-archival today. Static markdown skills, hand- or agent-written, discovered at runtime.</p>
+        </div>
+      </div>
+      <div class="verdict-line"><b>Verdict</b><span>Hermes wins big (8 vs 3). Its curator is a genuinely differentiated, working self-maintenance loop. Pi has the bones but not the muscle yet.</span></div>
+    </div>
+
+    <!-- 5 -->
+    <div class="dim">
+      <div class="dim-head">
+        <div class="dim-num">5</div>
+        <div><h3>Memory systems &amp; context compaction</h3><p>Summarization, durable recall, token-budget management</p></div>
+      </div>
+      <div class="dim-body">
+        <div class="dim-col h">
+          <div class="who"><span class="dot h"></span>hermes-agent</div>
+          <p>The widest gap in the report. <span class="file">agent/context_compressor.py</span> (~2K LOC) does token-budget compaction: protects head + tail, summarizes the middle with a cheap auxiliary model, prunes verbose tool output first, merges iteratively, and stays <em>between cache boundaries so prompt caching survives</em>. Memory is pluggable across 8 backends (honcho default, mem0, supermemory…) with per-turn <code>sync_turn</code> + <code>prefetch</code>. Cross-session recall via FTS5 + LLM summarization.</p>
+        </div>
+        <div class="dim-col p">
+          <div class="who"><span class="dot p"></span>CogniSphere</div>
+          <p>Manual and file-based. Each agent owns a <code>workspace/</code> (and <code>workspace/memory/</code>) it edits with read/write tools — persistent and shared across threads, but the agent manages the schema itself. <b>No automatic compaction</b>: no token counting, no summarization, no sliding window. The scaling answer is "delegate to a sub-agent for long reads." Compaction, if pi does it at all, happens inside the external <code>pi</code> binary, not the harness.</p>
+        </div>
+      </div>
+      <div class="verdict-line"><b>Verdict</b><span>Hermes wins by the widest margin (9 vs 3). Its compressor is production-quality and cache-aware — exactly what you want, and the single best thing to port to pi.</span></div>
+    </div>
+
+    <!-- 6 -->
+    <div class="dim">
+      <div class="dim-head">
+        <div class="dim-num">6</div>
+        <div><h3>Persistent sub-agents</h3><p>Durable delegation that survives across batches</p></div>
+      </div>
+      <div class="dim-body">
+        <div class="dim-col h">
+          <div class="who"><span class="dot h"></span>hermes-agent</div>
+          <p>Delegation (<span class="file">tools/delegate_tool.py</span>, ~2.8K LOC) is rich — parallel batch tasks, leaf vs orchestrator roles, depth/concurrency caps — but <b>synchronous</b>: the parent blocks and children die if it crashes. True persistence comes from the separate Kanban board (<span class="file">plugins/kanban/</span>): a SQLite-backed dispatcher daemon with stale-claim recovery and failure-blocking. Two different mechanisms for two needs.</p>
+        </div>
+        <div class="dim-col p">
+          <div class="who"><span class="dot p"></span>CogniSphere</div>
+          <p>Sub-agents are <code>pi -p</code> processes spawned via a <code>scripts/agent/subagent</code> wrapper. Persistence is elegant by convention: reuse the same <code>--session-dir</code> with <code>-c</code> and the child resumes its prior JSONL across many parent batches. Sessions nest under <code>sessions/&lt;thread&gt;/subagents/&lt;id&gt;/</code>. Lightweight, not first-class — no shared queue or peer messaging, communication is stdout only.</p>
+        </div>
+      </div>
+      <div class="verdict-line"><b>Verdict</b><span>Pi edges it (7 vs 6) for your phrasing specifically — "persistent" sub-agents resumable by session-dir is built into its model. Hermes is more powerful but its delegation is synchronous; persistence needs the heavier Kanban subsystem.</span></div>
+    </div>
+
+    <!-- 7 -->
+    <div class="dim">
+      <div class="dim-head">
+        <div class="dim-num">7</div>
+        <div><h3>Ease of deploying multiple agents</h3><p>Standing up and operating a fleet</p></div>
+      </div>
+      <div class="dim-body">
+        <div class="dim-col h">
+          <div class="who"><span class="dot h"></span>hermes-agent</div>
+          <p>Hardened single-container deploy: <span class="file">Dockerfile</span> + s6-overlay supervision, multi-arch, UID/GID remapping, <span class="file">docker-compose.yml</span> (gateway + dashboard). But the unit of deployment is a <b>profile per container</b> — many agents means many <code>HERMES_HOME</code> volumes / containers. No built-in federation; each gateway is independent. Production-solid, but heavier per agent.</p>
+        </div>
+        <div class="dim-col p">
+          <div class="who"><span class="dot p"></span>CogniSphere</div>
+          <p>One Node process hosts <b>many agents in-memory</b>, each isolated on disk under <code>agents/&lt;id&gt;/</code>. Adding an agent = drop an <code>agent.json</code> + restart (or <code>POST /api/agents/:id/start</code>). Back up an agent by <code>tar</code>-ing its folder. Horizontal scale = run more servers with different <code>COGNISPHERE_ROOT_DIR</code>. Dead simple — though all agents share one process (no per-agent isolation), and containerization is a v1 item.</p>
+        </div>
+      </div>
+      <div class="verdict-line"><b>Verdict</b><span>Pi wins clearly (9 vs 6). Multi-agent is its native shape; hermes treats each agent as a heavier, more isolated unit.</span></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ===================== TL;DR MATRIX ===================== -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">One-Screen Summary</p>
+    <h2>The whole comparison, one table</h2>
+    <table class="matrix">
+      <thead>
+        <tr><th style="width:22%">Criterion</th><th class="h" style="width:39%">hermes-agent</th><th class="p" style="width:39%">CogniSphere</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="dimname">Footprint</td><td>~989K LOC · 2,049 Python modules <small>heavyweight platform</small></td><td>~15.5K LOC · ~20 server files <small>minimal shell</small></td></tr>
+        <tr><td class="dimname">1 · Simplicity</td><td>Excellent abstractions, vast surface <small>extensible, not minimal</small></td><td><b>Read it in an afternoon</b> <small>fundamentals only</small></td></tr>
+        <tr><td class="dimname">2 · Event sources</td><td><b>34 platforms + cron + webhooks + MCP</b></td><td>1 clean interface, 4 plugins shipped</td></tr>
+        <tr><td class="dimname">3 · Session/thread</td><td><code>user@platform#thread</code> + FTS5, LRU cache</td><td><b>Declarative <code>threadIdStrategy</code></b>, durable events table</td></tr>
+        <tr><td class="dimname">4 · Self-evolving</td><td><b>Working Curator</b> — usage-tracked skill lifecycle</td><td>Designed, deferred in v0 <small>bones only</small></td></tr>
+        <tr><td class="dimname">5 · Memory/compaction</td><td><b>2K-LOC cache-aware compressor + 8 memory backends</b></td><td>Manual file workspace, no auto-compaction</td></tr>
+        <tr><td class="dimname">6 · Persistent sub-agents</td><td>Rich but synchronous; Kanban for durability</td><td><b>Resumable by <code>--session-dir</code></b>, by convention</td></tr>
+        <tr><td class="dimname">7 · Multi-agent deploy</td><td>Profile-per-container, hardened, heavier</td><td><b>Many agents / one process, drop an <code>agent.json</code></b></td></tr>
+        <tr><td class="dimname">Best fit</td><td>You want a finished, omni-channel assistant <em>now</em></td><td>You want a hackable base you'll grow into your own platform</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== RECOMMENDATION ===================== -->
+<section style="border-bottom:none">
+  <div class="wrap">
+    <p class="eyebrow">Recommendation</p>
+    <h2>Build on <span class="reco winner" style="background:none;padding:0">CogniSphere</span> — and steal from hermes</h2>
+    <p class="lead">You ranked "minimal, simple, easy to modify and extend" first, and you want multi-agent deployment, source/thread sessions, and persistent sub-agents. Pi already wins four of those — and they're the <em>structural</em> properties you can't retrofit. The two real gaps (memory/compaction, self-evolution) are <em>additive features</em> that hermes has already designed and proven, so you can port the ideas onto a clean base.</p>
+
+    <div class="reco">
+      <h3>Why pi is the right foundation for <em>your</em> goals</h3>
+      <div class="reco-grid">
+        <div class="blockbox">
+          <h4>What pi gives you out of the box</h4>
+          <ol>
+            <li><b>Criterion 1 (simplicity):</b> 15.5K legible LOC vs 989K — the bet that's hardest to undo.</li>
+            <li><b>Criterion 2 (sources):</b> a one-file <code>Plugin</code> + <code>ctx.notify</code> contract.</li>
+            <li><b>Criterion 3 (sessions):</b> declarative <code>threadIdStrategy</code> keyed by source/thread.</li>
+            <li><b>Criterion 6 (sub-agents):</b> session-dir-resumable child <code>pi</code> processes.</li>
+            <li><b>Criterion 7 (fleet):</b> many agents per process, add one with an <code>agent.json</code>.</li>
+          </ol>
+        </div>
+        <div class="blockbox">
+          <h4>The 2 gaps — port these from hermes</h4>
+          <div class="steal"><span class="arrow">→</span><div><b>Context compaction (criterion 5).</b> Port the strategy in <code>agent/context_compressor.py</code>: protect head+tail, summarize the middle with a cheap model, prune tool output first, keep it cache-safe. Highest ROI item.</div></div>
+          <div class="steal"><span class="arrow">→</span><div><b>A memory layer (criterion 5).</b> Pi's <code>workspace/memory/</code> is the storage; add hermes-style per-turn <code>sync_turn</code> + <code>prefetch</code> over it (even just embeddings + the SQLite you already have).</div></div>
+          <div class="steal"><span class="arrow">→</span><div><b>A curator loop (criterion 4).</b> Port the <code>.usage.json</code> + <code>active→stale→archived</code> lifecycle from <code>agent/curator.py</code> onto pi's <code>skills/agent/</code> dir. Pi already has the files; it needs the maintenance loop.</div></div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <b>The decision rule:</b> structural properties (simplicity, multi-agent, clean plugin/session models) are nearly impossible to add later — pi already has them. Intelligence features (compaction, memory, curation) are self-contained modules — hermes proves the design, you port ~3 of them. <b>So: start from CogniSphere, and treat hermes-agent as a reference implementation to mine.</b> The exception is if you need a polished omni-channel (Telegram/Slack/WhatsApp) assistant shipping this week — then run hermes and accept the weight.
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    harness-comparison · hermes-agent (~989K LOC, Python) vs CogniSphere (~15.5K LOC, TypeScript) · scored against 7 user criteria · 2026-06-03
+  </div>
+</footer>
+
+</body>
+</html>

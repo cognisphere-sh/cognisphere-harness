@@ -81,7 +81,7 @@ async function main(): Promise<void> {
   } else {
     app.get("/", (c) =>
       c.json({
-        name: "pi-harness v2",
+        name: "cognisphere",
         agents: am.list(),
         note: "web UI not built; run `npm run dev:web` (with the server on a separate port) or `npm run build:web`",
       }),

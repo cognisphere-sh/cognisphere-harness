@@ -17,5 +17,5 @@
     "verbatimModuleSyntax": true
   },
   "include": ["apps/server/**/*.ts"],
-  "exclude": ["node_modules", "dist", "temp", "pi-harness"]
+  "exclude": ["node_modules", "dist", "temp"]
 }

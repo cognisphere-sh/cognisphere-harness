@@ -1,4 +1,4 @@
-# pi-harness v2 — Server (implemented)
+# CogniSphere — Server (implemented)
 
 This doc describes the server's **agent-runner subsystem** as it exists
 today: how an agent boots, how it routes inbound notifications, how it
@@ -37,7 +37,7 @@ follow the imports outward.
 
 ## 1. Overview
 
-pi-harness is a multi-agent orchestration server. One Node process owns
+cognisphere is a multi-agent orchestration server. One Node process owns
 many independent agents. Each agent:
 
 - Has a stable identity (`AgentId`) and a persistent on-disk home.
@@ -112,8 +112,8 @@ disk, so the runner sees the same artifacts whichever path created them.
 
 ## 3. On-disk layout
 
-`<rootDir>` is `$PIHARNESS_ROOT_DIR` (defaults to `~/.piharness`).
-`<harnessId>` is `$PIHARNESS_ID` (defaults to `default`). The harness home
+`<rootDir>` is `$COGNISPHERE_ROOT_DIR` (defaults to `~/.cognisphere`).
+`<harnessId>` is `$COGNISPHERE_ID` (defaults to `default`). The harness home
 is `<rootDir>/<harnessId>`.
 
 ```
@@ -194,8 +194,8 @@ Loaded once at boot:
 
 | Env var | Default | Used as |
 |---|---|---|
-| `PIHARNESS_ROOT_DIR` | `~/.piharness` | base path; multiple harnesses can share |
-| `PIHARNESS_ID` | `default` | `<rootDir>/<harnessId>` is the harness home |
+| `COGNISPHERE_ROOT_DIR` | `~/.cognisphere` | base path; multiple harnesses can share |
+| `COGNISPHERE_ID` | `default` | `<rootDir>/<harnessId>` is the harness home |
 | `PORT` | `7331` | HTTP listen port |
 | `BIND_HOST` | `127.0.0.1` | bind address |
 | `SERVER_BASE_URL` | `http://${BIND_HOST}:${PORT}` | used to build `PI_WEBHOOK_BASE` |
@@ -543,7 +543,7 @@ newline-delimited.
     know which rows reached the model.
   - `onHarnessEntry({index, entryId})` — the harness-bridge extension (§4.8)
     reports each user-message session entry id over the fire-and-forget
-    `setStatus` channel keyed `"pi-harness"`; the client parses it out of the
+    `setStatus` channel keyed `"cognisphere"`; the client parses it out of the
     `extension_ui_request` stream and the runner writes it via `setRowEntryId`.
 - Stderr is mirrored to the structured logger and kept in a rolling
   16 KiB buffer; `stderrSnapshot()` returns the tail and is included in
@@ -552,7 +552,7 @@ newline-delimited.
   prompts the user via these (select/confirm/input/editor); the harness
   has no human, so it replies `cancelled: true` and lets the agent
   continue. Without this, a pi extension that pops a dialog would hang
-  the batch indefinitely. `setStatus` requests keyed `"pi-harness"` are
+  the batch indefinitely. `setStatus` requests keyed `"cognisphere"` are
   intercepted for `onHarnessEntry` instead of being treated as UI.
 - Pending RPC promises are rejected if the child exits or errors before
   responding.
@@ -1241,7 +1241,7 @@ references in the body to the appended block on its own.
 
 **Cost**: editing `agent.json` (e.g. renaming the agent) doesn't
 auto-propagate to the prompt. Operator re-runs the `sed` step. v0
-accepts this; if it bites, a `pi-harness rebake` script is a few
+accepts this; if it bites, a `cognisphere rebake` script is a few
 lines.
 
 ### 6.9 `--skill` once, `--extension` per first-level entry
@@ -1374,7 +1374,7 @@ failure so the agent can still come down cleanly.
 See `v0-deferred.md` §3.1 for the manual recipe. Short version:
 
 ```bash
-ROOT=~/.piharness/default        # or wherever PIHARNESS_ROOT_DIR points
+ROOT=~/.cognisphere/default        # or wherever COGNISPHERE_ROOT_DIR points
 ID=dr-renu   NAME="Dr Renu"
 mkdir -p "$ROOT/agents/$ID"/{system_prompts,workspace,sessions,plugins}
 # write agent.json, sed-bake 0-base_prompt.md, write 1-agent.md, copy
@@ -1385,7 +1385,7 @@ mkdir -p "$ROOT/agents/$ID"/{system_prompts,workspace,sessions,plugins}
 ### 7.2 Editing secrets manually
 
 ```bash
-$EDITOR ~/.piharness/default/.secrets/secrets.json
+$EDITOR ~/.cognisphere/default/.secrets/secrets.json
 # {
 #   "dr-renu": {
 #     "agent":    { "ELEVENLABS_API_KEY": "..." },
@@ -1406,7 +1406,7 @@ under the agent flattened — see §6.12).
 ### 7.3 Editing models / provider config manually
 
 ```bash
-$EDITOR ~/.piharness/default/.secrets/models.json
+$EDITOR ~/.cognisphere/default/.secrets/models.json
 # {
 #   "providers": {
 #     "anthropic": {
@@ -1423,8 +1423,8 @@ Same reload semantics as secrets: web UI PUT triggers
 ### 7.4 Refreshing Python deps for an agent
 
 ```bash
-$EDITOR ~/.piharness/default/agents/$ID/bootstrap/requirements.txt
-bash   ~/.piharness/default/agents/$ID/bootstrap/bootstrap.sh
+$EDITOR ~/.cognisphere/default/agents/$ID/bootstrap/requirements.txt
+bash   ~/.cognisphere/default/agents/$ID/bootstrap/bootstrap.sh
 # pip handles "Requirement already satisfied" — script is idempotent.
 # No server restart needed; the next pi spawn picks up the venv state.
 ```
@@ -1439,7 +1439,7 @@ bash   ~/.piharness/default/agents/$ID/bootstrap/bootstrap.sh
   `events` (one row per event, status reflects current state). Tail via:
 
   ```bash
-  sqlite3 ~/.piharness/default/agents/$ID/sessions/.events.db \
+  sqlite3 ~/.cognisphere/default/agents/$ID/sessions/.events.db \
     "SELECT id, ts, updated_at, status, plugin_id, thread_id, attempts \
      FROM events ORDER BY updated_at DESC LIMIT 20;"
   ```

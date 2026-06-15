@@ -1,4 +1,4 @@
-# pi-harness v2 — HTTP API
+# CogniSphere — HTTP API
 
 This doc describes the server's HTTP surface as it exists today. The
 agent-runner subsystem (lifecycle, queues, RPC) is documented separately

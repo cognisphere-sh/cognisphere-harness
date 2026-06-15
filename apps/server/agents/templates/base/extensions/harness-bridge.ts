@@ -6,7 +6,7 @@
  * the file and without waiting for the child to exit (which matters because a
  * failed batch never reaches a post-exit read).
  *
- * Transport: `ctx.ui.setStatus("pi-harness", <json>)`. In RPC mode this is a
+ * Transport: `ctx.ui.setStatus("cognisphere", <json>)`. In RPC mode this is a
  * fire-and-forget `extension_ui_request{method:"setStatus"}` frame on stdout,
  * which the harness's `PiRpcClient` already receives. The extension never
  * touches the harness DB — it has no knowledge of harness row ids — it only
@@ -23,7 +23,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
-const STATUS_KEY = "pi-harness";
+const STATUS_KEY = "cognisphere";
 
 export default function harnessBridge(pi: ExtensionAPI): void {
   // Number of user-message entries already reported for the current run.

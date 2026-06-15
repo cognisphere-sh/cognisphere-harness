@@ -53,7 +53,7 @@ export function LoginPage() {
             <div className="mb-2 grid size-10 place-items-center rounded-md bg-primary text-primary-foreground">
               <Bot className="size-5" />
             </div>
-            <CardTitle>pi-harness</CardTitle>
+            <CardTitle>CogniSphere</CardTitle>
             <CardDescription>Sign in to manage your agents</CardDescription>
           </CardHeader>
           <CardContent>
@@ -91,7 +91,7 @@ export function LoginPage() {
               </Button>
               <p className="text-center text-[11px] text-muted-foreground">
                 Default: <code>admin</code> / <code>changeme</code>. Edit{" "}
-                <code>~/.piharness/default/.secrets/users.json</code> to change.
+                <code>~/.cognisphere/default/.secrets/users.json</code> to change.
               </p>
             </form>
           </CardContent>

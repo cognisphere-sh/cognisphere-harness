@@ -48,7 +48,7 @@ re-introduction should target.
 ### 3.1 Create an agent
 
 ```bash
-ROOT=~/.piharness/default                      # or wherever PIHARNESS_ROOT_DIR points
+ROOT=~/.cognisphere/default                      # or wherever COGNISPHERE_ROOT_DIR points
 ID=dr-renu                                     # agent id (= dir name)
 NAME="Dr Renu"
 

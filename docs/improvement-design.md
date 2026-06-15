@@ -1,4 +1,4 @@
-# pi-harness_v2 — Improvement Design
+# CogniSphere — Improvement Design
 
 Design notes for five subsystems, grounded in the current code and informed by hermes-agent.
 Status: **design / options** — not yet implemented. Each section ends with concrete file-level changes.
@@ -181,7 +181,7 @@ Confirm the runner does **not** disable the hook. It currently passes `--no-exte
 
 ## 3. A self-improvement meta-agent ("the dreamer")
 
-This is the most ambitious piece and the one where hermes's **curator** is the blueprint — but your framing is better suited to pi-harness because pi-harness is natively multi-agent. Instead of an in-process background thread (hermes), make the dreamer **its own agent** that the scheduler wakes, with filesystem access to a target agent's `sessions/` and `workspace/`.
+This is the most ambitious piece and the one where hermes's **curator** is the blueprint — but your framing is better suited to cognisphere because cognisphere is natively multi-agent. Instead of an in-process background thread (hermes), make the dreamer **its own agent** that the scheduler wakes, with filesystem access to a target agent's `sessions/` and `workspace/`.
 
 ### Architecture
 
@@ -221,7 +221,7 @@ The curator only manages *skills*. You want prompts, scripts, docs, workspace, a
 - **Doc drift** → update `system_prompts/` and skill `SKILL.md`s to match what the agent actually does.
 
 ### Why an agent, not a thread
-Because it's just another pi-harness agent, you get for free: its own model (use a cheap one), its own session history (so *its* improvements are themselves auditable and dream-able), isolation, and you can run **one dreamer per target** or **one dreamer for the fleet**. It's the cleanest expression of "self-evolving" on this stack.
+Because it's just another cognisphere agent, you get for free: its own model (use a cheap one), its own session history (so *its* improvements are themselves auditable and dream-able), isolation, and you can run **one dreamer per target** or **one dreamer for the fleet**. It's the cleanest expression of "self-evolving" on this stack.
 
 ### Minimal first version
 Don't build all detectors at once. v1 = scheduler → dreamer → (1) maintain `.usage.json` from sessions, (2) run the deterministic state machine, (3) write `dream-report.md` with the curator-style LLM pass in **dry-run**. Ship that, read its reports for a week, then enable apply + add detectors.
@@ -234,9 +234,9 @@ Don't build all detectors at once. v1 = scheduler → dreamer → (1) maintain `
 There are three "homes" and one of them duplicates:
 
 ```
-pi-harness_v2/                      ← the CODE (repo)
+cognisphere/                        ← the CODE (repo)
   apps/server/plugins/<id>/         ← plugin SOURCE (built-in) + seed/
-PIHARNESS_ROOT_DIR (~/.piharness)/  ← the DATA root
+COGNISPHERE_ROOT_DIR (~/.cognisphere)/  ← the DATA root
   <harnessId>/                      ← "harness dir"  (default)
     .secrets/                       ← secrets, models, users
     plugins/<id>/                   ← user-space plugin SOURCE (optional)
@@ -272,8 +272,8 @@ agents/<agentId>/
 
 Result: enabling/disabling a plugin is a config flip, not a file sync; upgrading a plugin updates one source dir, not N copies; an agent dir is small and obviously "just this agent."
 
-### Naming, to kill the "pi-harness vs harness" confusion
-- Call the data root explicitly: set `PIHARNESS_ROOT_DIR=~/.piharness` and refer to `<harnessId>` as the **deployment** (it *is* a named deployment: its own secrets, agents, timezone). Document "one harnessId = one isolated deployment."
+### Naming, to kill the "cognisphere vs harness" confusion
+- Call the data root explicitly: set `COGNISPHERE_ROOT_DIR=~/.cognisphere` and refer to `<harnessId>` as the **deployment** (it *is* a named deployment: its own secrets, agents, timezone). Document "one harnessId = one isolated deployment."
 - In docs and the UI, use **deployment → agents → (plugins as capabilities)**. Drop "harness dir" from user-facing language.
 
 ### Migration note

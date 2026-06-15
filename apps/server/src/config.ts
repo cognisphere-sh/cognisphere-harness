@@ -18,8 +18,8 @@ export interface ServerConfig {
 
 export function loadConfig(): ServerConfig {
   const rootDir =
-    process.env.PIHARNESS_ROOT_DIR ?? join(homedir(), ".piharness");
-  const harnessId = process.env.PIHARNESS_ID ?? "default";
+    process.env.COGNISPHERE_ROOT_DIR ?? join(homedir(), ".cognisphere");
+  const harnessId = process.env.COGNISPHERE_ID ?? "default";
   const port = Number(process.env.PORT ?? 7331);
   const bindHost = process.env.BIND_HOST ?? "127.0.0.1";
   const serverBaseUrl =

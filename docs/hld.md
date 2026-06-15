@@ -1,4 +1,4 @@
-# pi-harness v2 — High-Level Design
+# CogniSphere — High-Level Design
 
 > **v0 implementation status:** the admin agent bootstrap and the privileged
 > `platform` plugin (see §1 goal #3, §9.2, §9.5, §11.1, §11.4–§11.6) are
@@ -205,8 +205,7 @@ apps/server/agents/templates/base/
 ```
 
 `0-harness.md` ships as part of the template (not generated). It contains
-the harness preamble — modeled on pi-harness's `system-prompt.ts` —
-parameterized with `{{AgentId}}`, `{{ThreadId}}`, `{{AgentDir}}`,
+the harness preamble, parameterized with `{{AgentId}}`, `{{ThreadId}}`, `{{AgentDir}}`,
 `{{Workspace}}`, `{{Sessions}}`, `{{PluginIds}}`, `{{Tools}}`, etc. The
 runner does variable substitution on the file's content per batch when
 building `--system-prompt` (no on-disk rewrite — see §6.5). The user can
@@ -470,12 +469,12 @@ the only thing that ever sees its own bot's events.
 
 ```
 PI_AGENT_ID=A1
-PI_HARNESS_WEBHOOK_BASE=<serverBaseUrl>/webhook/A1
+PI_WEBHOOK_BASE=<serverBaseUrl>/webhook/A1
 ```
 
 Scripts in `scripts/<plugin>/` append `<plugin>/<route>` to construct their
 loopback URL — e.g., the Telegram script POSTs to
-`${PI_HARNESS_WEBHOOK_BASE}/telegram/internal/send`. The script's own
+`${PI_WEBHOOK_BASE}/telegram/internal/send`. The script's own
 location implies the `<plugin>` segment; agentId is already baked into the
 base URL.
 
@@ -492,8 +491,8 @@ which agent's admin instance handles it.
 
 ## 6. AgentRunner
 
-One class. Combines pi-harness's old `AgentRunner` + `AgentRuntime` into a
-single ~250-line implementation.
+One class combining the `AgentRunner` and `AgentRuntime` responsibilities
+into a single ~250-line implementation.
 
 ### 6.1 Public API
 
@@ -634,8 +633,7 @@ bash, Python, Node, anything that can `curl`.
 
 A batch may contain N messages (priority-ordered). They are concatenated
 into a single `prompt` frame, each prepended with its own
-`<harness-metadata>` block, separator `\n\n`. This matches pi-harness's
-implementation (`agent-runner.ts:413`):
+`<harness-metadata>` block, separator `\n\n`:
 
 ```ts
 const promptText = batch
@@ -696,9 +694,9 @@ Unresolved `{{Foo}}` references (e.g., a typo) are left in place verbatim
 and logged at warn level so the operator can see the typo by reading the
 log or grepping the rendered prompt.
 
-**`0-harness.md` content.** Ships with the base template (§3.3) and is
-modeled on pi-harness's `system-prompt.ts` — Identity, Tools, Workspace,
-Threads, Plugins, Sub-agents, Communication-model, Guidelines sections —
+**`0-harness.md` content.** Ships with the base template (§3.3) with
+Identity, Tools, Workspace, Threads, Plugins, Sub-agents,
+Communication-model, and Guidelines sections —
 parameterized with the variables above. The operator (or admin agent) can
 edit it; nothing in the runner depends on its specific content. The
 runner's only contract is variable substitution — what the file says is up
@@ -1008,7 +1006,7 @@ live events — without changing any of the core contracts in this doc.
 
 ```
 1. Load .env
-2. Parse config: rootDir (default ~/.piharness), harnessId (default "default"),
+2. Parse config: rootDir (default ~/.cognisphere), harnessId (default "default"),
    port, serverBaseUrl, timezone
 3. PluginRegistry.scan() — dynamic-import:
    - apps/server/plugins/<id>/index.ts        (built-in)
@@ -1246,7 +1244,5 @@ large, run a manual `VACUUM` + `DELETE WHERE ts < ?`).
 
 - pi RPC protocol: `temp/pi-mono/packages/coding-agent/docs/rpc.md`
 - pi event types: `temp/pi-mono/packages/coding-agent/docs/json.md`
-- pi-harness original design (for queue mechanics, steer/abort semantics):
-  `pi-harness/docs/{harness.md,plugin.md,agent.md,hld.md,design.md}`
 - Scheduler plugin reference: `temp/templates/plugins/scheduler/`
 - Sample agent skeleton: `temp/sample_agent/`

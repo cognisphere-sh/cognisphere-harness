@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>pi-harness · Event / Notification Flow</title>
+<title>CogniSphere · Event / Notification Flow</title>
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
@@ -92,7 +92,7 @@
 <body>
 
 <header>
-  <h1>pi-harness · Event &amp; Notification Lifecycle</h1>
+  <h1>CogniSphere · Event &amp; Notification Lifecycle</h1>
   <p>A critical, code-accurate walkthrough of how a single <code>ctx.notify()</code> event travels from a plugin,
   through the durable SQLite queue, into a <code>pi --mode rpc</code> child, and back out — including the status
   machine, the two retry modes, every decision point, the data persisted at each hop, and how the
@@ -534,9 +534,9 @@ Retry: true
       <div>
         <h4 style="color:var(--cyan);margin:6px 0">Transport</h4>
         <ul class="tight" style="font-size:13px">
-          <li><code>ctx.ui.setStatus("pi-harness", &lt;json&gt;)</code></li>
+          <li><code>ctx.ui.setStatus("cognisphere", &lt;json&gt;)</code></li>
           <li>In RPC mode → a fire-and-forget <code>extension_ui_request{method:"setStatus"}</code> frame on stdout.</li>
-          <li><code>PiRpcClient.handleExtensionUi</code> intercepts <code>statusKey==="pi-harness"</code>, parses <code>{kind,index,entryId}</code>, routes to <code>onHarnessEntry</code>.</li>
+          <li><code>PiRpcClient.handleExtensionUi</code> intercepts <code>statusKey==="cognisphere"</code>, parses <code>{kind,index,entryId}</code>, routes to <code>onHarnessEntry</code>.</li>
           <li>Other dialog methods (<code>select/confirm/input/editor</code>) are <b>auto-cancelled</b> — no human to answer.</li>
         </ul>
       </div>
@@ -556,7 +556,7 @@ Retry: true
     <span class="k">const</span> userEntries = ctx.sessionManager.getEntries()
                           .filter(isUserMessageEntry);
     <span class="k">for</span> (<span class="k">let</span> i = reported; i &lt; userEntries.length; i++)
-      ctx.ui.<span class="f">setStatus</span>(<span class="s">"pi-harness"</span>,
+      ctx.ui.<span class="f">setStatus</span>(<span class="s">"cognisphere"</span>,
         JSON.stringify({ kind:<span class="s">"user_entry"</span>, index:i, entryId:userEntries[i].id }));
     reported = userEntries.length;
   };
@@ -573,8 +573,8 @@ Retry: true
  append user msg
  fire message_start ───┐
  harness-bridge.sweep()│
-   setStatus("pi-harness",{index,entryId}) ──▶ extension_ui_request ──▶ handleExtensionUi
-                                                                        statusKey==="pi-harness"
+   setStatus("cognisphere",{index,entryId}) ──▶ extension_ui_request ──▶ handleExtensionUi
+                                                                        statusKey==="cognisphere"
                                                                         → onHarnessEntry({index,entryId}) ──▶ rowsForUserIndex(active,index)
                                                                                                               → setRowEntryId(rowId, sessionId, entryId)
                                                                                                                 ⇒ pi_entry_id written LIVE
@@ -631,7 +631,7 @@ Retry: true
         <tr><td><code>onAgentEnd()</code></td><td>final messages → verdict</td></tr>
         <tr><td><code>onUserMessageStart()</code></td><td>count deliveries</td></tr>
         <tr><td><code>onHarnessEntry()</code></td><td>entry-id reports</td></tr>
-        <tr><td><code>handleExtensionUi()</code></td><td>route pi-harness / auto-cancel dialogs</td></tr>
+        <tr><td><code>handleExtensionUi()</code></td><td>route cognisphere / auto-cancel dialogs</td></tr>
         <tr><td><code>waitExit() / kill() / stderrSnapshot()</code></td><td>lifecycle</td></tr>
       </table>
     </div>
