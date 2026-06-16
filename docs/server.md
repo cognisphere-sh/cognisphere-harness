@@ -12,12 +12,12 @@ manager) fits in. Companion docs:
   HLD, with manual workflows in place of the in-product authoring loop.
 
 The HTTP/web-UI surface (`/api/*`, `/admin/*`, `/webhook/*`) is **out of
-scope** for this document. It lives in `apps/server/src/api/` and
-`apps/server/src/main.ts`; refer to those files directly. Webhook
+scope** for this document. It lives in `packages/harness/api/` and
+`packages/harness/core/main.ts`; refer to those files directly. Webhook
 dispatch is mentioned here only where it shapes plugin behavior (plugins
 receive raw `IncomingMessage`/`ServerResponse` from the harness).
 
-If you're new and want to read code: start in `apps/server/src/main.ts`,
+If you're new and want to read code: start in `packages/harness/core/main.ts`,
 follow the imports outward.
 
 ---
@@ -70,7 +70,7 @@ disk, so the runner sees the same artifacts whichever path created them.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Node process (apps/server/src/main.ts)                  │
+│  Node process (packages/harness/core/main.ts)                  │
 │                                                          │
 │  HTTP listener (Hono on /api, /admin, /healthz;          │
 │  raw dispatch on /webhook/<agentId>/<pluginId>/*)        │
@@ -221,7 +221,7 @@ paging on.
 
 Scans two roots and dynamic-imports each plugin's `index.ts`:
 
-1. Built-in: `apps/server/plugins/<id>/`
+1. Built-in: `packages/harness/plugins/<id>/`
 2. User-space: `<harnessRoot>/plugins/<id>/` (takes precedence on
    collision, so an operator can override a built-in)
 
@@ -699,7 +699,7 @@ over the RPC stream — see §4.7) is **not** special-cased here: it ships as an
 ordinary seeded agent extension at `<agentDir>/extensions/harness-bridge.ts`
 and is picked up by the same `<agentDir>/extensions/` loop as any other
 agent extension. The canonical copy lives at
-`apps/server/agents/templates/base/extensions/harness-bridge.ts` and is copied
+`packages/harness/base-agent/extensions/harness-bridge.ts` and is copied
 into each agent's `extensions/` dir at create time (like `0-base_prompt.md`);
 an agent missing it simply loses real-time entry capture (the runner falls
 back to its own `message_start` delivery count — §4.8). `--no-extensions` only
@@ -1509,24 +1509,24 @@ Tracked in `v0-deferred.md` with re-introduction plans:
 ## Appendix: file map
 
 Agent-runner subsystem (HTTP API surface omitted — see
-`apps/server/src/api/` directly).
+`packages/harness/api/` directly).
 
 | File | LOC | Role |
 |---|---|---|
-| `apps/server/src/main.ts` | 133 | boot, HTTP server, signal handling |
-| `apps/server/src/config.ts` | 42 | env-driven config + path helpers |
-| `apps/server/src/logger.ts` | 26 | pino setup |
-| `apps/server/src/types.ts` | 201 | shared types (`AgentJson`, `Plugin`, provider types, …) |
-| `apps/server/src/plugin-registry.ts` | 114 | dual-root plugin discovery |
-| `apps/server/src/secrets.ts` | 159 | bucketed JSON-file secret store |
-| `apps/server/src/models-store.ts` | 91 | read-through models.json |
-| `apps/server/src/models-catalog.ts` | 490 | static provider catalog |
-| `apps/server/src/oauth-logins.ts` | 170 | subscription OAuth login flows → pi's auth.json |
-| `apps/server/src/queue.ts` | 395 | per-agent SQLite queue + DLQ + event log |
-| `apps/server/src/rpc.ts` | 213 | JSON-RPC client to pi children |
-| `apps/server/src/runner.ts` | 578 | per-agent worker pool + spawn + steer + stale-pause |
-| `apps/server/src/agent-manager.ts` | 769 | boot + lifecycle + reload + provider validation |
+| `packages/harness/core/main.ts` | 133 | boot, HTTP server, signal handling |
+| `packages/harness/core/config.ts` | 42 | env-driven config + path helpers |
+| `packages/harness/core/logger.ts` | 26 | pino setup |
+| `packages/harness/core/types.ts` | 201 | shared types (`AgentJson`, `Plugin`, provider types, …) |
+| `packages/harness/core/plugin-registry.ts` | 114 | dual-root plugin discovery |
+| `packages/harness/core/secrets.ts` | 159 | bucketed JSON-file secret store |
+| `packages/harness/core/models-store.ts` | 91 | read-through models.json |
+| `packages/harness/core/models-catalog.ts` | 490 | static provider catalog |
+| `packages/harness/core/oauth-logins.ts` | 170 | subscription OAuth login flows → pi's auth.json |
+| `packages/harness/core/queue.ts` | 395 | per-agent SQLite queue + DLQ + event log |
+| `packages/harness/core/rpc.ts` | 213 | JSON-RPC client to pi children |
+| `packages/harness/core/runner.ts` | 578 | per-agent worker pool + spawn + steer + stale-pause |
+| `packages/harness/core/agent-manager.ts` | 769 | boot + lifecycle + reload + provider validation |
 | **subtotal (agent-runner)** | **~3 200** | |
 
-Built-in plugins live in `apps/server/plugins/<id>/`: `admin`,
+Built-in plugins live in `packages/harness/plugins/<id>/`: `admin`,
 `scheduler`, `telegram`, `gws`, `gmail` (stub).

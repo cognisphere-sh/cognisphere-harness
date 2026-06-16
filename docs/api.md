@@ -5,8 +5,8 @@ agent-runner subsystem (lifecycle, queues, RPC) is documented separately
 in [`server.md`](./server.md); this doc covers only what's reachable over
 HTTP and how routes are gated.
 
-If you're new and want to read code: start in `apps/server/src/main.ts`,
-follow `apps/server/src/api/*.ts`.
+If you're new and want to read code: start in `packages/harness/core/main.ts`,
+follow `packages/harness/api/*.ts`.
 
 ---
 
@@ -32,14 +32,14 @@ Everything is served by a single Node `http.Server`. Routes split into
 three surfaces:
 
 - **Hono routes** mounted in `main.ts`: `/healthz`, `/api/*`, `/admin/*`,
-  and the static SPA shell (when `apps/web/dist` exists).
+  and the static SPA shell (when `packages/web/dist` exists).
 - **Raw `IncomingMessage`/`ServerResponse` dispatch** for
   `/webhook/<agentId>/<pluginId>/*`. The plugin's `handleHttpRequest`
   expects raw req/res; the harness splices a `request` listener onto
   the underlying `http.Server` that intercepts the prefix, strips it,
   and delegates to the plugin. Hono runs only when no `/webhook/`
   match.
-- **The SPA** (only when `apps/web/dist` is present): `/`, `/login`,
+- **The SPA** (only when `packages/web/dist` is present): `/`, `/login`,
   `/settings`, `/settings/*`, `/agents/*` are served as `index.html`
   so the client-side router can pick up.
 
@@ -78,7 +78,7 @@ not to gauge agent health (use `/api/agents` for that).
 
 ## 3. Auth routes — `/api/auth/*`
 
-Implemented in `apps/server/src/api/auth.ts`. File-backed user store at
+Implemented in `packages/harness/api/auth.ts`. File-backed user store at
 `<harnessRoot>/.secrets/users.json`:
 
 ```json
@@ -123,7 +123,7 @@ between rendering the login form and the app shell.
 
 ## 4. Agents — `/api/agents/*`
 
-Implemented in `apps/server/src/api/agents.ts`. All routes require auth.
+Implemented in `packages/harness/api/agents.ts`. All routes require auth.
 
 `agents.list()` / `am.get()` / runtime DB methods are the data source;
 mutations route through `AgentManager` lifecycle calls described in
@@ -470,7 +470,7 @@ possible briefly during shutdown).
 
 ## 5. Filesystem — `/api/agents/:id/fs/*`
 
-Implemented in `apps/server/src/api/files.ts`. Used by the web UI's
+Implemented in `packages/harness/api/files.ts`. Used by the web UI's
 file editor to browse the agent's directory and edit files in place.
 
 Every route validates that the resolved absolute path is contained
@@ -560,7 +560,7 @@ Recursive mkdir. Returns `{ "path": "<rel>" }`.
 
 ## 6. Secrets — `/api/secrets`
 
-Implemented in `apps/server/src/api/secrets.ts`. Both routes require
+Implemented in `packages/harness/api/secrets.ts`. Both routes require
 auth.
 
 The wire and on-disk shapes are identical (bucketed under each agent;
@@ -634,7 +634,7 @@ logged but don't fail the save — the file write already succeeded.
 
 ## 7. Models — `/api/models`
 
-Implemented in `apps/server/src/api/models.ts`. Reads/writes the global
+Implemented in `packages/harness/api/models.ts`. Reads/writes the global
 `<harnessRoot>/.secrets/models.json`. All routes require auth.
 
 The provider catalog (id, displayName, `CredField[]`, default model
@@ -796,7 +796,7 @@ pi's auth.json, reloads running agents using the provider.
 
 ## 8. Harness — `/api/harness`
 
-Implemented in `apps/server/src/api/harness.ts`. Reads/writes the
+Implemented in `packages/harness/api/harness.ts`. Reads/writes the
 harness-wide settings file at `<harnessRoot>/harness.json`. Both routes
 require auth.
 
@@ -832,7 +832,7 @@ Response:
 
 ## 9. Admin chat — `/admin/*`
 
-Implemented in `apps/server/src/api/admin.ts`. Both routes require
+Implemented in `packages/harness/api/admin.ts`. Both routes require
 auth. Predates the `/api` namespace; the SPA's chat view still calls
 these.
 
@@ -879,7 +879,7 @@ Errors:
 
 ## 10. Plugin webhooks — `/webhook/*`
 
-Implemented in `apps/server/src/api/webhook.ts`. **Not** gated by auth
+Implemented in `packages/harness/api/webhook.ts`. **Not** gated by auth
 — this surface receives unauthenticated external traffic.
 
 URL shape: `/webhook/<agentId>/<pluginId>/<rest>`. The harness:

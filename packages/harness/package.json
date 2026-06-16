@@ -1,0 +1,35 @@
+{
+  "name": "@cognisphere/cognisphere-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch core/main.ts",
+    "start": "tsx core/main.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint core api plugins base-agent",
+    "lint:fix": "eslint core api plugins base-agent --fix",
+    "check": "tsc --noEmit && eslint core api plugins base-agent"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@hono/node-server": "^1.13.7",
+    "ajv": "^8.17.1",
+    "better-sqlite3": "^11.7.0",
+    "croner": "^9.0.0",
+    "dotenv": "^16.4.7",
+    "hono": "^4.6.14",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2"
+  }
+}

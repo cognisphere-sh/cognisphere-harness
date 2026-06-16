@@ -4,38 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch apps/server/src/main.ts",
-    "dev:web": "npm --prefix apps/web run dev",
-    "start": "tsx apps/server/src/main.ts",
-    "build:web": "npm --prefix apps/web run build",
-    "install:web": "npm --prefix apps/web install",
-    "typecheck": "tsc --noEmit",
-    "typecheck:web": "npm --prefix apps/web run typecheck",
-    "lint": "eslint apps/server",
-    "lint:fix": "eslint apps/server --fix",
-    "lint:web": "npm --prefix apps/web run lint",
-    "lint:web:fix": "npm --prefix apps/web run lint:fix",
-    "check": "npm run typecheck && npm run lint && npm run typecheck:web && npm run lint:web",
-    "check:web": "npm --prefix apps/web run check"
+    "dev": "pnpm --filter @cognisphere/cognisphere-harness dev",
+    "dev:web": "pnpm --filter cognisphere-web dev",
+    "start": "pnpm --filter @cognisphere/cognisphere-harness start",
+    "build:web": "pnpm --filter cognisphere-web build",
+    "typecheck": "pnpm --filter @cognisphere/cognisphere-harness typecheck",
+    "typecheck:web": "pnpm --filter cognisphere-web typecheck",
+    "lint": "pnpm --filter @cognisphere/cognisphere-harness lint",
+    "lint:web": "pnpm --filter cognisphere-web lint",
+    "check": "pnpm -r run check"
   },
-  "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
-    "@earendil-works/pi-coding-agent": "^0.78.0",
-    "@hono/node-server": "^1.13.7",
-    "ajv": "^8.17.1",
-    "better-sqlite3": "^11.7.0",
-    "croner": "^9.0.0",
-    "dotenv": "^16.4.7",
-    "hono": "^4.6.14",
-    "pino": "^9.5.0",
-    "pino-pretty": "^13.0.0"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/node": "^22.10.2",
-    "eslint": "^9.17.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "typescript-eslint": "^8.18.2"
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
   }
 }

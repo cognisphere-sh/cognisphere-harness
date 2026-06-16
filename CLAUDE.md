@@ -67,12 +67,12 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 5. Resolve All Lint & Type Errors Before Declaring Done
 
-**After every change, run `npm run check` and resolve every error and warning.**
+**After every change, run `pnpm check` and resolve every error and warning.**
 
-- A task is not complete while `npm run typecheck`, `npm run typecheck:web`, `npm run lint`, or `npm run lint:web` reports anything. The single entrypoint is `npm run check` (root) — it runs all four.
+- This is a pnpm workspace (`packages/harness`, `packages/web`). The single entrypoint is `pnpm check` (root) — it runs `pnpm -r run check`, i.e. typecheck + lint for both packages. A task is not complete while it reports anything.
 - Warnings count. Fix them, or if intentional, suppress with a targeted `// eslint-disable-next-line <rule>` plus a one-line reason.
 - Don't silently expand a pre-existing breakage. If the check was already failing before your change, fix it or call it out.
-- Auto-fix first (`npm run lint:fix`, `npm run lint:web:fix`), then hand-fix what remains.
+- Auto-fix first (`pnpm -r run lint:fix`), then hand-fix what remains.
 
 ## 6. Keep the Docs in Sync
 
@@ -83,8 +83,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **When to update which doc:**
 
-- Touching `apps/server/src/agent-manager.ts`, `runner.ts`, `queue.ts`, `rpc.ts`, `plugin-registry.ts`, `secrets.ts`, `models-*.ts`, `types.ts`, `config.ts`, `logger.ts`, or built-in plugin runtime contracts → update `docs/server.md`.
-- Touching anything under `apps/server/src/api/` or `apps/server/src/main.ts`'s route wiring → update `docs/api.md`.
+- Touching `packages/harness/core/agent-manager.ts`, `runner.ts`, `queue.ts`, `rpc.ts`, `plugin-registry.ts`, `secrets.ts`, `models-*.ts`, `types.ts`, `config.ts`, `logger.ts`, or built-in plugin runtime contracts → update `docs/server.md`.
+- Touching anything under `packages/harness/api/` or `packages/harness/core/main.ts`'s route wiring → update `docs/api.md`.
 - Changes that span both (e.g. a new lifecycle method exposed via a new HTTP route) → update both.
 - On-disk layout changes (file names, secrets shape, models.json shape, agent dir structure) → update `docs/server.md` §3 and the relevant section in `docs/api.md` if it's reachable over HTTP.
 

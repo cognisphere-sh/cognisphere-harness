@@ -131,7 +131,7 @@ collaborating with a teammate.
 | `gws` | Google Workspace / Gmail integration (polling + actions). |
 
 Authoring a new source is a single file implementing the `Plugin` interface in
-[`apps/server/src/types.ts`](apps/server/src/types.ts). Drop it under
+[`packages/harness/core/types.ts`](packages/harness/core/types.ts). Drop it under
 `plugins/<id>/` (user-space plugins shadow built-ins on id collision) and it's
 dynamically imported on boot.
 
@@ -139,24 +139,23 @@ dynamically imported on boot.
 
 ## Quick start
 
-**Prerequisites:** Node ≥ 20 and npm.
+**Prerequisites:** Node ≥ 20 and pnpm.
 
 ```bash
 # 1. Clone
 git clone https://github.com/t0r0id/CogniSphere.git
 cd CogniSphere
 
-# 2. Install server + web deps
-npm install
-npm run install:web
+# 2. Install all workspace deps (harness + web)
+pnpm install
 
 # 3. (optional) build the web UI — without it the server serves a JSON status page
-npm run build:web
+pnpm run build:web
 
 # 4. Run the server
-npm run dev      # tsx watch (hot reload)
+pnpm run dev     # tsx watch (hot reload)
 # or
-npm start        # one-shot
+pnpm start       # one-shot
 ```
 
 The server listens on `http://127.0.0.1:7331` by default.
@@ -261,10 +260,10 @@ autonomous curation loop is what's deferred.
 
 ## Contributing
 
-After any change, run the full check (typecheck + lint for both server and web):
+After any change, run the full check (typecheck + lint for both packages):
 
 ```bash
-npm run check
+pnpm check
 ```
 
 Resolve every error **and** warning before opening a PR, and keep the docs in
