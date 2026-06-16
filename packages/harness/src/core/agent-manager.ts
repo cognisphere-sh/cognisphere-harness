@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { Ajv, type ErrorObject } from "ajv";
@@ -7,6 +7,7 @@ import { agentDir, agentsRoot, secretsRoot } from "./config.js";
 import type { Logger } from "./logger.js";
 import { childLogger } from "./logger.js";
 import type { PluginRegistry } from "./plugin-registry.js";
+import { CORE_PLUGIN_IDS } from "./plugin-registry.js";
 import { AgentDb } from "./queue.js";
 import { AgentRunner } from "./runner.js";
 import { findProviderInCatalog } from "./models-catalog.js";
@@ -340,7 +341,12 @@ export class AgentManager {
 
   private async startAgent(inst: AgentInstance): Promise<AgentInstance> {
     const dir = agentDir(this.cfg, inst.id);
-    const installedPluginIds = scanPluginDirs(dir);
+    // Core plugins (admin, scheduler) are auto-installed on every agent —
+    // always started regardless of the agent's plugins dir, then unioned with
+    // any user-installed plugins found on disk.
+    const installedPluginIds = [
+      ...new Set([...CORE_PLUGIN_IDS, ...scanPluginDirs(dir)]),
+    ];
     inst.plugins.clear();
     // Seed every installed plugin as "stopped" so the Settings UI + the
     // secrets endpoint surface them even if agent validation fails before
@@ -552,6 +558,15 @@ export class AgentManager {
     if (!entry) throw new Error(`unknown plugin id: ${pluginId}`);
 
     const dir = agentDir(this.cfg, inst.id);
+
+    // Provision the plugin's `seed/` (system prompt + helper scripts) into the
+    // agent dir. The seed tree mirrors the agent layout
+    // (`system_prompts/plugin-<id>.md`, `scripts/<id>/…`), so a recursive copy
+    // drops everything in place. Files are plugin-owned and namespaced, and are
+    // overwritten on every start so they track the installed package version.
+    const seedDir = join(entry.sourceDir, "seed");
+    if (existsSync(seedDir)) cpSync(seedDir, dir, { recursive: true });
+
     const pdir = join(dir, "plugins", pluginId);
     const cfgPath = join(pdir, "config.json");
 

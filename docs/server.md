@@ -885,10 +885,17 @@ in progress", "conflict")`.
 5. **Construct a fresh `AgentRunner`** with the envSecrets snapshot.
    Attach a `batch-completed` listener: if a stale-swap is pending and
    the runner's `activeCount` hits 0, fire `performStaleSwap`.
-6. **Start each installed plugin** by scanning `plugins/` and calling
-   `startPluginInstance(inst, pid)` for each. Per-plugin failures are
-   caught and recorded as `PluginEntry{state:"failed", error}` — they
-   don't sink the agent.
+6. **Start each installed plugin.** The id set is `CORE_PLUGIN_IDS`
+   (`admin`, `scheduler` — auto-installed on every agent, defined in
+   `plugin-registry.ts`) unioned with whatever directories `plugins/`
+   contains, then `startPluginInstance(inst, pid)` for each. Per-plugin
+   failures are caught and recorded as `PluginEntry{state:"failed", error}`
+   — they don't sink the agent. Before each plugin starts, its `seed/`
+   tree (if present) is recursively copied into the agent dir — the seed
+   mirrors the agent layout (`system_prompts/plugin-<id>.md`,
+   `scripts/<id>/…`), so the agent picks up the plugin's system-prompt
+   fragment and helper CLIs. Seed files are plugin-owned, namespaced, and
+   overwritten on every start to track the installed package version.
 7. **Start the runner.** Mark the agent `running` and log a single
    `agent started` line with running/failed plugin lists.
 
@@ -1533,4 +1540,7 @@ Agent-runner subsystem (HTTP API surface omitted — see
 | **subtotal (agent-runner)** | **~3 200** | |
 
 Built-in plugins live in `packages/harness/src/plugins/<id>/`: `admin`,
-`scheduler`, `telegram`, `gws`, `gmail` (stub).
+`scheduler`, `telegram`, `gws`, `gmail` (stub). `admin` and `scheduler` are
+**core** (`CORE_PLUGIN_IDS`) — auto-installed on every agent and refused by
+`cognisphere plugin add`; the rest are opt-in per agent via a `plugins/<id>/`
+dir.

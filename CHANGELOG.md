@@ -22,6 +22,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Core plugins (`admin`, `scheduler`) are now always started on every agent,
+  unioned with any user-installed plugins — previously a freshly scaffolded
+  agent loaded no plugins at all (the operator-chat `admin` channel included),
+  since the base-agent template ships no `plugins/` dir. Single source of truth
+  is `CORE_PLUGIN_IDS` in `core/plugin-registry.ts`.
+- Plugin `seed/` provisioning: on plugin start, a plugin's `seed/` tree is
+  recursively copied into the agent dir (mirrors the agent layout —
+  `system_prompts/plugin-<id>.md`, `scripts/<id>/…`), so the agent actually
+  receives each plugin's system-prompt fragment and helper CLIs (e.g. the
+  scheduler's `scheduler-cli`). Previously the seed content was never copied,
+  so those prompts/scripts never reached the agent.
 - `cognisphere init` now pre-approves `better-sqlite3` in the scaffolded
   `package.json` (`pnpm.onlyBuiltDependencies`), so `pnpm install` builds its
   native addon instead of silently skipping it (which crashed agent boot with

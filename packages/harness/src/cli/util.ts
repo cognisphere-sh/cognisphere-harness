@@ -18,6 +18,7 @@ import {
 import { spawnSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CORE_PLUGIN_IDS } from "../core/plugin-registry.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // src/cli
 
@@ -40,7 +41,7 @@ export const MAIN_TS = join(SRC_ROOT, "core", "main.ts");
 
 /** Core plugins are bundled and resolved from the package; forking them is a
  *  footgun, so `plugin add` refuses these ids. */
-export const CORE_PLUGINS = new Set(["admin", "scheduler"]);
+export const CORE_PLUGINS = new Set<string>(CORE_PLUGIN_IDS);
 
 /** Version of the installed harness package (source of truth for `init`). */
 export function packageVersion(): string {
