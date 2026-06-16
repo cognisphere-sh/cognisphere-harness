@@ -882,6 +882,9 @@ in progress", "conflict")`.
    `envSecrets = { ...providerEnv, ...resolvedSecrets, ...agentConfigEnv }`.
 4. **Open the events db.** Lazy — created on first start, reused across
    stop/start cycles.
+4.5. **Run `bootstrap.sh`** (`runBootstrap`) if the agent ships one —
+   provisions system deps + `.venv` before the runner spawns. Awaited
+   but failure-tolerant (logged, never sinks the agent). See §6.14.
 5. **Construct a fresh `AgentRunner`** with the envSecrets snapshot.
    Attach a `batch-completed` listener: if a stale-swap is pending and
    the runner's `activeCount` hits 0, fire `performStaleSwap`.
@@ -1318,9 +1321,9 @@ its own loopback URL (option (a) is still available).
 
 ### 6.13 Per-agent venv at `<agentDir>/.venv`
 
-**Decision**: convention-driven (no `agent.json` field). The
-operator's `bootstrap.sh` creates `<agentDir>/.venv`; the runner
-activates it on every spawn if present.
+**Decision**: convention-driven (no `agent.json` field). `bootstrap.sh`
+creates `<agentDir>/.venv` (run automatically on each agent start — see
+§6.14); the runner activates it on every spawn if present.
 
 **Why**: agents will install Python deps; they shouldn't pollute the
 system Python or share deps across agents. `<agentDir>/.venv` is the
@@ -1329,19 +1332,25 @@ pyenv-style ergonomic default.
 **Cost**: one venv per agent. Disk usage adds up; some deps
 (markitdown, pyaudio, …) are heavy. Acceptable for v0.
 
-### 6.14 Bootstrap is operator's job, not loader's
+### 6.14 Bootstrap runs on every agent start
 
-**Decision**: copying the `bootstrap/` template into a new agent dir
-and running `bootstrap.sh` is part of the *creation* recipe (in
-`v0-deferred.md` §3.1), not part of `agent-manager.loadAgent(id)`.
+**Decision**: `startAgent` runs the agent's `bootstrap/bootstrap.sh`
+(`runBootstrap`, cwd = agent dir) on every start, after spec validation
+and before the runner is constructed, so `.venv` and system deps are
+provisioned before the first spawn. It's awaited but never sinks the
+agent: spawn errors / non-zero exits are logged and tolerated (a prior
+`.venv` may still be usable), and it's a no-op when the agent ships no
+`bootstrap/bootstrap.sh`.
 
-**Why**: clean creation/load separation. Creation = materialize
-template. Load = read state and start runners. Earlier the loader did
-the bootstrap; reverted because (a) it muddied the boundary, (b) first
-boot blocked on `pip install` for ~30-60s before `agent loaded` fired.
-When the deferred privileged-CRUD path comes back, the bootstrap call
-goes there too — alongside the seed-copy / template-render machinery
-already enumerated in `v0-deferred.md` §2.
+**Why**: `bootstrap.sh` is idempotent and non-interactive, and an agent
+whose deps silently vanished (e.g. dir copied without `.venv`) was a
+recurring footgun. Running it each start makes "deps present" a property
+of starting, not a manual operator step.
+
+**Cost**: latency. The first boot blocks on `pip install` (~30–60s)
+before `agent started` fires; subsequent starts are quick once deps are
+satisfied. Agents load sequentially in `boot()`, so a slow bootstrap
+delays later agents. Accepted trade-off for reliability.
 
 ### 6.15 Soft reload via runner swap, not in-place mutation
 

@@ -27,6 +27,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   agent loaded no plugins at all (the operator-chat `admin` channel included),
   since the base-agent template ships no `plugins/` dir. Single source of truth
   is `CORE_PLUGIN_IDS` in `core/plugin-registry.ts`.
+- `bootstrap.sh` now runs automatically on every agent start (`runBootstrap`
+  in `startAgent`, before the runner spawns) — provisions system deps + the
+  per-agent `.venv` so the runner can activate it. Idempotent, awaited, and
+  failure-tolerant (logged, never sinks the agent); no-op when the agent ships
+  no `bootstrap/bootstrap.sh`. Cost: first boot blocks on `pip install`.
 - Plugin `seed/` provisioning: on plugin start, a plugin's `seed/` tree is
   recursively copied into the agent dir (mirrors the agent layout —
   `system_prompts/plugin-<id>.md`, `scripts/<id>/…`), so the agent actually

@@ -1,4 +1,5 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { Ajv, type ErrorObject } from "ajv";
@@ -440,6 +441,15 @@ export class AgentManager {
       backfillThreadSessions(join(dir, "sessions"), inst.db, this.log);
     }
 
+    // 2.5. Provision the agent runtime (system deps + .venv) by running the
+    //      agent's bootstrap.sh, so the runner can auto-activate .venv at
+    //      spawn. Idempotent and non-interactive; failures are logged and
+    //      tolerated (a prior .venv may still be usable).
+    //      ponytail: runs on every start — pip is quick once satisfied, the
+    //      first boot is slow; agents load sequentially, so a slow bootstrap
+    //      delays later agents.
+    await runBootstrap(dir, this.log);
+
     // 3. Construct a fresh runner with the resolved env snapshot.
     inst.runner = new AgentRunner({
       rootDir: this.cfg.rootDir,
@@ -659,6 +669,34 @@ export class AgentManager {
       this.transitions.delete(id);
     }
   }
+}
+
+/**
+ * Run the agent's `bootstrap/bootstrap.sh` (cwd = agent dir) to provision its
+ * runtime: system binaries + a Python `.venv`. The script is idempotent and
+ * non-interactive (warns and continues on missing sudo deps), so it's safe to
+ * run on every agent start. Never rejects — a failure is logged and tolerated
+ * (a `.venv` from a prior run may still be usable). No-op if the agent ships no
+ * `bootstrap/bootstrap.sh`. Output is inherited so progress shows in the logs.
+ */
+function runBootstrap(dir: string, log: Logger): Promise<void> {
+  if (!existsSync(join(dir, "bootstrap", "bootstrap.sh"))) return Promise.resolve();
+  log.info({ dir }, "running bootstrap.sh");
+  return new Promise((resolve) => {
+    const child = spawn("bash", ["bootstrap/bootstrap.sh"], {
+      cwd: dir,
+      stdio: "inherit",
+    });
+    child.on("error", (err) => {
+      log.warn({ err, dir }, "bootstrap.sh failed to spawn; continuing");
+      resolve();
+    });
+    child.on("close", (code) => {
+      if (code === 0) log.info({ dir }, "bootstrap.sh complete");
+      else log.warn({ code, dir }, "bootstrap.sh exited non-zero; continuing");
+      resolve();
+    });
+  });
 }
 
 function scanPluginDirs(dir: string): string[] {
