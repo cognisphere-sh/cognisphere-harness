@@ -5,15 +5,8 @@
  */
 import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
-import {
-  defaultRootDir,
-  fail,
-  info,
-  packageVersion,
-  run,
-  writeJson,
-} from "./util.js";
+import { join, relative } from "node:path";
+import { fail, info, packageVersion, run, writeJson } from "./util.js";
 
 const GITIGNORE = `node_modules/
 .secrets/
@@ -67,10 +60,13 @@ export function cmdInit(argv: string[]): void {
   // The harness dir is a git repo so upgrades are reviewable diffs (§9).
   run("git", ["init", "--quiet", dir]);
 
+  const rel = relative(process.cwd(), dir);
+  const cdTarget = rel && !rel.startsWith("..") ? rel : dir;
+
   info(`Created harness "${id}" at ${dir}`);
   info("");
   info("Next steps:");
-  info(`  cd ${dir}`);
+  info(`  cd ${cdTarget}`);
   info("  export GITHUB_TOKEN=<token with read:packages>   # to install the harness");
   info("  pnpm install");
   info("  cognisphere agent new <name>                     # add your first agent");
@@ -84,7 +80,9 @@ function parseArgs(argv: string[]): {
 } {
   let id: string | undefined;
   let timezone = "UTC";
-  let root = defaultRootDir();
+  // Default to the current directory — the harness lands at ./<id>. `--root`
+  // overrides (e.g. `--root ~/.cognisphere` for a conventional deploy layout).
+  let root = process.cwd();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--timezone" || a === "-t") {

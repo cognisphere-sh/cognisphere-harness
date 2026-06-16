@@ -148,11 +148,10 @@ export function EventsTable({ agentId }: Props) {
   const rows = useMemo(() => data?.events ?? [], [data]);
   const total = data?.total ?? 0;
 
-  const pluginOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of rows) set.add(r.pluginId);
-    return [...set].sort();
-  }, [rows]);
+  const pluginOptions = useMemo(
+    () => [...new Set(rows.map((r) => r.pluginId))].sort(),
+    [rows],
+  );
 
   const toggleStatus = (s: EventStatus) => {
     setStatuses((prev) =>

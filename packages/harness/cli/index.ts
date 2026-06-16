@@ -21,8 +21,8 @@ Scaffold
   plugin add <id> [--force]                    fork a catalog plugin
 
 Run
-  dev                                          run the server (hot reload)
-  serve                                        run the server (production)
+  dev [--port <n>] [--web-port <n>] [--no-web] backend (watch) + Vite dev server
+  serve [--port <n>] [--headless]              backend only (--headless: no web UI)
   up [id] [--reinstall]                        enable+start the systemd unit
   logs [id] [-f]                               tail the service logs
   status [id]                                  systemd unit status
@@ -46,9 +46,9 @@ function main(): void {
       if (rest[0] === "add") return cmdPluginAdd(rest.slice(1));
       return fail("usage: cognisphere plugin add <id>");
     case "dev":
-      return cmdRun("dev");
+      return cmdRun("dev", rest);
     case "serve":
-      return cmdRun("serve");
+      return cmdRun("serve", rest);
     case "up":
       return cmdUp(rest);
     case "logs":

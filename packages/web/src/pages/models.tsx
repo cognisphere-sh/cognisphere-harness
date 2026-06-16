@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -32,6 +37,13 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 
 const CLEAR_SENTINEL = "__CLEAR__";
+
+// Re-fetch model config + every agent view after a credential/login change.
+function invalidateModels(qc: QueryClient): void {
+  for (const key of ["models", "agents", "agent"]) {
+    qc.invalidateQueries({ queryKey: [key] });
+  }
+}
 
 interface DraftState {
   /** Per-field: undefined = unchanged; CLEAR_SENTINEL = pending clear; non-empty string = pending new value. */
@@ -168,9 +180,7 @@ function ProviderCard({
     mutationFn: (body: PutModelsBody) => endpoints.putModels(body),
     onSuccess: () => {
       toast.success("saved · agents using this provider reloaded");
-      qc.invalidateQueries({ queryKey: ["models"] });
-      qc.invalidateQueries({ queryKey: ["agents"] });
-      qc.invalidateQueries({ queryKey: ["agent"] });
+      invalidateModels(qc);
     },
     onError: (e: Error) => toast.error(`save failed: ${e.message}`),
   });
@@ -432,9 +442,7 @@ function OAuthSection({ provider }: { provider: ProviderInfo }) {
     setActive(false);
     setPasteValue("");
     toast.success("signed in · agents using this provider reloaded");
-    qc.invalidateQueries({ queryKey: ["models"] });
-    qc.invalidateQueries({ queryKey: ["agents"] });
-    qc.invalidateQueries({ queryKey: ["agent"] });
+    invalidateModels(qc);
   }, [active, flow?.state, qc]);
 
   const start = useMutation({
@@ -462,9 +470,7 @@ function OAuthSection({ provider }: { provider: ProviderInfo }) {
     mutationFn: () => endpoints.oauthLogout(provider.id),
     onSuccess: () => {
       toast.success("signed out · agents using this provider reloaded");
-      qc.invalidateQueries({ queryKey: ["models"] });
-      qc.invalidateQueries({ queryKey: ["agents"] });
-      qc.invalidateQueries({ queryKey: ["agent"] });
+      invalidateModels(qc);
     },
     onError: (e: Error) => toast.error(`sign-out failed: ${e.message}`),
   });

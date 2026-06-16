@@ -15,7 +15,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,11 +41,6 @@ export const CORE_PLUGINS = new Set(["admin", "scheduler"]);
 export function packageVersion(): string {
   const pkg = readJson<{ version?: string }>(join(PKG_ROOT, "package.json"));
   return typeof pkg.version === "string" ? pkg.version : "0.0.0";
-}
-
-/** Default harness root dir, matching the server's `loadConfig()`. */
-export function defaultRootDir(): string {
-  return process.env.COGNISPHERE_ROOT_DIR ?? join(homedir(), ".cognisphere");
 }
 
 /** The CHANGELOG the upgrade command reads — shipped in the package, with a

@@ -153,23 +153,25 @@ you own. See [`docs/distribution-and-deployment.md`](docs/distribution-and-deplo
 # The package lives on a private registry (GitHub Packages) — authenticate once:
 export GITHUB_TOKEN=<token with read:packages>
 
-# 1. Scaffold a harness data dir at ~/.cognisphere/<id>
-npx @cognisphere/cognisphere-harness init my-harness
+# 1. Scaffold a harness data dir in the current directory (./my-harness)
+npx @cognisphere/cognisphere-harness init my-harness   # --root <dir> to put it elsewhere
 
 # 2. Install the harness, then scaffold an agent + (optional) a catalog plugin
-cd ~/.cognisphere/my-harness
+cd my-harness
 pnpm install
 cognisphere agent new dr-renu          # forks the base template into agents/dr-renu/
 cognisphere plugin add telegram        # forks a catalog plugin into plugins/telegram/
 
-# 3. Run it locally (hot reload)
-cognisphere dev
+# 3. Run it locally (hot reload). Serves the bundled web console on the same port.
+cognisphere dev                        # --port <n> to change the backend port
 ```
 
 Configure the agent's model + secrets (Models/Secrets settings, or `.secrets/`),
 then edit `agents/dr-renu/` freely — it's yours, git-tracked. Deploy to a Linux
 host with `cognisphere up` (systemd) and migrate across versions with
-`cognisphere upgrade`. Full command surface:
+`cognisphere upgrade`. For a **backend-only** host (no operator console), run
+`cognisphere serve --headless` — the server exposes only the API/webhook/admin
+surfaces and mounts no web UI. Full command surface:
 [distribution-and-deployment.md §10](docs/distribution-and-deployment.md#10-cli-surface).
 
 ### Develop the harness (monorepo)
@@ -183,7 +185,11 @@ pnpm run dev                 # tsx watch (hot reload) — or `pnpm start`
 ```
 
 The server listens on `http://127.0.0.1:7331`, running against
-`~/.cognisphere/default` (override with the env vars below).
+`~/.cognisphere/default` (override with the env vars below). For **full-stack
+dev** — backend *and* the Vite dev server (HMR) together — scaffold a harness
+dir and run `cognisphere dev` from it: in the monorepo it starts both and points
+Vite's `/api` proxy at the backend (`--port` / `--web-port` to choose ports).
+Equivalently, run `pnpm run dev` and `pnpm run dev:web` in separate terminals.
 
 ### Configuration
 
@@ -196,6 +202,7 @@ Set via environment (a `.env` file in the package cwd is loaded automatically):
 | `PORT` | `7331` | HTTP listen port. |
 | `BIND_HOST` | `127.0.0.1` | Listen interface. |
 | `SERVER_BASE_URL` | `http://<host>:<port>` | Base URL used to build plugin webhook URLs. |
+| `COGNISPHERE_HEADLESS` | _unset_ | When set (`1`/`true`/`yes`), the server mounts no web UI — API/webhook/admin only. Equivalent to `cognisphere serve --headless`. |
 
 > The CLI derives `COGNISPHERE_ROOT_DIR` / `COGNISPHERE_ID` from the harness dir
 > (the cwd), so `cognisphere dev` / `serve` need no env wiring.

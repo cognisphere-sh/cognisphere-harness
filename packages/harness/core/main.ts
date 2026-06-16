@@ -77,10 +77,11 @@ async function main(): Promise<void> {
   admin.route("/", adminRouter(am));
   app.route("/admin", admin);
 
-  // Static UI — only mounted if the build exists. In dev the operator runs
-  // Vite separately on a different port and proxies /api, /admin, /webhook
-  // here, so this branch is a no-op.
-  if (existsSync(WEB_DIST_DIR)) {
+  // Static UI — only mounted if the build exists and the server isn't headless.
+  // In dev the operator runs Vite separately on a different port and proxies
+  // /api, /admin, /webhook here, so this branch is a no-op. `--headless`
+  // (COGNISPHERE_HEADLESS) skips it for backend-only deployments.
+  if (!cfg.headless && existsSync(WEB_DIST_DIR)) {
     log.info({ dir: WEB_DIST_DIR }, "serving web UI");
     const indexHtml = readFileSync(resolve(WEB_DIST_DIR, "index.html"), "utf8");
     app.use("/assets/*", serveStatic({ root: relativeToCwd(WEB_DIST_DIR) }));
@@ -95,7 +96,9 @@ async function main(): Promise<void> {
       c.json({
         name: "cognisphere",
         agents: am.list(),
-        note: "web UI not built; run `npm run dev:web` (with the server on a separate port) or `npm run build:web`",
+        note: cfg.headless
+          ? "headless mode — web UI disabled (COGNISPHERE_HEADLESS)"
+          : "web UI not built; run `pnpm run build:web`, or `pnpm run dev:web` on a separate port",
       }),
     );
   }

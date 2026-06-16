@@ -40,28 +40,18 @@ function renderMetaValue(v: unknown): string | null {
   return String(v);
 }
 
-const TS_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
-function tsFormatter(tz: string): Intl.DateTimeFormat {
-  let f = TS_FORMATTERS.get(tz);
-  if (!f) {
-    f = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-      timeZoneName: "short",
-    });
-    TS_FORMATTERS.set(tz, f);
-  }
-  return f;
-}
-
 function fmtTs(unixMs: number, tz: string): string {
-  const parts = tsFormatter(tz).formatToParts(new Date(unixMs));
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).formatToParts(new Date(unixMs));
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   const hour = get("hour") === "24" ? "00" : get("hour");
   return `${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;

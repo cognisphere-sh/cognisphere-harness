@@ -253,11 +253,11 @@ upgrade:
 
 | Command | Purpose |
 |---|---|
-| `cognisphere init <id>` | scaffold a harness data dir (`harness.json`, `.secrets/` with a generated session-key, `package.json`, `.npmrc`, `.gitignore`, git repo, empty `agents/`/`plugins/`) |
+| `cognisphere init <id>` | scaffold a harness data dir at `./<id>` (cwd-relative; `--root <dir>` to override, e.g. `~/.cognisphere` for the systemd layout) — `harness.json`, `.secrets/` with a generated session-key, `package.json`, `.npmrc`, `.gitignore`, git repo, empty `agents/`/`plugins/` |
 | `cognisphere agent new <name>` | fork `base-agent` into `agents/<name>/` + write a starter `agent.json` |
 | `cognisphere plugin add <id>` | fork a catalog plugin into `plugins/<id>/` (refuses core plugins; honors `compatibleHarness` when declared) |
-| `cognisphere dev` | run the server under `tsx --watch` against the cwd harness (hot reload) |
-| `cognisphere serve` | run the server (no watch) — the production entry the systemd unit execs |
+| `cognisphere dev` | backend under `tsx --watch` **plus** the Vite dev server (HMR) when the web package is present (the monorepo); flags `--port <n>` (backend), `--web-port <n>` (Vite), `--no-web` (backend only). Vite proxies `/api`/`/admin`/`/webhook` to the backend. |
+| `cognisphere serve` | run the backend once (no watch) — the production entry the systemd unit execs; `--port <n>`, `--headless` (mount no web UI — API/webhook/admin only, for backend-only hosts). The backend otherwise serves the bundled UI (`dist-web/`), so production needs no separate web process. |
 | `cognisphere up` / `logs` / `status` | manage the `cognisphere@<id>` systemd **user** service |
 | `cognisphere upgrade` | drive the two-phase upgrade: show the changelog window, `--to <v>` bumps the dep, `--set-version <v>` stamps `harness.json` (§9) |
 

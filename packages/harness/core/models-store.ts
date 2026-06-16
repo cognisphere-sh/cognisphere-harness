@@ -26,10 +26,6 @@ const PLACEHOLDER: ModelsConfig = { providers: {} };
 export class ModelsStore {
   constructor(private readonly filePath: string) {}
 
-  path(): string {
-    return this.filePath;
-  }
-
   /** Read-through; never cached. Cheap (small file) and keeps PUT trivial. */
   load(): ModelsConfig {
     if (!existsSync(this.filePath)) return { providers: {} };

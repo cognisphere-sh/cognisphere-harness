@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Logger } from "./logger.js";
@@ -68,37 +68,6 @@ export class PluginRegistry {
           this.log.info({ id, scope, source: sourceDir }, "plugin loaded");
         } catch (err) {
           this.log.error({ err, id }, "failed to load plugin");
-        }
-      }
-    }
-  }
-
-  /** Add-only rescan: pick up new user-space plugins; don't touch loaded ones. */
-  async rescan(): Promise<void> {
-    for (const { dir, scope } of this.roots) {
-      if (!existsSync(dir)) continue;
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const id = entry.name;
-        if (this.entries.has(id)) continue;
-        const indexTs = join(dir, id, "index.ts");
-        if (!existsSync(indexTs) || !statSync(indexTs).isFile()) continue;
-        try {
-          const mod = await import(pathToFileURL(indexTs).href);
-          const Ctor = (mod.default ?? mod[id]) as new () => Plugin;
-          if (typeof Ctor !== "function") continue;
-          const inst = new Ctor();
-          if (!inst.manifest) continue;
-          this.entries.set(id, {
-            id,
-            ctor: Ctor,
-            manifest: inst.manifest,
-            sourceDir: join(dir, id),
-            scope,
-          });
-          this.log.info({ id, scope }, "plugin loaded (rescan)");
-        } catch (err) {
-          this.log.error({ err, id }, "rescan: failed to load plugin");
         }
       }
     }

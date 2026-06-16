@@ -339,7 +339,11 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     }
     const tDir = join(agentDir(cfg, id), "sessions", threadId);
     if (!existsSync(tDir)) {
-      return c.json({ threadId, main: emptyAgentUsage("main"), subagents: [] });
+      return c.json({
+        threadId,
+        main: { agent: "main", models: [], lastContext: null },
+        subagents: [],
+      });
     }
 
     // Main agent: aggregate every *.jsonl directly under the thread dir.
@@ -581,10 +585,6 @@ function newAgentState(): AgentState {
   return { models: new Map(), latest: null };
 }
 
-function emptyAgentUsage(name: string): AgentUsage {
-  return { agent: name, models: [], lastContext: null };
-}
-
 function stateToAgentUsage(name: string, state: AgentState): AgentUsage {
   const latest = state.latest;
   return {
@@ -772,39 +772,37 @@ function numField(obj: Record<string, unknown>, key: string): number {
  *  schedule a background warm-up so the next poll returns the real
  *  number. Keeps page-open instant on large agents (1k+ session
  *  files). */
+// Every jsonl under a thread directory: the main agent's session files
+// plus each sub-agent dir under `subagents/`. Shared by the fast (cache-
+// only) and full (re-parse) cost walkers below.
+function* threadJsonlFiles(threadDir: string): Generator<string> {
+  for (const f of readdirSync(threadDir, { withFileTypes: true })) {
+    if (f.isFile() && f.name.endsWith(".jsonl")) yield join(threadDir, f.name);
+  }
+  const subRoot = join(threadDir, "subagents");
+  if (!existsSync(subRoot)) return;
+  for (const sub of readdirSync(subRoot, { withFileTypes: true })) {
+    if (!sub.isDirectory() || sub.name.startsWith(".")) continue;
+    const subDir = join(subRoot, sub.name);
+    for (const f of readdirSync(subDir, { withFileTypes: true })) {
+      if (f.isFile() && f.name.endsWith(".jsonl")) yield join(subDir, f.name);
+    }
+  }
+}
+
 function getThreadTotalCostFast(threadDir: string): number | null {
   let total = 0;
   let cold = false;
-  const tryFile = (filePath: string): void => {
+  for (const filePath of threadJsonlFiles(threadDir)) {
     let mtimeMs: number;
     try {
       mtimeMs = statSync(filePath).mtimeMs;
     } catch {
-      return;
+      continue;
     }
     const hit = fileTotalCostCache.get(filePath);
-    if (hit && hit.mtimeMs === mtimeMs) {
-      total += hit.cost;
-    } else {
-      cold = true;
-    }
-  };
-  for (const f of readdirSync(threadDir, { withFileTypes: true })) {
-    if (f.isFile() && f.name.endsWith(".jsonl")) {
-      tryFile(join(threadDir, f.name));
-    }
-  }
-  const subRoot = join(threadDir, "subagents");
-  if (existsSync(subRoot)) {
-    for (const sub of readdirSync(subRoot, { withFileTypes: true })) {
-      if (!sub.isDirectory() || sub.name.startsWith(".")) continue;
-      const subDir = join(subRoot, sub.name);
-      for (const f of readdirSync(subDir, { withFileTypes: true })) {
-        if (f.isFile() && f.name.endsWith(".jsonl")) {
-          tryFile(join(subDir, f.name));
-        }
-      }
-    }
+    if (hit && hit.mtimeMs === mtimeMs) total += hit.cost;
+    else cold = true;
   }
   if (cold) {
     scheduleThreadCostWarmup(threadDir);
@@ -838,21 +836,8 @@ function scheduleThreadCostWarmup(threadDir: string): void {
  *  background warm-up triggered by `getThreadTotalCostFast`). */
 function sumThreadTotalCost(threadDir: string): number {
   let total = 0;
-  for (const f of readdirSync(threadDir, { withFileTypes: true })) {
-    if (f.isFile() && f.name.endsWith(".jsonl")) {
-      total += sumFileTotalCostCached(join(threadDir, f.name));
-    }
-  }
-  const subRoot = join(threadDir, "subagents");
-  if (!existsSync(subRoot)) return total;
-  for (const sub of readdirSync(subRoot, { withFileTypes: true })) {
-    if (!sub.isDirectory() || sub.name.startsWith(".")) continue;
-    const subDir = join(subRoot, sub.name);
-    for (const f of readdirSync(subDir, { withFileTypes: true })) {
-      if (f.isFile() && f.name.endsWith(".jsonl")) {
-        total += sumFileTotalCostCached(join(subDir, f.name));
-      }
-    }
+  for (const filePath of threadJsonlFiles(threadDir)) {
+    total += sumFileTotalCostCached(filePath);
   }
   return total;
 }

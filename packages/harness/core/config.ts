@@ -18,6 +18,9 @@ export interface ServerConfig {
    *  Written by `cognisphere init`, bumped by the upgrade skill. Empty
    *  string when `harness.json` predates versioning. */
   version: string;
+  /** When true, the server does not mount the web UI (API/webhook/admin only).
+   *  Set via `COGNISPHERE_HEADLESS` (e.g. `cognisphere serve --headless`). */
+  headless: boolean;
 }
 
 export function loadConfig(): ServerConfig {
@@ -35,7 +38,17 @@ export function loadConfig(): ServerConfig {
       : "UTC";
   const version =
     typeof harnessJson.version === "string" ? harnessJson.version : "";
-  return { rootDir, harnessId, port, serverBaseUrl, timezone, bindHost, version };
+  const headless = /^(1|true|yes)$/i.test(process.env.COGNISPHERE_HEADLESS ?? "");
+  return {
+    rootDir,
+    harnessId,
+    port,
+    serverBaseUrl,
+    timezone,
+    bindHost,
+    version,
+    headless,
+  };
 }
 
 export function harnessRoot(cfg: ServerConfig): string {

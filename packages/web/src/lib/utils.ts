@@ -30,11 +30,3 @@ export function formatTime(ms: number): string {
     minute: "2-digit",
   });
 }
-
-export function safeJson(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}

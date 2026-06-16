@@ -29,10 +29,15 @@ dependency, point a data dir at it** (`docs/distribution-and-deployment.md` §2,
 
 ### 1. Scaffold + install
 
+`init` scaffolds in the **current directory** by default. For a systemd
+deployment, put the harness under `~/.cognisphere/<id>` — the location the
+`cognisphere@.service` template expects (`WorkingDirectory=%h/.cognisphere/%i`):
+
 ```bash
 export GITHUB_TOKEN=<read:packages token>
-npx @cognisphere/cognisphere-harness init <harness-id>     # ~/.cognisphere/<harness-id>
-cd ~/.cognisphere/<harness-id>
+mkdir -p ~/.cognisphere && cd ~/.cognisphere
+npx @cognisphere/cognisphere-harness init <harness-id>     # creates ./<harness-id>
+cd <harness-id>
 pnpm install                                               # pins code via lockfile
 ```
 
@@ -81,6 +86,11 @@ cognisphere logs <harness-id> -f
 non-default `PORT` or `COGNISPHERE_ROOT_DIR`, add `Environment=` lines to that
 unit and `--reinstall` is not needed for env-only edits — just
 `systemctl --user daemon-reload && systemctl --user restart cognisphere@<id>`.
+
+For a **backend-only host** (no operator console — the UI is served elsewhere or
+not at all), add `Environment=COGNISPHERE_HEADLESS=1` to the unit (equivalently,
+`cognisphere serve --headless`). The server then mounts no web UI; step 5's proxy
+and step 6's console check don't apply.
 
 ### 5. Reverse proxy (Caddy)
 

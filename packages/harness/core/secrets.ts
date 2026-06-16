@@ -105,11 +105,6 @@ export class SecretsStore {
     return out;
   }
 
-  /** Path of the file backing this store; useful for error messages. */
-  path(): string {
-    return this.filePath;
-  }
-
   /**
    * Drop the in-memory cache so the next `resolve*` re-reads the file.
    * Called after a PUT /api/secrets so an auto-restarted agent picks

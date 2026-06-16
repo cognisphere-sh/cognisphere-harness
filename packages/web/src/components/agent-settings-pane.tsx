@@ -916,7 +916,7 @@ function SecretRow({
 // ── helpers ──────────────────────────────────────────────────────────
 
 function deepClone<T>(v: T): T {
-  return JSON.parse(JSON.stringify(v)) as T;
+  return structuredClone(v);
 }
 
 /** Drop an optional model field (e.g. `subagentModel`) from the agent.json

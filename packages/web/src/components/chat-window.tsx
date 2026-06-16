@@ -193,7 +193,7 @@ export function ChatWindow({ agentId }: Props) {
     const tryScroll = () => {
       const root = scrollerRef.current;
       const el = root?.querySelector(
-        `[data-entry-id="${cssEscape(highlightEntryId)}"]`,
+        `[data-entry-id="${CSS.escape(highlightEntryId)}"]`,
       ) as HTMLElement | null;
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -996,13 +996,6 @@ function StagedFileChip({
   );
 }
 
-/** Wrap CSS.escape with a fallback for environments that lack it. */
-function cssEscape(s: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(s);
-  }
-  return s.replace(/["\\]/g, "\\$&");
-}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
