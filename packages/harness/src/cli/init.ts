@@ -17,7 +17,7 @@ dist/
 **/inboxes/
 `;
 
-const NPMRC = `@cognisphere:registry=https://npm.pkg.github.com
+const NPMRC = `@cognisphere-sh:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=\${GITHUB_TOKEN}
 `;
 
@@ -49,7 +49,7 @@ export function cmdInit(argv: string[]): void {
     name: `cognisphere-harness-${id}`,
     private: true,
     type: "module",
-    dependencies: { "@cognisphere/cognisphere-harness": version },
+    dependencies: { "@cognisphere-sh/cognisphere-harness": version },
   });
 
   writeFileSync(join(dir, ".npmrc"), NPMRC);

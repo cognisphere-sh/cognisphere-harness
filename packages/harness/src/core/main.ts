@@ -33,9 +33,11 @@ const WEB_DIST_DIR = resolveWebDist(HERE);
  * bundled copy so an installed harness serves the UI without the workspace.
  */
 function resolveWebDist(here: string): string {
-  const bundled = resolve(here, "../dist-web");
+  // here = packages/harness/src/core → package root is two up; the monorepo
+  // web package is three up (packages/web/dist).
+  const bundled = resolve(here, "../../dist-web");
   if (existsSync(bundled)) return bundled;
-  return resolve(here, "../../web/dist");
+  return resolve(here, "../../../web/dist");
 }
 
 async function main(): Promise<void> {

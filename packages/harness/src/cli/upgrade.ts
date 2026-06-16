@@ -37,8 +37,8 @@ export function cmdUpgrade(argv: string[]): void {
 function phaseBump(version: string | undefined): void {
   if (!version) fail("usage: cognisphere upgrade --to <version>");
   requireHarnessDir();
-  info(`Bumping @cognisphere/cognisphere-harness to ${version} …`);
-  const status = run("pnpm", ["add", `@cognisphere/cognisphere-harness@${version}`]);
+  info(`Bumping @cognisphere-sh/cognisphere-harness to ${version} …`);
+  const status = run("pnpm", ["add", `@cognisphere-sh/cognisphere-harness@${version}`]);
   if (status !== 0) fail("pnpm add failed");
   info("");
   info("Code updated. Next, migrate the harness data:");

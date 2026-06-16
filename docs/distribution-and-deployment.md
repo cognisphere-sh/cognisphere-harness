@@ -52,7 +52,7 @@ how an app depends on a framework (you don't copy Next.js into your repo, you
 
 ```
 ~/.cognisphere/buildRecruit/          ← the harness = a git-tracked pnpm project
-├── package.json   → { "dependencies": { "@cognisphere/cognisphere-harness": "0.3.0" } }
+├── package.json   → { "dependencies": { "@cognisphere-sh/cognisphere-harness": "0.3.0" } }
 ├── pnpm-lock.yaml → pins the exact version
 ├── node_modules/  → gitignored, reproducible from the lockfile
 ├── harness.json   → { "version": "0.3.0", "timezone": "America/Toronto" }
@@ -66,7 +66,7 @@ every harness on the machine, so N harnesses on the same version cost ~one copy
 on disk while keeping fully independent `node_modules` and lockfiles. That gives
 per-harness version isolation **and** low disk cost.
 
-**What this kills:** the code copy. `node_modules/@cognisphere/cognisphere-harness` is
+**What this kills:** the code copy. `node_modules/@cognisphere-sh/cognisphere-harness` is
 *managed* (installed from the registry, pinned by the lockfile), not vendored.
 
 **Packaging requirement:** the published package must ship the prebuilt web
@@ -80,37 +80,43 @@ backend (`harness`) and the UI (`web`):
 
 ```
 packages/
-├── harness/                  ← @cognisphere/cognisphere-harness (publishable backend)
+├── harness/                  ← @cognisphere-sh/cognisphere-harness (publishable backend)
 │   ├── package.json
-│   ├── core/                 ← agent-runner engine + the process entrypoint
-│   │   ├── agent-manager.ts  runner.ts  queue.ts  rpc.ts
-│   │   ├── plugin-registry.ts  secrets.ts  models-store.ts  models-catalog.ts
-│   │   ├── config.ts  types.ts  logger.ts  oauth-logins.ts
-│   │   └── main.ts           ← process entrypoint + HTTP route wiring
-│   ├── api/                  ← HTTP route handlers (/api, /admin, /webhook)
-│   ├── plugins/              ← admin, scheduler (core) + telegram, gws (catalog)
-│   └── base-agent/           ← the single base template every agent forks from
+│   ├── bin/cognisphere.mjs   ← CLI entry shim (the published `cognisphere` bin)
+│   ├── scripts/prepack.mjs   ← bundles web dist + CHANGELOG into the package at publish
+│   └── src/                  ← all TypeScript source + the shipped runtime assets
+│       ├── core/             ← agent-runner engine + the process entrypoint
+│       │   ├── agent-manager.ts  runner.ts  queue.ts  rpc.ts
+│       │   ├── plugin-registry.ts  secrets.ts  models-store.ts  models-catalog.ts
+│       │   ├── config.ts  types.ts  logger.ts  oauth-logins.ts
+│       │   └── main.ts       ← process entrypoint + HTTP route wiring
+│       ├── api/              ← HTTP route handlers (/api, /admin, /webhook)
+│       ├── cli/              ← the `cognisphere` CLI (init, agent, plugin, dev, up, upgrade)
+│       ├── plugins/          ← admin, scheduler (core) + telegram, gws (catalog)
+│       └── base-agent/       ← the single base template every agent forks from
 └── web/                      ← cognisphere-web (Vite/React UI → builds to dist)
 pnpm-workspace.yaml
 ```
 
-- **`harness`** is the entire backend, published as one artifact. `core/` is the
-  agent-runner engine (documented in [`server.md`](./server.md)) plus `main.ts`,
-  the process entrypoint that wires up the HTTP server; `api/` holds the route
-  handlers (documented in [`api.md`](./api.md)). The dependency direction
-  `api → core` (never the reverse) is a convention enforced by lint, not a
-  package boundary — there is no current consumer of the engine without the HTTP
-  server, so a separate `core` package would be premature.
+- **`harness`** is the entire backend, published as one artifact. All source
+  lives under `src/`; `bin/` and `scripts/` (the entry shim and the publish-time
+  bundler) stay at the package root. `src/core/` is the agent-runner engine
+  (documented in [`server.md`](./server.md)) plus `main.ts`, the process
+  entrypoint that wires up the HTTP server; `src/api/` holds the route handlers
+  (documented in [`api.md`](./api.md)). The dependency direction `api → core`
+  (never the reverse) is a convention enforced by lint, not a package boundary —
+  there is no current consumer of the engine without the HTTP server, so a
+  separate `core` package would be premature.
 - **`web`** is an independent Vite/React project; the backend serves its built
   output when present (`packages/web/dist`) and proxies to it in dev.
 
-If a headless-engine consumer ever materializes, promoting `harness/core/` to
-its own package is a contained move.
+If a headless-engine consumer ever materializes, promoting `harness/src/core/`
+to its own package is a contained move.
 
 ## 4. Agents & the base template
 
 - Every agent forks from **one** base template, shipped at
-  `packages/harness/base-agent/`. `cognisphere agent new <name>` copies it into the
+  `packages/harness/src/base-agent/`. `cognisphere agent new <name>` copies it into the
   harness's `agents/<id>/`.
 - The forked copy is **owned by the harness** — git-tracked and edited freely
   (prompts, workspace, plugins).
@@ -130,7 +136,7 @@ Two kinds of plugins, distinguished by whether the user is meant to fork them:
 | **Core** | `admin`, `scheduler` | bundled in the package, resolved from `node_modules` | no — forking is a footgun |
 | **Catalog** | `telegram`, `gws`, future adapters | **forkable copies** | yes — copied into the harness |
 
-- The **catalog** lives at `packages/harness/plugins/` in the monorepo. `cognisphere
+- The **catalog** lives at `packages/harness/src/plugins/` in the monorepo. `cognisphere
   plugin add <id>` copies a plugin folder into `<harness>/plugins/<id>/`
   (git-tracked, forkable) — the same fork model as the base template.
 - **Override** is already supported by the runtime: user plugins under
@@ -162,7 +168,7 @@ Two kinds of plugins, distinguished by whether the user is meant to fork them:
 ## 7. Distribution & the private registry
 
 CogniSphere is published to a **private npm registry** under a scope
-(`@cognisphere/cognisphere-harness`). Recommended: **GitHub Packages** — a real registry
+(`@cognisphere-sh/cognisphere-harness`). Recommended: **GitHub Packages** — a real registry
 with proper semver resolution and near-zero setup.
 
 Setup:
@@ -173,17 +179,17 @@ Setup:
    ```
 2. Publisher and consumer each add an `.npmrc`:
    ```
-   @cognisphere:registry=https://npm.pkg.github.com
+   @cognisphere-sh:registry=https://npm.pkg.github.com
    //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
    ```
    (`read:packages` to install, `write:packages` to publish.)
-3. `pnpm publish` / `pnpm add @cognisphere/cognisphere-harness@0.3.0`.
+3. `pnpm publish` / `pnpm add @cognisphere-sh/cognisphere-harness@0.3.0`.
 
 **Zero-infra fallback** — depend on a git tag, no registry at all:
 
 ```jsonc
 "dependencies": {
-  "@cognisphere/cognisphere-harness": "git+ssh://git@github.com/CognitoAI/cognisphere.git#v0.3.0"
+  "@cognisphere-sh/cognisphere-harness": "git+ssh://git@github.com/cognisphere-sh/cognisphere-harness.git#v0.3.0"
 }
 ```
 
@@ -196,7 +202,7 @@ there are many consumers or a need to cache public deps.
 One install, many data dirs, one process each:
 
 ```
-@cognisphere/cognisphere-harness (installed per harness via pnpm)
+@cognisphere-sh/cognisphere-harness (installed per harness via pnpm)
         │  reads COGNISPHERE_ROOT_DIR / COGNISPHERE_ID
         ▼
 ~/.cognisphere/buildRecruit/   ← own port, own systemd unit
@@ -215,7 +221,7 @@ isolation (separate secrets, separate version, separate public URL).
 
 Upgrades are **two-phase**:
 
-1. **Code:** `pnpm add @cognisphere/cognisphere-harness@<target>` — bumps `node_modules`
+1. **Code:** `pnpm add @cognisphere-sh/cognisphere-harness@<target>` — bumps `node_modules`
    and the lockfile.
 2. **Data:** the upgrade skill walks the harness dir and patches
    prompts/plugins/`agent.json`/secrets to match the new version, then writes
@@ -264,7 +270,7 @@ upgrade:
 The CLI derives `COGNISPHERE_ROOT_DIR`/`COGNISPHERE_ID` from the harness dir (the
 cwd) for `dev`/`serve`, so no env wiring is needed. The bin is a small JS shim
 (`bin/cognisphere.mjs`) that registers the `tsx` loader and runs the TS CLI, so
-`npx @cognisphere/cognisphere-harness init` works without a build step.
+`npx @cognisphere-sh/cognisphere-harness init` works without a build step.
 
 ## 11. Open decisions
 

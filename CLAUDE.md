@@ -83,8 +83,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **When to update which doc:**
 
-- Touching `packages/harness/core/agent-manager.ts`, `runner.ts`, `queue.ts`, `rpc.ts`, `plugin-registry.ts`, `secrets.ts`, `models-*.ts`, `types.ts`, `config.ts`, `logger.ts`, or built-in plugin runtime contracts → update `docs/server.md`.
-- Touching anything under `packages/harness/api/` or `packages/harness/core/main.ts`'s route wiring → update `docs/api.md`.
+- Touching `packages/harness/src/core/agent-manager.ts`, `runner.ts`, `queue.ts`, `rpc.ts`, `plugin-registry.ts`, `secrets.ts`, `models-*.ts`, `types.ts`, `config.ts`, `logger.ts`, or built-in plugin runtime contracts → update `docs/server.md`.
+- Touching anything under `packages/harness/src/api/` or `packages/harness/src/core/main.ts`'s route wiring → update `docs/api.md`.
 - Changes that span both (e.g. a new lifecycle method exposed via a new HTTP route) → update both.
 - On-disk layout changes (file names, secrets shape, models.json shape, agent dir structure) → update `docs/server.md` §3 and the relevant section in `docs/api.md` if it's reachable over HTTP.
 

@@ -1,6 +1,6 @@
 ---
 name: cognisphere-upgrade
-description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere/cognisphere-harness dependency.
+description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere-sh/cognisphere-harness dependency.
 metadata:
   author: cognisphere
   version: "1.0.0"
@@ -16,7 +16,7 @@ Drive the **two-phase upgrade** (see `docs/distribution-and-deployment.md` §9):
    match the new version, then stamp `harness.json`.
 
 You are operating **inside a harness data dir** (cwd has `harness.json`, a
-`package.json` depending on `@cognisphere/cognisphere-harness`, and `agents/`).
+`package.json` depending on `@cognisphere-sh/cognisphere-harness`, and `agents/`).
 The harness dir is a git repo, so every change is a reviewable diff with trivial
 rollback. **Do not** touch `.secrets/` contents unless a breaking change
 explicitly requires it, and never commit `.secrets/`.
@@ -32,7 +32,7 @@ cognisphere upgrade            # prints data version, code version, and the
 
 - If it says **"Up to date"** → stop; nothing to migrate.
 - If **data version is ahead of code** → the code hasn't been bumped. Run phase 1
-  first: `cognisphere upgrade --to <target>` (or `pnpm add @cognisphere/cognisphere-harness@<target>`), then re-run `cognisphere upgrade`.
+  first: `cognisphere upgrade --to <target>` (or `pnpm add @cognisphere-sh/cognisphere-harness@<target>`), then re-run `cognisphere upgrade`.
 - Otherwise you get a **breaking-change window** `(data, code]` to apply.
 
 If the user passed a target version, bump first with

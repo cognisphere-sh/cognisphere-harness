@@ -5,8 +5,8 @@ agent-runner subsystem (lifecycle, queues, RPC) is documented separately
 in [`server.md`](./server.md); this doc covers only what's reachable over
 HTTP and how routes are gated.
 
-If you're new and want to read code: start in `packages/harness/core/main.ts`,
-follow `packages/harness/api/*.ts`.
+If you're new and want to read code: start in `packages/harness/src/core/main.ts`,
+follow `packages/harness/src/api/*.ts`.
 
 ---
 
@@ -78,7 +78,7 @@ not to gauge agent health (use `/api/agents` for that).
 
 ## 3. Auth routes — `/api/auth/*`
 
-Implemented in `packages/harness/api/auth.ts`. File-backed user store at
+Implemented in `packages/harness/src/api/auth.ts`. File-backed user store at
 `<harnessRoot>/.secrets/users.json`:
 
 ```json
@@ -123,7 +123,7 @@ between rendering the login form and the app shell.
 
 ## 4. Agents — `/api/agents/*`
 
-Implemented in `packages/harness/api/agents.ts`. All routes require auth.
+Implemented in `packages/harness/src/api/agents.ts`. All routes require auth.
 
 `agents.list()` / `am.get()` / runtime DB methods are the data source;
 mutations route through `AgentManager` lifecycle calls described in
@@ -470,7 +470,7 @@ possible briefly during shutdown).
 
 ## 5. Filesystem — `/api/agents/:id/fs/*`
 
-Implemented in `packages/harness/api/files.ts`. Used by the web UI's
+Implemented in `packages/harness/src/api/files.ts`. Used by the web UI's
 file editor to browse the agent's directory and edit files in place.
 
 Every route validates that the resolved absolute path is contained
@@ -560,7 +560,7 @@ Recursive mkdir. Returns `{ "path": "<rel>" }`.
 
 ## 6. Secrets — `/api/secrets`
 
-Implemented in `packages/harness/api/secrets.ts`. Both routes require
+Implemented in `packages/harness/src/api/secrets.ts`. Both routes require
 auth.
 
 The wire and on-disk shapes are identical (bucketed under each agent;
@@ -634,7 +634,7 @@ logged but don't fail the save — the file write already succeeded.
 
 ## 7. Models — `/api/models`
 
-Implemented in `packages/harness/api/models.ts`. Reads/writes the global
+Implemented in `packages/harness/src/api/models.ts`. Reads/writes the global
 `<harnessRoot>/.secrets/models.json`. All routes require auth.
 
 The provider catalog (id, displayName, `CredField[]`, default model
@@ -796,7 +796,7 @@ pi's auth.json, reloads running agents using the provider.
 
 ## 8. Harness — `/api/harness`
 
-Implemented in `packages/harness/api/harness.ts`. Reads/writes the
+Implemented in `packages/harness/src/api/harness.ts`. Reads/writes the
 harness-wide settings file at `<harnessRoot>/harness.json`. Both routes
 require auth.
 
@@ -836,7 +836,7 @@ Response:
 
 ## 9. Admin chat — `/admin/*`
 
-Implemented in `packages/harness/api/admin.ts`. Both routes require
+Implemented in `packages/harness/src/api/admin.ts`. Both routes require
 auth. Predates the `/api` namespace; the SPA's chat view still calls
 these.
 
@@ -883,7 +883,7 @@ Errors:
 
 ## 10. Plugin webhooks — `/webhook/*`
 
-Implemented in `packages/harness/api/webhook.ts`. **Not** gated by auth
+Implemented in `packages/harness/src/api/webhook.ts`. **Not** gated by auth
 — this surface receives unauthenticated external traffic.
 
 URL shape: `/webhook/<agentId>/<pluginId>/<rest>`. The harness:

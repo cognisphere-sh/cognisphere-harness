@@ -36,7 +36,7 @@ deployment, put the harness under `~/.cognisphere/<id>` — the location the
 ```bash
 export GITHUB_TOKEN=<read:packages token>
 mkdir -p ~/.cognisphere && cd ~/.cognisphere
-npx @cognisphere/cognisphere-harness init <harness-id>     # creates ./<harness-id>
+npx @cognisphere-sh/cognisphere-harness init <harness-id>     # creates ./<harness-id>
 cd <harness-id>
 pnpm install                                               # pins code via lockfile
 ```

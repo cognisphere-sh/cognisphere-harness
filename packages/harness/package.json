@@ -1,17 +1,18 @@
 {
-  "name": "@cognisphere/cognisphere-harness",
+  "name": "@cognisphere-sh/cognisphere-harness",
   "version": "0.1.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cognisphere-sh/cognisphere-harness.git",
+    "directory": "packages/harness"
+  },
   "bin": {
     "cognisphere": "bin/cognisphere.mjs"
   },
   "files": [
     "bin",
-    "cli",
-    "core",
-    "api",
-    "plugins",
-    "base-agent",
+    "src",
     "dist-web",
     "CHANGELOG.md"
   ],
@@ -22,13 +23,13 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "dev": "tsx watch core/main.ts",
-    "start": "tsx core/main.ts",
+    "dev": "tsx watch src/core/main.ts",
+    "start": "tsx src/core/main.ts",
     "prepack": "node scripts/prepack.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint core api plugins base-agent cli",
-    "lint:fix": "eslint core api plugins base-agent cli --fix",
-    "check": "tsc --noEmit && eslint core api plugins base-agent cli"
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "check": "tsc --noEmit && eslint src"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",

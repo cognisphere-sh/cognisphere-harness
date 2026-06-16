@@ -1,12 +1,13 @@
 /**
  * Shared helpers for the `cognisphere` CLI. The CLI runs in two contexts:
  *
- *  1. Bootstrap — `npx @cognisphere/cognisphere-harness init <id>` (no harness yet).
+ *  1. Bootstrap — `npx @cognisphere-sh/cognisphere-harness init <id>` (no harness yet).
  *  2. Inside an installed harness — cwd is the harness data dir, which has a
  *     `package.json` depending on the harness and `node_modules/.../cli`.
  *
- * `PKG_ROOT` resolves to the installed (or in-repo) package root, where the
- * shipped `base-agent/`, `plugins/`, `dist-web/`, and `CHANGELOG.md` live.
+ * `PKG_ROOT` is the package root (holds `package.json` and the bundled
+ * `dist-web/` + `CHANGELOG.md`); `SRC_ROOT` is `src/` inside it (the engine,
+ * `plugins/`, and `base-agent/`).
  */
 import {
   cpSync,
@@ -18,20 +19,24 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = dirname(fileURLToPath(import.meta.url)); // src/cli
 
-/** Package root — `.../node_modules/@cognisphere/cognisphere-harness` when
- *  installed, or `packages/harness` in the monorepo. */
-export const PKG_ROOT = resolve(HERE, "..");
+/** Package root — `.../node_modules/@cognisphere-sh/cognisphere-harness` when
+ *  installed, or `packages/harness` in the monorepo. Holds `package.json` and
+ *  the bundled `dist-web/` + `CHANGELOG.md`. */
+export const PKG_ROOT = resolve(HERE, "..", "..");
+
+/** Source root (`src/`) — the engine, plugins, and base template. */
+const SRC_ROOT = resolve(HERE, "..");
 
 /** Plugins shipped with the package (the catalog + core plugins). */
-export const BUILTIN_PLUGINS_DIR = join(PKG_ROOT, "plugins");
+export const BUILTIN_PLUGINS_DIR = join(SRC_ROOT, "plugins");
 
 /** The single base template every agent forks from. */
-export const BASE_AGENT_DIR = join(PKG_ROOT, "base-agent");
+export const BASE_AGENT_DIR = join(SRC_ROOT, "base-agent");
 
 /** The server process entrypoint. */
-export const MAIN_TS = join(PKG_ROOT, "core", "main.ts");
+export const MAIN_TS = join(SRC_ROOT, "core", "main.ts");
 
 /** Core plugins are bundled and resolved from the package; forking them is a
  *  footgun, so `plugin add` refuses these ids. */

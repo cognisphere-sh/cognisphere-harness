@@ -131,7 +131,7 @@ collaborating with a teammate.
 | `gws` | Google Workspace / Gmail integration (polling + actions). |
 
 Authoring a new source is a single file implementing the `Plugin` interface in
-[`packages/harness/core/types.ts`](packages/harness/core/types.ts). Drop it under
+[`packages/harness/src/core/types.ts`](packages/harness/src/core/types.ts). Drop it under
 `plugins/<id>/` (user-space plugins shadow built-ins on id collision) and it's
 dynamically imported on boot.
 
@@ -154,7 +154,7 @@ you own. See [`docs/distribution-and-deployment.md`](docs/distribution-and-deplo
 export GITHUB_TOKEN=<token with read:packages>
 
 # 1. Scaffold a harness data dir in the current directory (./my-harness)
-npx @cognisphere/cognisphere-harness init my-harness   # --root <dir> to put it elsewhere
+npx @cognisphere-sh/cognisphere-harness init my-harness   # --root <dir> to put it elsewhere
 
 # 2. Install the harness, then scaffold an agent + (optional) a catalog plugin
 cd my-harness
@@ -177,8 +177,8 @@ surfaces and mounts no web UI. Full command surface:
 ### Develop the harness (monorepo)
 
 ```bash
-git clone https://github.com/t0r0id/CogniSphere.git
-cd CogniSphere
+git clone https://github.com/cognisphere-sh/cognisphere-harness.git
+cd cognisphere-harness
 pnpm install                 # all workspace deps (harness + web)
 pnpm run build:web           # (optional) build the UI; without it → JSON status page
 pnpm run dev                 # tsx watch (hot reload) — or `pnpm start`
@@ -231,19 +231,21 @@ Full route reference, request/response shapes, and the auth model:
 ```
 cognisphere-harness/                # pnpm workspace
 ├── packages/
-│   ├── harness/                    # @cognisphere/cognisphere-harness (publishable backend)
-│   │   ├── bin/cognisphere.mjs     # CLI entry shim
-│   │   ├── cli/                    # the `cognisphere` CLI (init, agent, plugin, dev, up, upgrade)
-│   │   ├── core/                   # agent-runner engine + the process entrypoint
-│   │   │   ├── main.ts             # boot + route wiring
-│   │   │   ├── agent-manager.ts    # owns all agents
-│   │   │   ├── runner.ts           # queue + workers + spawn pi
-│   │   │   ├── queue.ts            # per-agent SQLite WAL queue
-│   │   │   ├── rpc.ts              # pi --mode rpc client
-│   │   │   └── plugin-registry.ts
-│   │   ├── api/                    # HTTP routes (/api, /admin, /webhook)
-│   │   ├── plugins/                # built-in plugins: admin, scheduler, telegram, gws
-│   │   └── base-agent/             # the base template every agent forks from
+│   ├── harness/                    # @cognisphere-sh/cognisphere-harness (publishable backend)
+│   │   ├── bin/cognisphere.mjs     # CLI entry shim (published `cognisphere` bin)
+│   │   ├── scripts/prepack.mjs     # publish-time: bundle web dist + CHANGELOG
+│   │   └── src/                    # all TypeScript source + shipped runtime assets
+│   │       ├── core/               # agent-runner engine + the process entrypoint
+│   │       │   ├── main.ts         # boot + route wiring
+│   │       │   ├── agent-manager.ts# owns all agents
+│   │       │   ├── runner.ts       # queue + workers + spawn pi
+│   │       │   ├── queue.ts        # per-agent SQLite WAL queue
+│   │       │   ├── rpc.ts          # pi --mode rpc client
+│   │       │   └── plugin-registry.ts
+│   │       ├── api/                # HTTP routes (/api, /admin, /webhook)
+│   │       ├── cli/                # the `cognisphere` CLI (init, agent, plugin, dev, up, upgrade)
+│   │       ├── plugins/            # built-in plugins: admin, scheduler, telegram, gws
+│   │       └── base-agent/         # the base template every agent forks from
 │   └── web/                        # cognisphere-web — React + Vite + shadcn/ui console
 ├── docs/                           # design & reference (see below)
 ├── CHANGELOG.md                    # breaking-change source for `cognisphere upgrade`

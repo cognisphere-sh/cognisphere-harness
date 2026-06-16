@@ -22,14 +22,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **`cognisphere` CLI** (`packages/harness/cli/`, bin shim `bin/cognisphere.mjs`):
+- **`cognisphere` CLI** (`packages/harness/src/cli/`, bin shim `bin/cognisphere.mjs`):
   `init`, `agent new`, `plugin add`, `dev`, `serve`, `up`/`logs`/`status`
   (systemd user services), and `upgrade`. `dev` runs the backend (watch) and,
   in the monorepo, the Vite dev server (HMR) together (`--port`/`--web-port`/
   `--no-web`); `serve` takes `--port` and `--headless` (mount no web UI —
   backend-only deploy, via `COGNISPHERE_HEADLESS`). See
   [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) §10.
-- **Publishable package.** `@cognisphere/cognisphere-harness` ships a `bin`, a
+- **Publishable package.** `@cognisphere-sh/cognisphere-harness` ships a `bin`, a
   `files` allowlist, `publishConfig` (GitHub Packages), and a `prepack` step that
   bundles the built web UI (`dist-web/`) and the root `CHANGELOG.md` into the
   package. `tsx` is now a runtime dependency.
@@ -41,8 +41,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Repository restructured into a pnpm workspace with two packages:
-  `packages/harness` (`@cognisphere/cognisphere-harness` — backend source under
-  `core/` and `api/`, plus `plugins/`, `base-agent/`, and `cli/`) and
+  `packages/harness` (`@cognisphere-sh/cognisphere-harness` — backend; all
+  TypeScript source under `src/` (`core/`, `api/`, `cli/`, `plugins/`,
+  `base-agent/`), with `bin/` + `scripts/` at the package root) and
   `packages/web` (the React UI). Tooling moved to pnpm; `pnpm check` runs
   typecheck + lint across both packages. No on-disk harness artifacts are
   affected — this is a source-layout change only.

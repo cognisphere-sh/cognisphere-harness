@@ -1,0 +1,42 @@
+# Publish @cognisphere-sh/cognisphere-harness to GitHub Packages.
+#
+# Triggered when a GitHub Release is published (tag the release with the version
+# you bumped in packages/harness/package.json), or manually.
+#
+# NOTE: the automatic GITHUB_TOKEN only has `packages: write` for the repo's own
+# owner. Because the package scope is `@cognisphere-sh`, this workflow must run
+# in a repository under the `cognisphere-sh` org for the token to be able to
+# publish. If the repo lives elsewhere, swap GITHUB_TOKEN for an org PAT with
+# write:packages stored as a secret.
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      # Supply the registry auth token (the committed .npmrc omits it).
+      - run: echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" >> .npmrc
+      # `publish` runs the package's prepack: builds the web UI into dist-web/
+      # and bundles CHANGELOG.md. --no-git-checks: CI runs from a detached tag.
+      - run: pnpm --filter @cognisphere-sh/cognisphere-harness publish --no-git-checks

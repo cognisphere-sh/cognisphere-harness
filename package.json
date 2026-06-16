@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @cognisphere/cognisphere-harness dev",
+    "dev": "pnpm --filter @cognisphere-sh/cognisphere-harness dev",
     "dev:web": "pnpm --filter cognisphere-web dev",
-    "start": "pnpm --filter @cognisphere/cognisphere-harness start",
+    "start": "pnpm --filter @cognisphere-sh/cognisphere-harness start",
     "build:web": "pnpm --filter cognisphere-web build",
-    "typecheck": "pnpm --filter @cognisphere/cognisphere-harness typecheck",
+    "typecheck": "pnpm --filter @cognisphere-sh/cognisphere-harness typecheck",
     "typecheck:web": "pnpm --filter cognisphere-web typecheck",
-    "lint": "pnpm --filter @cognisphere/cognisphere-harness lint",
+    "lint": "pnpm --filter @cognisphere-sh/cognisphere-harness lint",
     "lint:web": "pnpm --filter cognisphere-web lint",
     "check": "pnpm -r run check"
   },
