@@ -74,10 +74,7 @@ self-evolution) as additive modules you can grow into.
 | 🔁 **Resumable sub-agents** | Sub-agents are `pi` subprocesses; reuse the same `--session-dir` and a child resumes its prior session across many parent batches. Persistence by convention, not a heavyweight subsystem. |
 | ⚡ **Per-thread queueing** | A per-agent SQLite WAL queue with a small worker pool serializes work per thread while allowing concurrent batches across threads up to `maxConcurrentSlots`. |
 
-> CogniSphere is the foundation; you grow it into your own platform. See the full,
-> scored seven-criteria comparison against [Nous Research's `hermes-agent`](https://github.com/NousResearch/hermes-agent)
-> in [`docs/cognisphere-vs-hermes.html`](docs/cognisphere-vs-hermes.html) — including
-> where hermes wins (memory compaction, self-evolution) and what's worth porting.
+> CogniSphere is the foundation; you grow it into your own platform.
 
 ---
 
@@ -279,6 +276,4 @@ update for which changes, the simplicity/surgical-changes bias, etc.).
 ## Credits
 
 CogniSphere builds on the [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-coding-agent runtime for the per-batch LLM loop, and takes design inspiration
-from [Nous Research's `hermes-agent`](https://github.com/NousResearch/hermes-agent)
-(notably its memory-compaction and skill-curation ideas — see the comparison doc).
+coding-agent runtime for the per-batch LLM loop.
