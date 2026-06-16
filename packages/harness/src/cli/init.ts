@@ -50,6 +50,9 @@ export function cmdInit(argv: string[]): void {
     private: true,
     type: "module",
     dependencies: { "@cognisphere-sh/cognisphere-harness": version },
+    // better-sqlite3 ships a native addon; pnpm 10 blocks build scripts unless
+    // the package is pre-approved here.
+    pnpm: { onlyBuiltDependencies: ["better-sqlite3"] },
   });
 
   writeFileSync(join(dir, ".npmrc"), NPMRC);

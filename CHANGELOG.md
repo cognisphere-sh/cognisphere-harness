@@ -18,6 +18,15 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1]
+
+### Fixed
+
+- `cognisphere init` now pre-approves `better-sqlite3` in the scaffolded
+  `package.json` (`pnpm.onlyBuiltDependencies`), so `pnpm install` builds its
+  native addon instead of silently skipping it (which crashed agent boot with
+  "Could not locate the bindings file").
+
 ## [0.2.0]
 
 ### Added
