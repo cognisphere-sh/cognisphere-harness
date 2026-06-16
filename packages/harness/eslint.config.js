@@ -8,7 +8,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['core/**/*.ts', 'api/**/*.ts', 'plugins/**/*.ts', 'base-agent/**/*.ts'],
+    files: ['core/**/*.ts', 'api/**/*.ts', 'plugins/**/*.ts', 'base-agent/**/*.ts', 'cli/**/*.ts'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

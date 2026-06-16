@@ -16,6 +16,6 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["core/**/*.ts", "api/**/*.ts", "plugins/**/*.ts", "base-agent/**/*.ts"],
+  "include": ["core/**/*.ts", "api/**/*.ts", "plugins/**/*.ts", "base-agent/**/*.ts", "cli/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

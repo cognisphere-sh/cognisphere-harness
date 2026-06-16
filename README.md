@@ -139,30 +139,55 @@ dynamically imported on boot.
 
 ## Quick start
 
-**Prerequisites:** Node ≥ 20 and pnpm.
+**Prerequisites:** Node ≥ 20 and pnpm. Two ways in: **run a harness** (you
+operate agents) or **develop the harness** (you hack on CogniSphere itself).
+
+### Run a harness (the `cognisphere` CLI)
+
+CogniSphere installs as a **versioned dependency** — you scaffold a small data
+dir and point it at the package, with no codebase copy per deployment. The code
+is managed by the lockfile; your agents, plugins, and secrets are the only thing
+you own. See [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md).
 
 ```bash
-# 1. Clone
-git clone https://github.com/t0r0id/CogniSphere.git
-cd CogniSphere
+# The package lives on a private registry (GitHub Packages) — authenticate once:
+export GITHUB_TOKEN=<token with read:packages>
 
-# 2. Install all workspace deps (harness + web)
+# 1. Scaffold a harness data dir at ~/.cognisphere/<id>
+npx @cognisphere/cognisphere-harness init my-harness
+
+# 2. Install the harness, then scaffold an agent + (optional) a catalog plugin
+cd ~/.cognisphere/my-harness
 pnpm install
+cognisphere agent new dr-renu          # forks the base template into agents/dr-renu/
+cognisphere plugin add telegram        # forks a catalog plugin into plugins/telegram/
 
-# 3. (optional) build the web UI — without it the server serves a JSON status page
-pnpm run build:web
-
-# 4. Run the server
-pnpm run dev     # tsx watch (hot reload)
-# or
-pnpm start       # one-shot
+# 3. Run it locally (hot reload)
+cognisphere dev
 ```
 
-The server listens on `http://127.0.0.1:7331` by default.
+Configure the agent's model + secrets (Models/Secrets settings, or `.secrets/`),
+then edit `agents/dr-renu/` freely — it's yours, git-tracked. Deploy to a Linux
+host with `cognisphere up` (systemd) and migrate across versions with
+`cognisphere upgrade`. Full command surface:
+[distribution-and-deployment.md §10](docs/distribution-and-deployment.md#10-cli-surface).
+
+### Develop the harness (monorepo)
+
+```bash
+git clone https://github.com/t0r0id/CogniSphere.git
+cd CogniSphere
+pnpm install                 # all workspace deps (harness + web)
+pnpm run build:web           # (optional) build the UI; without it → JSON status page
+pnpm run dev                 # tsx watch (hot reload) — or `pnpm start`
+```
+
+The server listens on `http://127.0.0.1:7331`, running against
+`~/.cognisphere/default` (override with the env vars below).
 
 ### Configuration
 
-Set via environment (a `.env` file in the repo root is loaded automatically):
+Set via environment (a `.env` file in the package cwd is loaded automatically):
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -172,21 +197,12 @@ Set via environment (a `.env` file in the repo root is loaded automatically):
 | `BIND_HOST` | `127.0.0.1` | Listen interface. |
 | `SERVER_BASE_URL` | `http://<host>:<port>` | Base URL used to build plugin webhook URLs. |
 
+> The CLI derives `COGNISPHERE_ROOT_DIR` / `COGNISPHERE_ID` from the harness dir
+> (the cwd), so `cognisphere dev` / `serve` need no env wiring.
+
 Sensitive files (`secrets.json`, `models.json`, `users.json`, `session-key`)
-live under `<rootDir>/<harnessId>/.secrets/` (mode `0600`, keep out of VCS).
-
-### Creating an agent (v0 manual workflow)
-
-```bash
-ROOT=~/.cognisphere/default
-ID=dr-renu   NAME="Dr Renu"
-mkdir -p "$ROOT/agents/$ID"/{system_prompts,workspace,sessions,plugins}
-# write agent.json, the system prompts (system_prompts/), and workspace/index.md,
-# install plugins under plugins/<id>/, then restart the server (or call the agents API).
-```
-
-Full recipe: [`docs/v0-deferred.md`](docs/v0-deferred.md) §3.1 and
-[`docs/server.md`](docs/server.md) §7.
+live under `<rootDir>/<harnessId>/.secrets/` (mode `0600`, kept out of VCS by the
+generated `.gitignore`).
 
 ---
 
@@ -206,21 +222,24 @@ Full route reference, request/response shapes, and the auth model:
 ## Project layout
 
 ```
-cognisphere-harness/
-├── apps/
-│   ├── server/                 # the harness (Node + Hono + SQLite)
-│   │   ├── src/
-│   │   │   ├── main.ts         # boot + route wiring
-│   │   │   ├── agent-manager.ts# owns all agents
-│   │   │   ├── runner.ts       # queue + workers + spawn pi
-│   │   │   ├── queue.ts        # per-agent SQLite WAL queue
-│   │   │   ├── rpc.ts          # pi --mode rpc client
-│   │   │   ├── plugin-registry.ts
-│   │   │   └── api/            # HTTP routes
-│   │   ├── plugins/            # built-in plugins: admin, scheduler, telegram, gws
-│   │   └── agents/templates/   # base agent template (system prompts, extensions)
-│   └── web/                    # React + Vite + shadcn/ui operator console
-├── docs/                       # design & reference (see below)
+cognisphere-harness/                # pnpm workspace
+├── packages/
+│   ├── harness/                    # @cognisphere/cognisphere-harness (publishable backend)
+│   │   ├── bin/cognisphere.mjs     # CLI entry shim
+│   │   ├── cli/                    # the `cognisphere` CLI (init, agent, plugin, dev, up, upgrade)
+│   │   ├── core/                   # agent-runner engine + the process entrypoint
+│   │   │   ├── main.ts             # boot + route wiring
+│   │   │   ├── agent-manager.ts    # owns all agents
+│   │   │   ├── runner.ts           # queue + workers + spawn pi
+│   │   │   ├── queue.ts            # per-agent SQLite WAL queue
+│   │   │   ├── rpc.ts              # pi --mode rpc client
+│   │   │   └── plugin-registry.ts
+│   │   ├── api/                    # HTTP routes (/api, /admin, /webhook)
+│   │   ├── plugins/                # built-in plugins: admin, scheduler, telegram, gws
+│   │   └── base-agent/             # the base template every agent forks from
+│   └── web/                        # cognisphere-web — React + Vite + shadcn/ui console
+├── docs/                           # design & reference (see below)
+├── CHANGELOG.md                    # breaking-change source for `cognisphere upgrade`
 └── package.json
 ```
 
@@ -233,6 +252,7 @@ cognisphere-harness/
 | [`docs/hld.md`](docs/hld.md) | High-level design — the contract for all subsystems. |
 | [`docs/server.md`](docs/server.md) | Implemented agent-runner subsystem: process model, on-disk layout, components, flows. |
 | [`docs/api.md`](docs/api.md) | HTTP surface: auth model, every route, request/response shapes. |
+| [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) | How CogniSphere is packaged, installed, deployed, and upgraded — the `cognisphere` CLI, the registry, multi-harness deployment, the upgrade flow. |
 | [`docs/v0-deferred.md`](docs/v0-deferred.md) | What v0 cut from the HLD, with manual workflows in place. |
 | [`docs/improvement-design.md`](docs/improvement-design.md) | Roadmap for self-evolution and memory features. |
 | [`docs/cognisphere-vs-hermes.html`](docs/cognisphere-vs-hermes.html) | Scored comparison vs `hermes-agent`. |
@@ -243,8 +263,8 @@ cognisphere-harness/
 ## Status & roadmap
 
 CogniSphere is at **v0**. Shipping today: the runner, per-agent queue, plugin
-contract, the four built-in plugins, and the operator web console. Agents are
-created manually on disk.
+contract, the four built-in plugins, the operator web console, and the
+`cognisphere` CLI for scaffolding/running/deploying/upgrading a harness.
 
 Designed but **deferred** (see [`docs/v0-deferred.md`](docs/v0-deferred.md)):
 

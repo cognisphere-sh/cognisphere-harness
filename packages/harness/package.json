@@ -1,15 +1,34 @@
 {
   "name": "@cognisphere/cognisphere-harness",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "bin": {
+    "cognisphere": "bin/cognisphere.mjs"
+  },
+  "files": [
+    "bin",
+    "cli",
+    "core",
+    "api",
+    "plugins",
+    "base-agent",
+    "dist-web",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "scripts": {
     "dev": "tsx watch core/main.ts",
     "start": "tsx core/main.ts",
+    "prepack": "node scripts/prepack.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint core api plugins base-agent",
-    "lint:fix": "eslint core api plugins base-agent --fix",
-    "check": "tsc --noEmit && eslint core api plugins base-agent"
+    "lint": "eslint core api plugins base-agent cli",
+    "lint:fix": "eslint core api plugins base-agent cli --fix",
+    "check": "tsc --noEmit && eslint core api plugins base-agent cli"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
@@ -21,14 +40,14 @@
     "dotenv": "^16.4.7",
     "hono": "^4.6.14",
     "pino": "^9.5.0",
-    "pino-pretty": "^13.0.0"
+    "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.2",
     "eslint": "^9.17.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.2"
   }

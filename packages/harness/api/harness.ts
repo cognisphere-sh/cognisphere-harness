@@ -23,7 +23,9 @@ export function harnessRouter(
   const r = new Hono();
   const path = harnessJsonFile(cfg);
 
-  r.get("/", (c) => c.json({ timezone: cfg.timezone, path }));
+  r.get("/", (c) =>
+    c.json({ timezone: cfg.timezone, version: cfg.version, path }),
+  );
 
   r.put("/", async (c) => {
     const body = (await c.req.json().catch(() => null)) as {
@@ -40,7 +42,11 @@ export function harnessRouter(
     }
 
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({ timezone: tz }, null, 2) + "\n");
+    // Preserve the data/migration version stamp — only timezone is editable here.
+    const next = cfg.version
+      ? { version: cfg.version, timezone: tz }
+      : { timezone: tz };
+    writeFileSync(path, JSON.stringify(next, null, 2) + "\n");
     cfg.timezone = tz;
 
     const restarted: string[] = [];

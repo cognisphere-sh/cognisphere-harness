@@ -24,7 +24,19 @@ import { PluginRegistry } from "./plugin-registry.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUILTIN_PLUGINS_DIR = resolve(HERE, "../plugins");
-const WEB_DIST_DIR = resolve(HERE, "../../web/dist");
+const WEB_DIST_DIR = resolveWebDist(HERE);
+
+/**
+ * The built UI ships in two layouts: the published package bundles it at
+ * `<pkg>/dist-web` (via the `prepack` web-bundle step), while the monorepo
+ * keeps it in the sibling web package at `packages/web/dist`. Prefer the
+ * bundled copy so an installed harness serves the UI without the workspace.
+ */
+function resolveWebDist(here: string): string {
+  const bundled = resolve(here, "../dist-web");
+  if (existsSync(bundled)) return bundled;
+  return resolve(here, "../../web/dist");
+}
 
 async function main(): Promise<void> {
   const cfg = loadConfig();

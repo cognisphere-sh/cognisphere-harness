@@ -118,7 +118,7 @@ is `<rootDir>/<harnessId>`.
 
 ```
 <rootDir>/<harnessId>/
-├── harness.json                  ← harness-wide settings ({ timezone })
+├── harness.json                  ← harness-wide settings ({ version, timezone })
 ├── .secrets/                     ← sensitive files; 0600. Keep out of VCS.
 │   ├── secrets.json                  plaintext, agent + plugin secret buckets
 │   ├── models.json                   per-provider credentials + enabled models
@@ -201,10 +201,13 @@ Loaded once at boot:
 | `SERVER_BASE_URL` | `http://${BIND_HOST}:${PORT}` | used to build `PI_WEBHOOK_BASE` |
 
 Timezone is read from `<harnessRoot>/harness.json` (shape:
-`{ "timezone": "<IANA>" }`; defaults to `UTC` if the file is missing or
-malformed). It feeds the `<harness-metadata>` block on every spawned
+`{ "version": "<semver>", "timezone": "<IANA>" }`; `timezone` defaults to
+`UTC` and `version` to `""` if the file is missing or malformed). `version`
+is the data/migration stamp (`cognisphere init` writes it, the upgrade skill
+bumps it); `timezone` feeds the `<harness-metadata>` block on every spawned
 batch and the scheduler plugin's cron timer. Edits land through
-`PUT /api/harness`, which writes the file, mutates `cfg.timezone` in
+`PUT /api/harness`, which writes the file (preserving `version`), mutates
+`cfg.timezone` in
 place, and reloads every agent.
 
 Path helpers: `harnessRoot`, `harnessJsonFile`, `agentsRoot`, `agentDir`,

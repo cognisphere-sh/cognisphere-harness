@@ -1,9 +1,11 @@
 # CogniSphere — Distribution & Deployment Design
 
-Status: **design** (target architecture). Some pieces described here (the
-`cognisphere` CLI, the upgrade skill, the plugin catalog) are not built yet.
-The repository restructure into a `packages/{harness,web}` pnpm workspace *is*
-implemented — see §3.
+Status: **mostly implemented.** The repository restructure into a
+`packages/{harness,web}` pnpm workspace (§3), the `cognisphere` CLI (§10), the
+publishing config (§7, §11), and the upgrade/deploy skills (§9) are built. What
+remains external: actually publishing to the registry (needs a token) and the
+plugin `compatibleHarness` manifest (the CLI honors it where present, but no
+builtin plugin declares one yet).
 
 This doc is the contract for how CogniSphere is packaged, installed, deployed,
 and upgraded. It supersedes the copy-the-codebase-per-deployment workflow.
@@ -251,19 +253,27 @@ upgrade:
 
 | Command | Purpose |
 |---|---|
-| `cognisphere init <id>` | scaffold a harness data dir (`harness.json`, `.secrets/` with a generated session-key, empty `agents/`) |
-| `cognisphere agent new <name>` | fork `base-agent` into `agents/<name>/` |
-| `cognisphere plugin add <id>` | fork a catalog plugin into `plugins/<id>/` (checks `compatibleHarness`) |
-| `cognisphere dev` | `tsx watch` against a chosen data dir (hot reload) |
-| `cognisphere up` / `logs` / `status` | wrap systemd/process management |
-| `cognisphere upgrade` | run the two-phase upgrade skill (§9) |
+| `cognisphere init <id>` | scaffold a harness data dir (`harness.json`, `.secrets/` with a generated session-key, `package.json`, `.npmrc`, `.gitignore`, git repo, empty `agents/`/`plugins/`) |
+| `cognisphere agent new <name>` | fork `base-agent` into `agents/<name>/` + write a starter `agent.json` |
+| `cognisphere plugin add <id>` | fork a catalog plugin into `plugins/<id>/` (refuses core plugins; honors `compatibleHarness` when declared) |
+| `cognisphere dev` | run the server under `tsx --watch` against the cwd harness (hot reload) |
+| `cognisphere serve` | run the server (no watch) — the production entry the systemd unit execs |
+| `cognisphere up` / `logs` / `status` | manage the `cognisphere@<id>` systemd **user** service |
+| `cognisphere upgrade` | drive the two-phase upgrade: show the changelog window, `--to <v>` bumps the dep, `--set-version <v>` stamps `harness.json` (§9) |
+
+The CLI derives `COGNISPHERE_ROOT_DIR`/`COGNISPHERE_ID` from the harness dir (the
+cwd) for `dev`/`serve`, so no env wiring is needed. The bin is a small JS shim
+(`bin/cognisphere.mjs`) that registers the `tsx` loader and runs the TS CLI, so
+`npx @cognisphere/cognisphere-harness init` works without a build step.
 
 ## 11. Open decisions
 
-- **Publishing.** `packages/harness` is `private: true` for now (runs from `.ts`
-  via `tsx`, no build/`bin`/`files` yet). Flipping it publishable — adding the
-  registry config (§7), a `files` allowlist that ships the prebuilt web bundle +
-  plugins + base-agent, and the `cognisphere` `bin` — is the next slice.
+- **Publishing — done.** `packages/harness` is publishable: `publishConfig`
+  (GitHub Packages, §7), a `files` allowlist, the `cognisphere` `bin`, and a
+  `prepack` step (`scripts/prepack.mjs`) that bundles the prebuilt web UI into
+  `dist-web/` and copies the root `CHANGELOG.md` into the package. `pnpm pack`
+  validates the artifact. What's left is running `pnpm publish` with a
+  `write:packages` token — an operator step, not a code change.
 - **Plugin distribution.** Catalog plugins are forkable copies (decided). Stable
   first-party plugins could additionally ship as npm packages later.
 - **Registry choice.** GitHub Packages recommended (§7); git+ssh tags as the

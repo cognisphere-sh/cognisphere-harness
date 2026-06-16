@@ -20,13 +20,29 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`cognisphere` CLI** (`packages/harness/cli/`, bin shim `bin/cognisphere.mjs`):
+  `init`, `agent new`, `plugin add`, `dev`, `serve`, `up`/`logs`/`status`
+  (systemd user services), and `upgrade`. See
+  [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) §10.
+- **Publishable package.** `@cognisphere/cognisphere-harness` ships a `bin`, a
+  `files` allowlist, `publishConfig` (GitHub Packages), and a `prepack` step that
+  bundles the built web UI (`dist-web/`) and the root `CHANGELOG.md` into the
+  package. `tsx` is now a runtime dependency.
+- **`harness.json.version`** — the data/migration version stamp, written by
+  `cognisphere init` and surfaced over `GET /api/harness`. Additive and optional;
+  existing harnesses read it as `""`.
+- **Upgrade & deploy skills** (`.claude/skills/cognisphere-{upgrade,deploy}/`).
+
 ### Changed
 
 - Repository restructured into a pnpm workspace with two packages:
   `packages/harness` (`@cognisphere/cognisphere-harness` — backend source under
-  `core/`, plus `plugins/` and `base-agent/`) and `packages/web` (the React UI).
-  Tooling moved to pnpm; `pnpm check` runs typecheck + lint across both packages.
-  No on-disk harness artifacts are affected — this is a source-layout change only.
+  `core/` and `api/`, plus `plugins/`, `base-agent/`, and `cli/`) and
+  `packages/web` (the React UI). Tooling moved to pnpm; `pnpm check` runs
+  typecheck + lint across both packages. No on-disk harness artifacts are
+  affected — this is a source-layout change only.
 
 ## [0.1.0]
 

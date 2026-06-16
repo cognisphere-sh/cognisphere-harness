@@ -800,17 +800,20 @@ Implemented in `packages/harness/api/harness.ts`. Reads/writes the
 harness-wide settings file at `<harnessRoot>/harness.json`. Both routes
 require auth.
 
-The file currently has one key: `timezone` (IANA string). It feeds the
-`<harness-metadata>` block on every spawned batch and the scheduler
-plugin's cron timer.
+The file has two keys: `timezone` (IANA string) and `version` (the
+data/migration version, written by `cognisphere init` and bumped by the
+upgrade skill). `timezone` feeds the `<harness-metadata>` block on every
+spawned batch and the scheduler plugin's cron timer; `version` is read-only
+over this API (only `timezone` is editable here).
 
 ### `GET /api/harness`
 
 ```json
-{ "timezone": "Asia/Kolkata", "path": "/.../harness.json" }
+{ "timezone": "Asia/Kolkata", "version": "0.3.0", "path": "/.../harness.json" }
 ```
 
-`timezone` defaults to `UTC` if the file is missing or malformed.
+`timezone` defaults to `UTC` if the file is missing or malformed; `version`
+is `""` when the file predates versioning.
 
 ### `PUT /api/harness`
 
@@ -819,9 +822,10 @@ plugin's cron timer.
 ```
 
 The route validates the string against `Intl.DateTimeFormat` (rejects
-unknown IANA ids with 400), writes the file, mutates `cfg.timezone` in
-place, and calls `reloadAgent` on every loaded agent so the new value
-reaches running runners and plugin contexts without a server bounce.
+unknown IANA ids with 400), writes the file (**preserving** the `version`
+stamp), mutates `cfg.timezone` in place, and calls `reloadAgent` on every
+loaded agent so the new value reaches running runners and plugin contexts
+without a server bounce.
 Response:
 
 ```json

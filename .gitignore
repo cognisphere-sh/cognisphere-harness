@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# Generated at publish time by packages/harness/scripts/prepack.mjs
+packages/harness/dist-web/
+packages/harness/CHANGELOG.md
 .env
 .env.local
 *.log

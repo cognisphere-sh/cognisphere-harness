@@ -14,6 +14,10 @@ export interface ServerConfig {
    *  reloads pick up the new value without restarting the server. */
   timezone: string;
   bindHost: string;
+  /** Data/migration version mirrored from the installed package version.
+   *  Written by `cognisphere init`, bumped by the upgrade skill. Empty
+   *  string when `harness.json` predates versioning. */
+  version: string;
 }
 
 export function loadConfig(): ServerConfig {
@@ -24,8 +28,14 @@ export function loadConfig(): ServerConfig {
   const bindHost = process.env.BIND_HOST ?? "127.0.0.1";
   const serverBaseUrl =
     process.env.SERVER_BASE_URL ?? `http://${bindHost}:${port}`;
-  const timezone = readTimezoneFromHarnessJson(rootDir, harnessId);
-  return { rootDir, harnessId, port, serverBaseUrl, timezone, bindHost };
+  const harnessJson = readHarnessJson(rootDir, harnessId);
+  const timezone =
+    typeof harnessJson.timezone === "string" && harnessJson.timezone.length > 0
+      ? harnessJson.timezone
+      : "UTC";
+  const version =
+    typeof harnessJson.version === "string" ? harnessJson.version : "";
+  return { rootDir, harnessId, port, serverBaseUrl, timezone, bindHost, version };
 }
 
 export function harnessRoot(cfg: ServerConfig): string {
@@ -46,25 +56,21 @@ export function harnessJsonFile(cfg: ServerConfig): string {
   return join(harnessRoot(cfg), "harness.json");
 }
 
-function readTimezoneFromHarnessJson(rootDir: string, harnessId: string): string {
+function readHarnessJson(
+  rootDir: string,
+  harnessId: string,
+): { timezone?: unknown; version?: unknown } {
   const path = join(rootDir, harnessId, "harness.json");
-  if (!existsSync(path)) return "UTC";
+  if (!existsSync(path)) return {};
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
-      timezone?: unknown;
-    };
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      typeof parsed.timezone === "string" &&
-      parsed.timezone.length > 0
-    ) {
-      return parsed.timezone;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as { timezone?: unknown; version?: unknown };
     }
   } catch {
-    // fall through to default
+    // fall through to defaults
   }
-  return "UTC";
+  return {};
 }
 
 export function agentsRoot(cfg: ServerConfig): string {
