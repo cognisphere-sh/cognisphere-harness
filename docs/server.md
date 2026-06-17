@@ -749,14 +749,20 @@ Env handed to pi:
   `settings.json` default. If `subagentModel` names a provider other than the
   agent default, that provider's credentials are also injected (so the
   sub-agent can authenticate); the agent default provider's key is already
-  present via `envSecrets`. On every fresh spawn the wrapper also appends two
-  files via `--append-system-prompt`: `system_prompts/0-base_prompt.md` (the
+  present via `envSecrets`. On every spawn the wrapper sets the sub-agent's
+  system prompt by concatenating two files into a single `--system-prompt`
+  value (the flag is not repeatable): `system_prompts/0-base_prompt.md` (the
   shared base context the main agent also gets) and
-  `scripts/agent/sub-agent-prompt.md` (the sub-agent-only role — "stdout is
-  your return value", stay scoped). So a sub-agent's prompt is the parent's
-  task brief + base + sub-agent role, mirroring the main agent's base +
-  main-agent role. It's skipped on `-c`/`--continue`, where the prompt was
-  already baked on the first call. The sub-agent role file lives outside
+  `scripts/agent/sub-agent-prompt.md` (the sub-agent-only role —
+  "stdout is your return value", stay scoped). `--system-prompt` (not
+  `--append-system-prompt`) so the prompt is exactly these two files and pi's
+  default SYSTEM.md/built-in doesn't leak in. The main agent passes the
+  task-specific brief in the **message** (positional arg), not via
+  `--system-prompt` — so the brief lives in the session history and survives
+  re-invocation. The wrapper re-sets the system prompt on every call including
+  `-c`/`--continue`: pi does not persist the system prompt to the session
+  JSONL, so on resume it must be re-injected (same as the main agent's prompt
+  is re-passed on every `spawnPi`). The sub-agent role file lives outside
   `system_prompts/` so it never leaks into the main agent's concatenated prompt.
 - All `envSecrets` (provider env from `models.json` ⨁ every secret
   under this agent flattened to bare keys, with collisions caught at

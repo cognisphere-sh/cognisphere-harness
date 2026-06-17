@@ -18,6 +18,30 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.2]
+
+### Fixed
+
+- Sub-agents lost their system prompt on resume (`-c`/`--continue`). The
+  `subagent` wrapper skipped re-injecting the base + sub-agent-role prompt on
+  continue, assuming pi had persisted it — but pi never writes the system
+  prompt to the session JSONL, so resumed sub-agents fell back to pi's default
+  identity. The wrapper now concatenates `0-base_prompt.md` +
+  `sub-agent-prompt.md` into a single `--system-prompt` value (replace, not
+  `--append-system-prompt`, so pi's default doesn't leak in) and sets it on
+  every call including `-c`. The task-specific brief now goes in the **message**
+  (positional arg) instead of `--system-prompt`, so it lives in session history
+  and survives re-invocation. The main-agent prompt was updated to match.
+
+### Breaking changes
+
+- `subagent` wrapper rewrites system-prompt handling: concatenates base +
+  sub-agent role into one `--system-prompt`, set on every call (incl. `-c`).
+  [affects: agents/*/scripts/agent/subagent]
+- Main-agent prompt now instructs putting the sub-agent task brief in the
+  message, never passing `--system-prompt`.
+  [affects: agents/*/system_prompts/0.1-main-agent.md]
+
 ## [0.3.1]
 
 ### Added

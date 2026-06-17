@@ -287,9 +287,9 @@ export function ChatWindow({ agentId }: Props) {
     send.mutate({ text, files: stagedFiles });
   };
 
-  const onFilesPicked = (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setStagedFiles((prev) => [...prev, ...Array.from(files)]);
+  const onFilesPicked = (picked: File[]) => {
+    if (picked.length === 0) return;
+    setStagedFiles((prev) => [...prev, ...picked]);
   };
 
   const removeStaged = (idx: number) => {
@@ -467,7 +467,11 @@ export function ChatWindow({ agentId }: Props) {
             panelTab !== "usage" && "hidden",
           )}
         >
-          <UsagePanel agentId={agentId} threadId={selected?.threadId ?? null} />
+          <UsagePanel
+            agentId={agentId}
+            threadId={selected?.threadId ?? null}
+            active={panelTab === "usage"}
+          />
         </div>
         <div
           className={cn(
@@ -494,8 +498,12 @@ export function ChatWindow({ agentId }: Props) {
               multiple
               className="hidden"
               onChange={(e) => {
-                onFilesPicked(e.target.files);
+                // Snapshot to a stable File[] before resetting the input:
+                // `value = ""` empties the live FileList, so reading it
+                // lazily inside the setState updater would stage nothing.
+                const picked = e.target.files ? Array.from(e.target.files) : [];
                 e.target.value = "";
+                onFilesPicked(picked);
               }}
             />
             <Button
@@ -597,9 +605,14 @@ function PanelTab({
 function UsagePanel({
   agentId,
   threadId,
+  active,
 }: {
   agentId: string;
   threadId: string | null;
+  /** This panel stays mounted (hidden via CSS) under the Messages tab, so
+   *  gate fetching on visibility — otherwise it polls /usage every 5s for
+   *  data nobody can see. */
+  active: boolean;
 }) {
   // `enabled` keeps us from firing a request for a pending new thread
   // (sessionId === "" and no server-side row yet). The 5s refetch
@@ -607,7 +620,7 @@ function UsagePanel({
   const { data, isLoading, error } = useQuery({
     queryKey: ["usage", agentId, threadId],
     queryFn: () => endpoints.readUsage(agentId, threadId as string),
-    enabled: !!threadId,
+    enabled: !!threadId && active,
     refetchInterval: 5_000,
   });
   if (!threadId) {
