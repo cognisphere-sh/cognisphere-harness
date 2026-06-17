@@ -18,6 +18,36 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.3]
+
+### Fixed
+
+- Sub-agents could receive a single task brief as dozens of phantom one-word
+  messages. The `subagent` wrapper passed the brief as a positional argv entry,
+  and `pi -p` treats every positional as a separate user turn. A literal
+  unescaped quote inside the brief (e.g. a pasted email body like
+  `Message: "Hi Chris, ..."`) let the shell word-split the single intended arg
+  into many argv entries, each replayed as its own message. The wrapper now
+  routes the brief to `pi` on **stdin** (`pi -p` reads its prompt from stdin
+  when no positional message is given), so quoting inside the brief can no
+  longer fan out into phantom turns. Flags still pass through argv verbatim and
+  the caller interface is unchanged (`subagent "<brief>" --flags`).
+
+### Changed
+
+- Base prompt now tells agents to keep `workspace/` for what must persist:
+  write intermediate/throwaway files under `/tmp` (or delete them), and don't
+  copy plugin inbox input files into `workspace/` unless they genuinely need to
+  outlive the inbox.
+
+### Breaking changes
+
+- `subagent` wrapper now passes the task brief to `pi` on stdin instead of as a
+  positional argument. [affects: agents/*/scripts/agent/subagent]
+- Base prompt adds workspace-hygiene guidance (intermediate files to `/tmp`;
+  don't copy inbox inputs into `workspace/` unless persisting).
+  [affects: agents/*/system_prompts/0-base_prompt.md]
+
 ## [0.3.2]
 
 ### Fixed
