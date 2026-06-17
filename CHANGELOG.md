@@ -18,6 +18,44 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0]
+
+### Changed
+
+- **Base-agent system prompt split into three role-scoped parts** to remove the
+  duplication that arose when sub-agents were handed a hand-copied harness
+  prompt:
+  - `0-base_prompt.md` is now the **shared base** — the operating manual (tools,
+    files, workspace, sessions, web, browser) common to every agent. It no
+    longer carries agent identity or main-agent-only framing.
+  - `0.1-main-agent.md` (new) holds the **main-agent-only** role: threads,
+    plugins, message metadata, the communication model, and the guide on how to
+    spawn sub-agents (merged in from the old `0.1-subagents.md`).
+  - `scripts/agent/sub-agent-prompt.md` (new) holds the **sub-agent-only** role
+    ("stdout is your return value", include all relevant info, ask when the
+    brief is ambiguous, stay scoped). It lives outside `system_prompts/` so it
+    never leaks into the main agent's concatenated prompt.
+- The `scripts/agent/subagent` wrapper now appends the base prompt + sub-agent
+  prompt to every fresh sub-agent via `--append-system-prompt` (skipped on
+  `-c`/`--continue`). Sub-agents get the same harness context as the main agent
+  on top of the parent's task brief, so the parent's `--system-prompt` only
+  needs to carry the task-specific brief.
+- Agent identity (`AgentId`, `AgentName`) moved out of the base prompt into the
+  hand-written `1-agent.md` persona. The only remaining sed-baked `{{var}}`
+  (`Timezone`) is now baked into `0.1-main-agent.md`.
+
+### Breaking changes
+
+- Base prompt repurposed and identity removed: `0-base_prompt.md` is now the
+  shared base context only; agent identity moves to the `1-agent.md` persona.
+  [affects: agents/*/system_prompts/0-base_prompt.md, agents/*/system_prompts/1-agent.md]
+- New main-agent-only prompt; `0.1-subagents.md` removed (its content merged in).
+  [affects: agents/*/system_prompts/0.1-main-agent.md, agents/*/system_prompts/0.1-subagents.md]
+- New sub-agent-only role prompt, appended to sub-agents by the wrapper.
+  [affects: agents/*/scripts/agent/sub-agent-prompt.md]
+- `subagent` wrapper updated to append the base + sub-agent prompts on fresh spawns.
+  [affects: agents/*/scripts/agent/subagent]
+
 ## [0.2.1]
 
 ### Fixed

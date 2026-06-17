@@ -24,6 +24,20 @@ has_flag() {
 }
 
 extra=()
+# Always give the sub-agent the same context the main agent has: the shared
+# base prompt (tools, files, workspace, sessions, web, browser) plus the
+# sub-agent role prompt ("stdout is your return value", stay scoped). The
+# caller's --system-prompt carries the task-specific brief; these append after
+# it. Skipped on -c/--continue: the prompt was baked on the first call and
+# re-appending would duplicate it.
+AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BASE_PROMPT="$AGENT_DIR/system_prompts/0-base_prompt.md"
+SUBAGENT_PROMPT="$AGENT_DIR/scripts/agent/sub-agent-prompt.md"
+if ! has_flag -c "$@" && ! has_flag --continue "$@"; then
+  [ -f "$BASE_PROMPT" ] && extra+=(--append-system-prompt "$BASE_PROMPT")
+  [ -f "$SUBAGENT_PROMPT" ] && extra+=(--append-system-prompt "$SUBAGENT_PROMPT")
+fi
+
 # --model "provider/id" already encodes the provider, so only add --provider
 # when neither --model nor --provider was passed by the caller.
 if [ -n "${PI_SUBAGENT_PROVIDER:-}" ] \

@@ -134,10 +134,14 @@ is `<rootDir>/<harnessId>`.
         │   └── requirements.txt
         ├── .venv/                ← created by bootstrap.sh; auto-activated
         ├── .vertex-sa.json       ← written at start when provider=google-vertex
-        ├── system_prompts/
-        │   ├── 0-base_prompt.md  ← copied from template, vars baked at create
+        ├── system_prompts/       ← concatenated (lex order) into the main agent's prompt
+        │   ├── 0-base_prompt.md  ← shared base context (all agents); also appended to sub-agents
+        │   ├── 0.1-main-agent.md ← main-agent-only role (threads, plugins, comms, how to spawn sub-agents); vars baked at create
         │   ├── 1-agent.md        ← persona, hand-written
         │   └── N-<plugin>.md     ← plugin seeds (when installed)
+        ├── scripts/agent/
+        │   ├── subagent          ← wrapper around `pi -p`; appends base + sub-agent prompt
+        │   └── sub-agent-prompt.md ← sub-agent-only role (NOT in system_prompts, so it never leaks into the main prompt)
         ├── workspace/            ← agent's scratch space
         │   ├── index.md
         │   ├── knowledge/
@@ -745,7 +749,15 @@ Env handed to pi:
   `settings.json` default. If `subagentModel` names a provider other than the
   agent default, that provider's credentials are also injected (so the
   sub-agent can authenticate); the agent default provider's key is already
-  present via `envSecrets`.
+  present via `envSecrets`. On every fresh spawn the wrapper also appends two
+  files via `--append-system-prompt`: `system_prompts/0-base_prompt.md` (the
+  shared base context the main agent also gets) and
+  `scripts/agent/sub-agent-prompt.md` (the sub-agent-only role — "stdout is
+  your return value", stay scoped). So a sub-agent's prompt is the parent's
+  task brief + base + sub-agent role, mirroring the main agent's base +
+  main-agent role. It's skipped on `-c`/`--continue`, where the prompt was
+  already baked on the first call. The sub-agent role file lives outside
+  `system_prompts/` so it never leaks into the main agent's concatenated prompt.
 - All `envSecrets` (provider env from `models.json` ⨁ every secret
   under this agent flattened to bare keys, with collisions caught at
   AgentManager construction time — see §4.9).
@@ -1242,11 +1254,12 @@ without `manualStop` + fix + `manualStart`.
 
 ### 6.8 System prompt mostly baked at create-time
 
-**Decision**: agent-fixed `{{vars}}` (`AgentId`, `AgentName`,
-`AgentDir`, `Tools`, `Timezone`) are baked into
-`system_prompts/0-base_prompt.md` via `sed` at agent creation. The
-runner only reads + concatenates files and appends `ThreadId` /
-`ThreadSessions` at the end. No regex substitution at runtime.
+**Decision**: the one remaining agent-fixed `{{var}}` (`Timezone`) is
+baked into `system_prompts/0.1-main-agent.md` via `sed` at agent
+creation. Identity (`AgentId`, `AgentName`) lives in the hand-written
+`1-agent.md` persona, not the prompt template. The runner only reads +
+concatenates files and appends `ThreadId` / `ThreadSessions` at the
+end. No regex substitution at runtime.
 
 **Why**: the things that change per-spawn are exactly two values
 (`ThreadId`, `ThreadSessions`); paying for a templating engine to
@@ -1397,7 +1410,7 @@ See `v0-deferred.md` §3.1 for the manual recipe. Short version:
 ROOT=~/.cognisphere/default        # or wherever COGNISPHERE_ROOT_DIR points
 ID=dr-renu   NAME="Dr Renu"
 mkdir -p "$ROOT/agents/$ID"/{system_prompts,workspace,sessions,plugins}
-# write agent.json, sed-bake 0-base_prompt.md, write 1-agent.md, copy
+# write agent.json, sed-bake 0.1-main-agent.md, write 1-agent.md, copy
 # workspace/index.md and bootstrap/, run bootstrap.sh.
 # Restart server (or call the agents API to load the new dir).
 ```
