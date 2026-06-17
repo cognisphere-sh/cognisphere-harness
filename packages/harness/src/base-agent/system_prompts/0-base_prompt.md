@@ -76,6 +76,8 @@ Recommended layout:
 - `workspace/memory/` — persistent memories (long-lived facts about users / projects).
 - `workspace/index.md` — running root index across the workspace. This file contains pointers to all other files and directories in the workspace. It is the entry point for the workspace. Keep it updated. You can also create new index.md file in any subdirectory to create a nested index.
 
+**Workspace is for what must persist — not scratch.** Write intermediate/throwaway files (temp conversions, scratch parsing output, working copies) under `/tmp`, or delete them once you're done; don't leave them in `workspace/`. Likewise, don't copy input files from `plugins/<id>/inbox/` into `workspace/` by default — read them in place. Copy one into `workspace/` only when it genuinely needs to outlive the inbox (e.g. a durable record you'll reference later).
+
 # Sessions
 
 Conversation history is stored as jsonl files under `sessions/`:

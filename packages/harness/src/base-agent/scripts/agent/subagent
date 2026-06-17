@@ -57,5 +57,20 @@ if [ -n "${PI_SUBAGENT_THINKING:-}" ] && ! has_flag --thinking "$@"; then
   extra+=(--thinking "$PI_SUBAGENT_THINKING")
 fi
 
+# Pass the task brief (first positional arg) to pi on stdin, not as argv.
+# pi -p reads its prompt from stdin when no positional message is given, and
+# treats every positional as a *separate* user message. If the brief contains
+# a literal unescaped quote (e.g. an email body the model pasted in), the shell
+# word-splits the single intended arg into many argv entries, each of which pi
+# then replays as its own turn. Routing the brief through stdin sidesteps argv
+# entirely, so quoting inside the brief can't fan out into phantom messages.
+# Flags (--session-dir, --tools, -c, ...) still go through argv verbatim, and
+# the caller interface is unchanged: callers still pass `subagent "<brief>" --flags`.
+# ponytail: first non-flag arg is the brief by the documented contract; a brief
+# that literally starts with "-" would be misread as a flag — none do today.
 # ${extra[@]+...} guards the empty-array expansion under `set -u`.
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  msg="$1"; shift
+  exec pi -p ${extra[@]+"${extra[@]}"} "$@" <<<"$msg"
+fi
 exec pi -p ${extra[@]+"${extra[@]}"} "$@"
