@@ -18,6 +18,16 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.1]
+
+### Added
+
+- On first start the server prompts for an admin username/password when
+  `.secrets/users.json` is missing or still holds the `admin/changeme`
+  placeholder and stdin is a TTY, writing the file `0600`. Under systemd (no
+  TTY) it logs a warning and falls back to the placeholder so boot still
+  succeeds. (`ensureCredentials` in `api/auth.ts`, wired in `core/main.ts`.)
+
 ## [0.3.0]
 
 ### Changed
