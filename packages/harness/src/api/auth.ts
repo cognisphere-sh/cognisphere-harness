@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createInterface, type Interface } from "node:readline/promises";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { ServerConfig } from "../core/config.js";
@@ -153,6 +154,77 @@ export class AuthStore {
 export function makeAuthStore(cfg: ServerConfig, log: Logger): AuthStore {
   const root = secretsRoot(cfg);
   return new AuthStore(join(root, "users.json"), join(root, "session-key"), log);
+}
+
+/**
+ * On startup, ensure real login credentials exist before the server comes up.
+ * If users.json is missing, empty, or still holds the default admin/changeme
+ * placeholder, prompt for a username and password on the terminal and write
+ * them. No-op when stdin isn't a TTY (e.g. under systemd) — there the
+ * AuthStore placeholder path still applies, so the server can still boot.
+ */
+export async function ensureCredentials(
+  cfg: ServerConfig,
+  log: Logger,
+): Promise<void> {
+  const path = join(secretsRoot(cfg), "users.json");
+  if (hasRealCredentials(path)) return;
+  if (!process.stdin.isTTY) {
+    log.warn(
+      { path },
+      "auth: no credentials and no TTY to prompt — falling back to default admin/changeme; change it before exposing the server",
+    );
+    return;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    process.stdout.write("\nNo login credentials found. Create an admin user:\n");
+    let username = "";
+    while (!username) username = (await rl.question("  Username: ")).trim();
+    let password = "";
+    while (!password) password = await readHidden(rl, "  Password: ");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({ users: [{ username, password }] }, null, 2) + "\n",
+      { mode: 0o600 },
+    );
+    log.info({ path, username }, "auth: created users.json from shell prompt");
+  } finally {
+    rl.close();
+  }
+}
+
+function hasRealCredentials(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as UsersFile;
+    const users = parsed?.users;
+    if (!Array.isArray(users)) return false;
+    return users.some(
+      (u) =>
+        Boolean(u?.username) &&
+        Boolean(u?.password) &&
+        !(u.username === "admin" && u.password === "changeme"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+// ponytail: mute echo by silencing stdout while readline reads the line, so
+// the typed password isn't shown. Restore on the next tick.
+async function readHidden(rl: Interface, query: string): Promise<string> {
+  const orig = process.stdout.write.bind(process.stdout);
+  process.stdout.write(query);
+  process.stdout.write = () => true;
+  try {
+    const answer = await rl.question("");
+    return answer.trim();
+  } finally {
+    process.stdout.write = orig;
+    process.stdout.write("\n");
+  }
 }
 
 export function requireAuth(auth: AuthStore): MiddlewareHandler {

@@ -85,9 +85,14 @@ Implemented in `packages/harness/src/api/auth.ts`. File-backed user store at
 { "users": [{ "username": "admin", "password": "changeme" }] }
 ```
 
-Plaintext passwords, same trade-off as `secrets.json`. On first boot
-the file is created with `admin / changeme` — change it before exposing
-the server. Sessions are stateless signed cookies; the 32-byte HMAC key
+Plaintext passwords, same trade-off as `secrets.json`. On startup
+(`ensureCredentials` in `auth.ts`, called from `main.ts` before the server
+binds), if this file is missing, empty, or still holds the default
+`admin / changeme`, the operator is prompted on the terminal for a username
+and password (password input is echo-muted) and the file is written from
+those values. When stdin is not a TTY (e.g. under systemd) the prompt is
+skipped and the legacy `admin / changeme` placeholder is created instead —
+change it before exposing the server. Sessions are stateless signed cookies; the 32-byte HMAC key
 lives at `<harnessRoot>/.secrets/session-key` and is generated on first boot.
 Deleting that file invalidates every issued cookie.
 

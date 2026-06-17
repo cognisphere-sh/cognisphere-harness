@@ -8,6 +8,7 @@ import { adminRouter } from "../api/admin.js";
 import { agentsRouter } from "../api/agents.js";
 import {
   authRouter,
+  ensureCredentials,
   makeAuthStore,
   redirectIfUnauthenticated,
   requireAuth,
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   const am = new AgentManager(cfg, registry, childLogger("agent-manager"));
   await am.boot();
 
+  await ensureCredentials(cfg, childLogger("auth"));
   const auth = makeAuthStore(cfg, childLogger("auth"));
 
   const app = new Hono();
