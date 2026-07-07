@@ -18,6 +18,40 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.4]
+
+### Added
+
+- gws plugin: new `requireAgentInTo` config flag (default `true`, the previous
+  behavior). When `false`, the latest message of a matching thread is delivered
+  even when the agent's address is not in its `To` header — silently (no wake)
+  unless the agent is in `To`. Ignored in backlog mode.
+- gws seeded CLI `scripts/gws/format-email`: new `--strip-quotes` flag drops
+  quoted reply history from a body (most clients quote the whole conversation
+  below each reply), printing only the message's own text.
+- gws seeded CLI: new `--list` mode accepts a Gmail *Thread* JSON (from
+  `gws gmail users threads get`, `format: "metadata"` suffices) and prints
+  per-message metadata (id, from, date, snippet) so agents can skim a thread
+  cheaply and then fetch only the messages they need. The seeded
+  `system_prompt.md` documents the explore-then-fetch workflow.
+
+### Changed
+
+- gws plugin: the ingestion filter no longer re-checks the `UNREAD` label on a
+  thread's latest message — unread filtering is delegated entirely to the
+  configured `gmailQuery` (default `is:unread in:inbox`).
+- gws plugin: Gmail message decoding (body extraction, quote stripping,
+  attachment fetch, timestamp formatting) is deduplicated into a single shared
+  module, `seed/scripts/format-email-lib.mjs`, imported by both the plugin
+  runtime and the seeded `scripts/gws/format-email` CLI (which previously
+  carried its own copy of the logic).
+
+### Fixed
+
+- gws seeded CLI: the documented `--timezone` flag was parsed but never used —
+  the header block now includes the `TimeStamp:` line, matching the shape of
+  `email_received` notifications as documented.
+
 ## [0.3.3]
 
 ### Fixed

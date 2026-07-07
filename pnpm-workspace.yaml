@@ -1,2 +1,12 @@
 packages:
   - "packages/*"
+# Build-script allowlist. `allowBuilds` is the pnpm 11 setting name,
+# `onlyBuiltDependencies` the pnpm ≤10 one (CI pins pnpm 10) — keep in sync.
+allowBuilds:
+  "@google/genai": false
+  better-sqlite3: true
+  esbuild: true
+  protobufjs: false
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild

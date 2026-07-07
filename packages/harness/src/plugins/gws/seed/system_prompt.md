@@ -79,9 +79,25 @@ bash gws gmail users messages get \
 `scripts/gws/format-email` reads a Gmail `Message` JSON from stdin and
 prints the same `Subject/From/To/TimeStamp + body + <file>[path]` shape as
 an `email_received` notification. Pass `--no-header` to drop the header
-block when you only want the body. Omit `--attachments-dir` to skip the
-attachment fetch. Run `scripts/gws/format-email --help` for the full flag
-list.
+block when you only want the body. Most mail clients quote the whole
+conversation below each reply, so a message body usually contains the full
+thread history — pass `--strip-quotes` to drop that and print only the
+message's own text. Omit `--attachments-dir` to skip the attachment fetch.
+Run `scripts/gws/format-email --help` for the full flag list.
+
+### Exploring a thread before reading it
+
+Long threads are cheaper to skim first: list every message's id, sender,
+date, and snippet, then fetch only the messages you actually need:
+
+```
+bash gws gmail users threads get \
+  --params '{"userId":"me","id":"<GmailThreadId>","format":"metadata"}' \
+  | scripts/gws/format-email --list
+```
+
+Then pull an individual message by id as shown above (add `--strip-quotes`
+to read it without the quoted history).
 
 ## Outbound — call `gws` directly
 

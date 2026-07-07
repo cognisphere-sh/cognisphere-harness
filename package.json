@@ -13,8 +13,5 @@
     "lint": "pnpm --filter @cognisphere-sh/cognisphere-harness lint",
     "lint:web": "pnpm --filter cognisphere-web lint",
     "check": "pnpm -r run check"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
   }
 }

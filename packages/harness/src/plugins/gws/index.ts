@@ -12,6 +12,7 @@ import type {
 import {
   collectHeaders,
   formatEmail,
+  formatTs,
   type GmailMessage,
 } from "./seed/scripts/format-email.js";
 
@@ -24,6 +25,7 @@ interface GwsConfig {
   gmailQuery?: string;
   firstOfThreadOnly?: boolean;
   allowedSenders?: string;
+  requireAgentInTo?: boolean;
 }
 
 interface GwsSecrets {
@@ -36,12 +38,15 @@ interface GmailThread {
 }
 
 /**
- * Polls Gmail through the `gws` CLI. For each matching thread it looks only
- * at the most recent message: if the agent's own email is in that message's
- * `To` header it delivers headers + body + attachment paths and wakes the
- * agent; otherwise nothing is emitted. Older messages in the thread are
- * never re-emitted. Every unread message in a handled thread is marked read
- * so the poll query stops re-matching it.
+ * Polls Gmail through the `gws` CLI. Unread filtering lives in the poll
+ * query itself (default `is:unread in:inbox`), not in code. For each
+ * matching thread it looks only at the most recent message: if the agent's
+ * own email is in that message's `To` header it delivers headers + body +
+ * attachment paths and wakes the agent; otherwise nothing is emitted (set
+ * `requireAgentInTo: false` to instead deliver such messages silently).
+ * Older messages in the thread are never re-emitted. Every unread message
+ * in a handled thread is marked read so the poll query stops re-matching
+ * it.
  *
  * (Backlog mode — `firstOfThreadOnly` — instead emits every message in a
  * matching thread, waking only on the first.)
@@ -68,7 +73,8 @@ export default class GwsPlugin implements Plugin {
         gmailQuery: {
           type: "string",
           default: "is:unread in:inbox",
-          description: "Gmail search query for the poll loop.",
+          description:
+            "Gmail search query for the poll loop. Unread filtering happens here (`is:unread`), not in code — drop it from the query and already-read messages are handled too.",
         },
         firstOfThreadOnly: {
           type: "boolean",
@@ -81,6 +87,12 @@ export default class GwsPlugin implements Plugin {
           default: "*",
           description:
             "Comma-separated list of allowed sender patterns; `*` is a wildcard (e.g. `*@abc.com`). Only messages whose `From` address matches an entry are read/emitted; all others are ignored (and marked read). The default `*` (and an empty string) allows every sender.",
+        },
+        requireAgentInTo: {
+          type: "boolean",
+          default: true,
+          description:
+            "Only emit a thread's latest message when the agent's own address is in its `To` header. When false, messages not addressed to the agent (Cc/Bcc/none) are still delivered, but silently (no wake). Ignored in backlog mode.",
         },
       },
       additionalProperties: false,
@@ -101,6 +113,7 @@ export default class GwsPlugin implements Plugin {
   private pollIntervalMs = 60_000;
   private gmailQuery = "is:unread in:inbox";
   private firstOfThreadOnly = false;
+  private requireAgentInTo = true;
   private allowedSenderPatterns: RegExp[] = [];
   private agentEmail = "";
 
@@ -110,6 +123,7 @@ export default class GwsPlugin implements Plugin {
     this.pollIntervalMs = (cfg.pollIntervalSec ?? 60) * 1000;
     this.gmailQuery = cfg.gmailQuery ?? "is:unread in:inbox";
     this.firstOfThreadOnly = cfg.firstOfThreadOnly === true;
+    this.requireAgentInTo = cfg.requireAgentInTo !== false;
     this.allowedSenderPatterns = parseSenderPatterns(cfg.allowedSenders ?? "*");
 
     await this.verifyAuth();
@@ -356,8 +370,9 @@ export default class GwsPlugin implements Plugin {
     // Backlog mode: deliver every message in the thread, most-recent first
     // so the chronologically-first message (the only one that wakes the
     // agent) is emitted last. Default mode: consider only the most recent
-    // message and wake only when it is unread and the agent's address is in
-    // its `To` — older messages are never re-emitted.
+    // message — older messages are never re-emitted. Unread filtering is
+    // not re-checked here: it is part of the gmail poll query (`is:unread`
+    // in the default `gmailQuery`), which is what matched this thread.
     let toEmit: GmailMessage[];
     if (this.firstOfThreadOnly) {
       toEmit = [...ordered]
@@ -371,8 +386,8 @@ export default class GwsPlugin implements Plugin {
       const to = headers.get("to") ?? "";
       const from = headers.get("from") ?? "";
       toEmit =
-        hasLabel(last, UNREAD_LABEL) &&
-        extractEmails(to).includes(this.agentEmail) &&
+        (!this.requireAgentInTo ||
+          extractEmails(to).includes(this.agentEmail)) &&
         this.senderAllowed(from)
           ? [last]
           : [];
@@ -533,21 +548,4 @@ function parseSenderPatterns(raw: string): RegExp[] {
  *  as the prefix of the harness thread id, which becomes a sessions/ dir. */
 function sanitizeForPath(s: string): string {
   return s.replace(/[/\\\0]+/g, "_").slice(0, 120).trim() || "(no subject)";
-}
-
-function formatTs(unixMs: number, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    timeZoneName: "short",
-  }).formatToParts(new Date(unixMs));
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  const hour = get("hour") === "24" ? "00" : get("hour");
-  return `${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
 }

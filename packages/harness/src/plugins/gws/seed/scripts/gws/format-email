@@ -3,49 +3,85 @@
  * format-email — read a Gmail `Message` JSON from stdin (as emitted by
  * `gws gmail users messages get --params '{"userId":"me","id":"<id>","format":"full"}'`),
  * print the body and an attachment listing in the same shape the gws plugin
- * delivers in `email_received` notifications.
+ * delivers in `email_received` notifications. Decoding logic is shared with
+ * the plugin runtime via `../format-email-lib.mjs`.
+ *
+ * Also accepts a Gmail `Thread` JSON (from `gws gmail users threads get`)
+ * with `--list`, which prints one metadata block per message (id, from,
+ * date, snippet) so a thread can be explored cheaply before selectively
+ * fetching individual messages.
  *
  * Usage:
- *   gws gmail users messages get --params '...' | scripts/format-email
- *   gws gmail users messages get --params '...' | scripts/format-email \
+ *   gws gmail users messages get --params '...' | scripts/gws/format-email
+ *   gws gmail users messages get --params '...' | scripts/gws/format-email \
  *     --attachments-dir plugins/gws/inbox/<msgId>
+ *   gws gmail users threads get --params '{"userId":"me","id":"<threadId>","format":"metadata"}' \
+ *     | scripts/gws/format-email --list
  *
  * Flags:
  *   --attachments-dir DIR  write attachments under DIR/, shelling out to
  *                          `gws gmail users messages attachments get` for each.
  *   --timezone TZ          IANA tz name for the TimeStamp line (default: host).
  *   --no-header            drop the Subject/From/To/TimeStamp block.
+ *   --strip-quotes         drop quoted reply history from the body — prints
+ *                          only the message's own text, not the thread
+ *                          history most clients quote below it.
+ *   --list                 stdin is a Thread JSON: print per-message metadata
+ *                          (chronological) instead of a body.
  *
  * The output shape:
  *
  *   Subject: <subject>
  *   From: <from>
  *   To: <to>
+ *   TimeStamp: <timestamp>
  *
  *   <body text>
  *
  *   <file1.pdf>[<attachments-dir>/file1.pdf]
  */
 import { execFile } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { resolve as resolvePath, join } from "node:path";
 import { promisify } from "node:util";
 
+import {
+  collectAttachments,
+  collectHeaders,
+  fetchAttachment,
+  formatTs,
+  pickTextBody,
+  sanitizeFilename,
+  stripQuotedHistory,
+} from "../format-email-lib.mjs";
+
 const execFileP = promisify(execFile);
+const runGws = (args) => execFileP("gws", args, { maxBuffer: 64 * 1024 * 1024 });
 
 function parseArgs(argv) {
-  const out = { attachmentsDir: null, timezone: null, header: true };
+  const out = {
+    attachmentsDir: null,
+    timezone: null,
+    header: true,
+    stripQuotes: false,
+    list: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--attachments-dir" || a === "-d") out.attachmentsDir = argv[++i];
     else if (a === "--timezone") out.timezone = argv[++i];
     else if (a === "--no-header") out.header = false;
+    else if (a === "--strip-quotes") out.stripQuotes = true;
+    else if (a === "--list") out.list = true;
     else if (a === "--help" || a === "-h") {
       process.stdout.write(
-        "Usage: <gmail-message-json on stdin> | format-email [options]\n" +
+        "Usage: <gmail message/thread json on stdin> | format-email [options]\n" +
           "  --attachments-dir DIR  download attachments under DIR/ via `gws`\n" +
           "  --timezone TZ          IANA tz for the TimeStamp line\n" +
-          "  --no-header            drop the Subject/From/To/TimeStamp block\n",
+          "  --no-header            drop the Subject/From/To/TimeStamp block\n" +
+          "  --strip-quotes         drop quoted reply history from the body\n" +
+          "  --list                 stdin is a Thread JSON: print per-message\n" +
+          "                         metadata (id, from, date, snippet) instead\n",
       );
       process.exit(0);
     } else {
@@ -56,101 +92,31 @@ function parseArgs(argv) {
   return out;
 }
 
+/** Print one metadata block per message of a thread, oldest first. */
+function listThread(thread, tz) {
+  const msgs = [...(thread.messages ?? [])].sort(
+    (a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0),
+  );
+  const blocks = msgs.map((m, i) => {
+    const h = collectHeaders(m.payload ?? {});
+    const date = m.internalDate
+      ? formatTs(Number(m.internalDate), tz)
+      : (h.get("date") ?? "(unknown)");
+    return [
+      `[${i + 1}/${msgs.length}] id: ${m.id}`,
+      `  from: ${h.get("from") ?? "(unknown)"}`,
+      `  date: ${date}`,
+      `  snippet: ${(m.snippet ?? "").trim()}`,
+    ].join("\n");
+  });
+  return blocks.join("\n\n");
+}
+
 async function readStdin() {
   let buf = "";
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) buf += chunk;
   return buf;
-}
-
-function collectHeaders(part) {
-  const m = new Map();
-  for (const h of part.headers ?? []) m.set(h.name.toLowerCase(), h.value);
-  return m;
-}
-
-function walk(part, fn) {
-  fn(part);
-  for (const child of part.parts ?? []) walk(child, fn);
-}
-
-function findFirst(part, pred) {
-  if (pred(part)) return part;
-  for (const child of part.parts ?? []) {
-    const hit = findFirst(child, pred);
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-function decodeBase64url(s) {
-  return Buffer.from(s, "base64url").toString("utf8");
-}
-
-function stripTags(html) {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\s+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function pickTextBody(part) {
-  const plain = findFirst(part, (p) => p.mimeType === "text/plain" && !!p.body?.data);
-  if (plain?.body?.data) return decodeBase64url(plain.body.data);
-  const html = findFirst(part, (p) => p.mimeType === "text/html" && !!p.body?.data);
-  if (html?.body?.data) return stripTags(decodeBase64url(html.body.data));
-  return "";
-}
-
-function collectAttachments(part) {
-  const out = [];
-  walk(part, (p) => {
-    if (p.body?.attachmentId && p.filename) out.push(p);
-  });
-  return out;
-}
-
-function sanitizeFilename(name) {
-  return name.replace(/[\/\\:*?"<>|]+/g, "_").slice(0, 200) || "attachment";
-}
-
-function formatTs(unixMs, timeZone) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    timeZoneName: "short",
-  }).formatToParts(new Date(unixMs));
-  const get = (t) => parts.find((p) => p.type === t)?.value ?? "";
-  const hour = get("hour") === "24" ? "00" : get("hour");
-  return `${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
-}
-
-async function fetchAttachment(messageId, attachmentId, target) {
-  const params = JSON.stringify({ userId: "me", messageId, id: attachmentId });
-  const { stdout } = await execFileP(
-    "gws",
-    [
-      "gmail",
-      "users",
-      "messages",
-      "attachments",
-      "get",
-      "--params",
-      params,
-    ],
-    { maxBuffer: 64 * 1024 * 1024 },
-  );
-  const att = JSON.parse(stdout);
-  writeFileSync(target, Buffer.from(att.data, "base64url"));
 }
 
 async function main() {
@@ -161,8 +127,23 @@ async function main() {
     process.exit(2);
   }
   const msg = JSON.parse(raw);
+
+  if (args.list) {
+    if (!Array.isArray(msg.messages)) {
+      process.stderr.write(
+        "format-email: --list expects a Thread JSON (from `gws gmail users threads get`), input has no .messages\n",
+      );
+      process.exit(2);
+    }
+    const tz = args.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    process.stdout.write(listThread(msg, tz) + "\n");
+    return;
+  }
+
   if (!msg.payload) {
-    process.stderr.write("format-email: input has no .payload (not a gmail message?)\n");
+    process.stderr.write(
+      "format-email: input has no .payload (not a gmail message? for a thread, pass --list)\n",
+    );
     process.exit(2);
   }
 
@@ -181,10 +162,13 @@ async function main() {
       `Subject: ${subject}`,
       `From: ${from}`,
       `To: ${to}`,
+      `TimeStamp: ${timestamp}`,
       "",
     );
   }
-  lines.push(pickTextBody(msg.payload) || "(no plain-text body)");
+  const rawBody = pickTextBody(msg.payload);
+  const body = args.stripQuotes ? stripQuotedHistory(rawBody) : rawBody;
+  lines.push(body || "(no plain-text body)");
 
   const attParts = collectAttachments(msg.payload);
   const attLines = [];
@@ -195,7 +179,7 @@ async function main() {
       const filename = sanitizeFilename(part.filename ?? `attachment-${part.partId ?? "0"}`);
       const target = join(dir, filename);
       try {
-        await fetchAttachment(msg.id, part.body.attachmentId, target);
+        await fetchAttachment(runGws, msg.id, part.body.attachmentId, target);
         attLines.push(`${filename}[${args.attachmentsDir.replace(/\/$/, "")}/${filename}]`);
       } catch (err) {
         process.stderr.write(`format-email: failed to fetch ${filename}: ${err?.message ?? err}\n`);
