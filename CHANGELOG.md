@@ -18,6 +18,37 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.5]
+
+### Fixed
+
+- Agents were missing tools at runtime because the per-agent bootstrap silently
+  failed to install its dependencies. `bootstrap.sh` now:
+  - re-asserts `+x` on every shebang script under `scripts/` (a dropped exec bit
+    otherwise surfaces as a bare "Permission denied" mid-task);
+  - prechecks `ensurepip` and recreates an incomplete `.venv` (Ubuntu 26.04 /
+    Python 3.14 ships without `python3-venv`, so `python -m venv` left a
+    pip-less venv and `markitdown`/`ddgs` never installed);
+  - points the npm global prefix at `~/.npm-global` so `npm install -g` of `pi`
+    and `agent-browser` doesn't `EACCES` when bootstrap runs as the non-root app
+    user, and downloads the Chrome build `agent-browser` drives.
+- `bootstrap/requirements.txt`: pin `markitdown` to the document/audio backends
+  (`[pdf,docx,pptx,xlsx,xls,outlook,audio-transcription]`) instead of `[all]`,
+  which is uninstallable on Python 3.14 (it hard-pins `youtube-transcript-api`).
+- `scripts/agent/agent-browser`: default `AGENT_BROWSER_ARGS=--no-sandbox`
+  (overridable) so Chrome starts on hosts where unprivileged user namespaces are
+  restricted (Ubuntu 23.10+ AppArmor default, containers, VMs).
+
+### Breaking changes
+
+- Bootstrap rewritten for reliable dependency install (exec-bit repair, venv
+  ensurepip precheck + recreate, user-writable npm prefix, agent-browser Chrome
+  download). [affects: agents/*/bootstrap/bootstrap.sh]
+- `markitdown` extras pinned instead of `[all]` for Python 3.14 compatibility.
+  [affects: agents/*/bootstrap/requirements.txt]
+- `agent-browser` wrapper defaults to `--no-sandbox`.
+  [affects: agents/*/scripts/agent/agent-browser]
+
 ## [0.3.4]
 
 ### Added

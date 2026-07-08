@@ -6,8 +6,12 @@
 # the `edit` tool) and re-run `bash bootstrap/bootstrap.sh` to pick them up.
 
 # File-to-markdown converter referenced by the harness preamble (pdf, docx,
-# pptx, xlsx, audio, etc.). The [all] extra pulls in optional backends.
-markitdown[all]==0.1.5
+# pptx, xlsx, audio, etc.). We enumerate the document/audio backends instead of
+# using [all]: on Python 3.14 (Ubuntu 26.04 default) the [all] extra fails to
+# install because it hard-pins youtube-transcript-api~=1.0.0, which has no
+# 3.14-compatible release. The dropped extras are youtube-transcription (N/A
+# for this workflow) and az-doc-intel (unused Azure OCR backend).
+markitdown[pdf,docx,pptx,xlsx,xls,outlook,audio-transcription]==0.1.5
 
 # Web metasearch CLI (deedy5/ddgs) — invoked via scripts/agent/ddgs.
 ddgs

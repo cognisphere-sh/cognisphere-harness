@@ -24,6 +24,22 @@ PYTHON="${PYTHON:-python3}"
 log() { printf "bootstrap: %s\n" "$*"; }
 warn() { printf "bootstrap: WARN: %s\n" "$*" >&2; }
 
+# ── 0. Make tool wrappers executable ──────────────────────────────────
+# The agent invokes scripts/ wrappers directly (e.g. scripts/agent/markitdown).
+# An exec bit can go missing — a file committed 100644, a `cp` that dropped it,
+# a checkout on a noexec/relaxed filesystem — and the agent then gets a bare
+# "Permission denied". Re-assert +x on every script (anything with a shebang)
+# under scripts/ so this can't silently recur.
+if [ -d scripts ]; then
+  count=0
+  while IFS= read -r f; do
+    if [ "$(head -c2 "$f" 2>/dev/null)" = '#!' ] && [ ! -x "$f" ]; then
+      chmod +x "$f" && count=$((count + 1))
+    fi
+  done < <(find scripts -type f)
+  log "ensured scripts/ wrappers are executable (${count} fixed)"
+fi
+
 # ── 1. System binaries: ffmpeg + pdftoppm ─────────────────────────────
 # Best-effort install. Skips silently if already present; warns and
 # continues if no usable package manager is available without sudo.
@@ -58,7 +74,23 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   warn "'$PYTHON' not found on PATH. Set PYTHON=<your-python> and re-run."
   exit 1
 fi
-if [ ! -d ".venv" ]; then
+# A venv needs ensurepip to seed pip. On Debian/Ubuntu that lives in the
+# python3-venv package; without it `python -m venv` aborts mid-create and
+# leaves a BROKEN .venv (bin/ has the python symlinks but no activate, no pip).
+# Check up front and fail with an actionable message instead of producing junk.
+if ! "$PYTHON" -c 'import ensurepip' >/dev/null 2>&1; then
+  pyver="$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo 3)"
+  warn "ensurepip is unavailable for '$PYTHON'; a working venv can't be built."
+  warn "install it (root):  sudo apt-get install -y python${pyver}-venv python3-pip"
+  exit 1
+fi
+# Create the venv if missing, or RECREATE it if a prior run left it incomplete
+# (no bin/activate — e.g. it was built before python3-venv was installed).
+if [ ! -f ".venv/bin/activate" ]; then
+  if [ -d ".venv" ]; then
+    warn "existing .venv is incomplete (no bin/activate) — recreating from scratch"
+    rm -rf .venv
+  fi
   log "creating .venv with $PYTHON ..."
   "$PYTHON" -m venv .venv
 fi
@@ -67,30 +99,50 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r bootstrap/requirements.txt
 
+# ── npm global prefix: make it user-writable ──────────────────────────
+# The default npm prefix may be a root-owned dir (e.g. /usr), so `npm install
+# -g` fails with EACCES when bootstrap runs as the (non-root) app user. Point
+# it at ~/.npm-global — where the pi/agent-browser wrappers already look — and
+# put its bin dir on PATH for the rest of this script and this shell.
+if command -v npm >/dev/null 2>&1; then
+  export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+  mkdir -p "$NPM_CONFIG_PREFIX/bin"
+  export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+fi
+
 # ── 3. pi-coding-agent (npm global) ───────────────────────────────────
 # Provides the `pi` binary that the harness runner spawns (`pi --mode rpc`).
 if command -v pi >/dev/null 2>&1; then
-  log "pi-coding-agent already installed"
+  log "pi-coding-agent already installed ($(command -v pi))"
 elif command -v npm >/dev/null 2>&1; then
   log "installing @earendil-works/pi-coding-agent via npm..."
   npm install -g @earendil-works/pi-coding-agent \
-    || warn "npm install -g @earendil-works/pi-coding-agent failed (permission issue? try: sudo npm install -g @earendil-works/pi-coding-agent)"
+    || warn "npm install -g @earendil-works/pi-coding-agent failed"
 else
   warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install @earendil-works/pi-coding-agent by hand"
 fi
 
-# ── 4. agent-browser (npm global) ─────────────────────────────────────
-if command -v agent-browser >/dev/null 2>&1; then
-  log "agent-browser already installed"
-elif command -v npm >/dev/null 2>&1; then
-  log "installing agent-browser via npm..."
-  if npm install -g agent-browser 2>/dev/null; then
-    agent-browser install || warn "agent-browser install (browser deps) failed"
+# ── 4. agent-browser (npm global) + its Chrome build ──────────────────
+if command -v npm >/dev/null 2>&1; then
+  if command -v agent-browser >/dev/null 2>&1; then
+    log "agent-browser already installed ($(command -v agent-browser))"
   else
-    warn "npm install -g agent-browser failed (permission issue? try: sudo npm install -g agent-browser)"
+    log "installing agent-browser via npm..."
+    npm install -g agent-browser 2>/dev/null \
+      || warn "npm install -g agent-browser failed (npm prefix perms?)"
+  fi
+  # Download the Chrome build agent-browser drives (~180MB, first run only).
+  browsers_dir="$HOME/.agent-browser/browsers"
+  if command -v agent-browser >/dev/null 2>&1; then
+    if [ -d "$browsers_dir" ] && [ -n "$(ls -A "$browsers_dir" 2>/dev/null)" ]; then
+      log "agent-browser Chrome already downloaded"
+    else
+      log "downloading Chrome for agent-browser..."
+      agent-browser install || warn "agent-browser install (Chrome download) failed"
+    fi
   fi
 else
   warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install agent-browser by hand"
 fi
 
-log "done. Restart the server so the runner picks up the new .venv."
+log "done. Restart the server so the runner picks up the new .venv + tools."
