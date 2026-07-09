@@ -18,6 +18,14 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.6]
+
+### Changed
+
+- gws plugin: `requireAgentInTo: false` now delivers messages the agent isn't
+  addressed to (Cc/Bcc/none) **in full and wakes the agent**, instead of the
+  previous header-only silent delivery. Backlog mode is unaffected.
+
 ## [0.3.5]
 
 ### Fixed

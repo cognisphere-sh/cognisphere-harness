@@ -43,7 +43,8 @@ interface GmailThread {
  * matching thread it looks only at the most recent message: if the agent's
  * own email is in that message's `To` header it delivers headers + body +
  * attachment paths and wakes the agent; otherwise nothing is emitted (set
- * `requireAgentInTo: false` to instead deliver such messages silently).
+ * `requireAgentInTo: false` to instead deliver such messages in full and
+ * wake the agent regardless of the `To` header).
  * Older messages in the thread are never re-emitted. Every unread message
  * in a handled thread is marked read so the poll query stops re-matching
  * it.
@@ -92,7 +93,7 @@ export default class GwsPlugin implements Plugin {
           type: "boolean",
           default: true,
           description:
-            "Only emit a thread's latest message when the agent's own address is in its `To` header. When false, messages not addressed to the agent (Cc/Bcc/none) are still delivered, but silently (no wake). Ignored in backlog mode.",
+            "Only emit a thread's latest message when the agent's own address is in its `To` header. When false, messages not addressed to the agent (Cc/Bcc/none) are still delivered in full and wake the agent regardless. Ignored in backlog mode.",
         },
       },
       additionalProperties: false,
@@ -426,11 +427,13 @@ export default class GwsPlugin implements Plugin {
 
       // Backlog mode: only the first message of the thread wakes the agent;
       // every other message is silent context.
-      // Default mode: agent address in `To` → wake (full body); Cc/Bcc / not
-      // addressed → silent.
+      // Default mode: agent address in `To` → wake (full body). When
+      // requireAgentInTo is false, wake on every delivered message too (full
+      // body, not silent) — otherwise Cc/Bcc / not-addressed → silent.
       const invoked = this.firstOfThreadOnly
         ? m.id === threadId
-        : extractEmails(to).includes(this.agentEmail);
+        : !this.requireAgentInTo ||
+          extractEmails(to).includes(this.agentEmail);
 
       let text = header;
       if (invoked) {
