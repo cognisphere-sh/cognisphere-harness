@@ -17,10 +17,40 @@
 # Base URL defaults to the local harness; override with HARNESS_BASE_URL.
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+send — message another agent's thread (inter-agent) or one of your own other
+threads (intra-agent). Seeded by the `agent-messaging` plugin.
+
+USAGE
+  scripts/agent-msg/send --to-agent <agent> --thread-id <threadId> \
+    --message "…" --from-agent <self> --from-thread-id <yourThreadId> \
+    [--subject "…"] [--silent]
+
+FLAGS
+  --to-agent <id>         receiving agent (your own id for intra-agent)
+  --thread-id <id>        receiving thread on that agent
+  --message <text>        the note text
+  --from-agent <id>       YOUR agent id, so the receiver can reply back
+  --from-thread-id <id>   the thread you're sending from
+  --subject <text>        optional subject line
+  --silent                deliver for awareness only (receiver not woken)
+  --self-check            offline payload self-test, no network
+  -h, --help              show this help
+
+ROUTING
+  Yourself, a different thread   → --to-agent <self> --thread-id <otherThread>
+  Another agent's thread         → --to-agent <agent> --thread-id <theirThread>
+
+Base URL defaults to the local harness; override with HARNESS_BASE_URL.
+EOF
+}
+
 base="${HARNESS_BASE_URL:-http://127.0.0.1:7331}"
 to="" thread="" message="" subject="" from="" from_thread="" silent=false selfcheck=false
 while [ $# -gt 0 ]; do
   case "$1" in
+    -h|--help)   usage; exit 0 ;;
     --to-agent)  to="$2"; shift 2 ;;
     --thread-id) thread="$2"; shift 2 ;;
     --message)   message="$2"; shift 2 ;;

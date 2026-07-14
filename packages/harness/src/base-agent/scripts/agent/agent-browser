@@ -12,6 +12,27 @@
 #   scripts/agent/agent-browser --help
 set -euo pipefail
 
+# Wrapper-level help, then fall through so the real CLI's --help follows.
+help_requested=""
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  help_requested=1
+  cat <<'EOF'
+agent-browser (wrapper) — resolves the real `agent-browser` CLI
+(vercel-labs/agent-browser) from the npm global bin, since sub-agent
+subprocesses don't reliably inherit it on PATH. All args are forwarded
+verbatim.
+
+EXAMPLE
+  scripts/agent/agent-browser open example.com
+
+ENV
+  AGENT_BROWSER_ARGS  extra Chrome args (default: --no-sandbox)
+
+Underlying CLI help follows (needs the npm global — run bootstrap.sh if missing):
+──────────────────────────────────────────────────────────────────────
+EOF
+fi
+
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 bin="$(command -v agent-browser 2>/dev/null || true)"
@@ -28,6 +49,8 @@ fi
 
 if [ -z "$bin" ]; then
   echo "agent-browser: binary not found on PATH or npm global bin — run: bash bootstrap/bootstrap.sh" >&2
+  # Help was still printed above; don't fail the --help call itself.
+  [ -n "$help_requested" ] && exit 0
   exit 127
 fi
 

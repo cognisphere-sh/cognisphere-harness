@@ -76,9 +76,33 @@ async function tgMultipart(method, form) {
   return json.result;
 }
 
+const HELP = `telegram-cli — thin wrapper around the Telegram Bot API.
+Reads TELEGRAM_BOT_TOKEN from env (injected by the harness via secrets.json).
+
+USAGE
+  scripts/telegram/telegram-cli <command> --flag value ...
+
+COMMANDS
+  send-message   --chat-id <ID> --text "..." [--reply-to <msgId>]
+                 [--parse-mode Markdown|HTML]
+  send-file      --chat-id <ID> --file <path> --type <photo|document|voice|video|audio>
+                 [--caption "..."] [--reply-to <msgId>]
+  edit-message   --chat-id <ID> --message-id <ID> --text "..." [--parse-mode ...]
+  delete-message --chat-id <ID> --message-id <ID>
+  send-reaction  --chat-id <ID> --message-id <ID> --emoji "👍"
+
+Literal \\n, \\t, \\r inside --text/--caption are decoded to real characters.
+On success prints {"message_id":N} for sends, "ok" for edit/delete/reaction.
+`;
+
 async function main() {
   const [, , cmd, ...rest] = argv;
   const flags = parseFlags(rest);
+
+  if (!cmd || cmd === "help" || cmd === "-h" || cmd === "--help") {
+    console.log(HELP);
+    exit(cmd ? 0 : 2);
+  }
 
   switch (cmd) {
     case "send-message": {

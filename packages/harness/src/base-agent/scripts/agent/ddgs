@@ -14,6 +14,24 @@
 #   scripts/agent/ddgs --help
 set -euo pipefail
 
+# Wrapper-level help, then fall through so the real CLI's --help follows.
+help_requested=""
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  help_requested=1
+  cat <<'EOF'
+ddgs (wrapper) — web metasearch via the `ddgs` CLI, resolved from the agent's
+.venv (then PATH), since sub-agent subprocesses don't always carry the venv
+activation. All args are forwarded verbatim.
+
+EXAMPLES
+  scripts/agent/ddgs text -q "south indian filter coffee ratio"
+  scripts/agent/ddgs text -q "ddgs python" -m 5
+
+Underlying CLI help follows (needs ddgs in .venv — run bootstrap.sh if missing):
+──────────────────────────────────────────────────────────────────────
+EOF
+fi
+
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
 # scripts/agent/ddgs -> agent dir is two levels up.
 agent_dir="$(cd "$(dirname "$self")/../.." >/dev/null 2>&1 && pwd)"
@@ -37,6 +55,8 @@ fi
 
 if [ -z "$bin" ]; then
   echo "ddgs: binary not found in .venv or on PATH — run: bash bootstrap/bootstrap.sh" >&2
+  # Help was still printed above; don't fail the --help call itself.
+  [ -n "$help_requested" ] && exit 0
   exit 127
 fi
 

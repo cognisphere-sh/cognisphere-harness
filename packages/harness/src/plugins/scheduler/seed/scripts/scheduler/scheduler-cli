@@ -7,6 +7,37 @@
 # within a second.
 set -euo pipefail
 
+# Help before the state-file init below: it must work from any cwd, and the
+# init would abort (set -e) when plugins/scheduler/state/ doesn't exist.
+case "${1:-}" in
+  help|-h|--help)
+    cat <<'EOF'
+scheduler-cli — manage plugins/scheduler/state/schedules.json.
+
+USAGE
+  scheduler-cli add --name N --cron C --text T --thread-id ID [--channel CH] [--once]
+  scheduler-cli list
+  scheduler-cli remove --name N
+  scheduler-cli pause  --name N
+  scheduler-cli resume --name N
+
+SUBCOMMANDS
+  add     Add a schedule, replacing any existing one with the same --name.
+          --cron is a cron expression; --text is the message injected on
+          thread --thread-id when it fires; --once deletes the schedule
+          after its first firing.
+  list    Print the full schedules.json.
+  remove  Delete a schedule by name.
+  pause   Keep the schedule but stop firing it (paused=true).
+  resume  Un-pause (paused=false).
+
+Writes are atomic; the plugin watches the file and reloads within a second.
+Run from the agent directory (paths are relative to it).
+EOF
+    exit 0
+    ;;
+esac
+
 state="plugins/scheduler/state/schedules.json"
 [ -f "$state" ] || echo '{"schedules":[]}' > "$state"
 
@@ -80,7 +111,7 @@ case "$cmd" in
     echo "{\"$cmd\":\"$name\"}"
     ;;
   *)
-    echo "usage: scheduler-cli {add|list|remove|pause|resume} ..." >&2
+    echo "usage: scheduler-cli {add|list|remove|pause|resume} ... (see: scheduler-cli --help)" >&2
     exit 2
     ;;
 esac

@@ -15,6 +15,35 @@
 #     --system-prompt "..." --tools "read,grep"
 set -euo pipefail
 
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<'EOF'
+subagent — run a sub-agent via `pi -p` on this agent's configured model.
+
+USAGE
+  scripts/agent/subagent "<task brief>" [pi flags]
+
+The first non-flag argument is the task brief (delivered to pi on stdin, so
+quotes inside it are safe). Every other flag is forwarded verbatim to `pi -p`.
+
+WHAT THE WRAPPER ADDS
+  --provider / --model / --thinking from PI_SUBAGENT_PROVIDER / _MODEL /
+    _THINKING (the agent's configured sub-agent model), unless you pass your
+    own --model/--provider/--thinking.
+  --system-prompt is owned by the wrapper (shared base prompt + sub-agent role
+    prompt) — never pass it yourself; put the task-specific brief in the
+    message instead.
+
+EXAMPLES
+  scripts/agent/subagent "Read /repo/x.ts and list issues" \
+    --session-dir "sessions/<threadId>/subagents/<subAgentId>" --tools "read,grep"
+  scripts/agent/subagent "continue: also check y.ts" -c \
+    --session-dir "sessions/<threadId>/subagents/<subAgentId>"
+
+See `pi --help` for the underlying flags.
+EOF
+  exit 0
+fi
+
 has_flag() {
   local want="$1"; shift
   for a in "$@"; do
