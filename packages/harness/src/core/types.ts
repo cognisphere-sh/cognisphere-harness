@@ -238,9 +238,18 @@ export interface ProviderCatalogEntry {
  * `enabledModels` is the operator-curated allowlist — agents may only
  * select from this list. May contain model IDs not in the catalog.
  */
+/** Per-model tweaks layered over pi-ai's built-in catalog. Mirrors the
+ *  subset of pi's models.json `modelOverrides` the harness consumes. */
+export interface ModelOverride {
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
 export interface ProviderConfig {
   credentials: Record<string, string>;
   enabledModels: string[];
+  /** Keyed by model ID. Optional; absent for most providers. */
+  modelOverrides?: Record<string, ModelOverride>;
 }
 
 export interface ModelsConfig {

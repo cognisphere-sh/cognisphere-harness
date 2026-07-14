@@ -282,7 +282,10 @@ jsonl: the most-recent non-aborted assistant message's context tokens
 (`usage.totalTokens` or the input/output/cacheRead/cacheWrite sum) and
 the model's context window from pi-ai's registry. `null` when no
 assistant message exists yet (or it's older than the tail window);
-`contextWindow` is `null` for model ids not in the registry.
+`contextWindow` is `null` for model ids not in the registry. A
+`modelOverrides.<modelId>.contextWindow` entry in
+`.secrets/models.json` takes precedence over the registry (see
+[§7](#7-models--apimodels)).
 
 `totalCost` is the sum of `usage.cost.total` across every assistant
 message in every session file in the thread (main agent + every
@@ -644,8 +647,11 @@ Implemented in `packages/harness/src/api/models.ts`. Reads/writes the global
 
 The provider catalog (id, displayName, `CredField[]`, default model
 list, optional notes, optional `oauth` flag) is fixed in
-`models-catalog.ts`. Only the per-provider `credentials` and
-`enabledModels` are persisted to models.json; OAuth subscription tokens
+`models-catalog.ts`. Only the per-provider `credentials`,
+`enabledModels`, and optional `modelOverrides` (per-model
+`contextWindow`/`maxTokens` layered over pi-ai's built-in catalog,
+used for context-window reporting) are persisted to models.json;
+OAuth subscription tokens
 are persisted to pi's own `<piAgentDir>/auth.json` (see
 [§7.1](#71-oauth-subscription-login--apimodelsoauth)).
 
@@ -662,6 +668,7 @@ are persisted to pi's own `<piAgentDir>/auth.json` (see
       "configured": true,
       "catalogModels": ["claude-sonnet-4-5", "claude-opus-4-7", ...],
       "enabledModels": ["claude-sonnet-4-5"],
+      "modelOverrides": { "claude-sonnet-4-5": { "contextWindow": 1000000 } },
       "notes": "...",
       "oauth": { "supported": true, "connected": false }
     },
@@ -694,7 +701,10 @@ schema (OAuth-only, e.g. `openai-codex`) are configured iff connected.
   "providers": {
     "anthropic": {
       "credentials": { "apiKey": "sk-ant-..." },
-      "enabledModels": ["claude-sonnet-4-5"]
+      "enabledModels": ["claude-sonnet-4-5"],
+      "modelOverrides": {
+        "claude-sonnet-4-5": { "contextWindow": 1000000 }
+      }
     }
   }
 }
@@ -712,6 +722,10 @@ Filters:
   ignored.
 - `enabledModels` entries must be non-empty strings; non-strings are
   dropped.
+- `modelOverrides` merges per model: `null` for a model deletes its
+  entry; an object replaces it wholesale. Values must be finite
+  positive numbers (`contextWindow`, `maxTokens`) — anything else is
+  dropped by the store's normalize on save.
 
 After saving, the route reloads every running agent whose
 `agentJson.model.provider` matches one of the touched providers

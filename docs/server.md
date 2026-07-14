@@ -309,14 +309,22 @@ ids that agents may select.
     "providers": {
       "<providerId>": {
         "credentials": { "<key>": "<plaintext>", ... },
-        "enabledModels": ["<modelId>", ...]
+        "enabledModels": ["<modelId>", ...],
+        "modelOverrides": {
+          "<modelId>": { "contextWindow": 1000000, "maxTokens": 64000 }
+        }
       }
     }
   }
   ```
 
   `getProvider(id)` returns the operator's stored config; `save(cfg)`
-  rewrites the whole object at 0600.
+  rewrites the whole object at 0600. `modelOverrides` is optional
+  per-model metadata layered over pi-ai's built-in catalog — currently
+  consumed only by the context-window reporting in `api/agents.ts`
+  (an override wins over the built-in registry). `normalize()` (run on
+  both load and save) keeps only finite positive numbers and drops
+  empty entries.
 
 Agent-level provider validation lives in `agent-manager.ts`
 (`resolveAndValidateProvider`). At start it:

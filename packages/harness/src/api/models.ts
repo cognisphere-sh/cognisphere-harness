@@ -29,8 +29,10 @@ import type { CredField, ProviderConfig } from "../core/types.js";
  *
  * The catalog (provider IDs, credential schemas, default model lists)
  * is fixed in code; the persisted config only stores per-provider
- * `credentials` (a Record<string,string>) and `enabledModels` (which
- * may include custom IDs not in the catalog).
+ * `credentials` (a Record<string,string>), `enabledModels` (which
+ * may include custom IDs not in the catalog), and optional
+ * `modelOverrides` (per-model contextWindow/maxTokens tweaks layered
+ * over pi-ai's built-in catalog; `null` per model deletes the entry).
  *
  * v0: credentials are plaintext on disk. The runner injects each
  * configured provider's env vars into the spawned pi child if the
@@ -54,6 +56,7 @@ export interface ProviderInfo {
   configured: boolean;
   catalogModels: string[];
   enabledModels: string[];
+  modelOverrides: Record<string, { contextWindow?: number; maxTokens?: number }>;
   notes?: string;
   /** Present only for providers with subscription OAuth support. */
   oauth?: { supported: true; connected: boolean };
@@ -65,6 +68,10 @@ type PutBody = {
     {
       credentials?: Record<string, string | null>;
       enabledModels?: string[];
+      modelOverrides?: Record<
+        string,
+        { contextWindow?: number; maxTokens?: number } | null
+      >;
     }
   >;
 };
@@ -141,6 +148,7 @@ export function modelsRouter(
         configured,
         catalogModels: entry.models,
         enabledModels: cfgEntry?.enabledModels ?? [],
+        modelOverrides: cfgEntry?.modelOverrides ?? {},
         notes: entry.notes,
         oauth: entry.oauth
           ? { supported: true as const, connected: oauthConnected }
@@ -208,7 +216,7 @@ export function modelsRouter(
       return c.json(
         {
           error:
-            'expected { providers: { <providerId>: { credentials?: Record<string,string|null>, enabledModels?: string[] } } }',
+            'expected { providers: { <providerId>: { credentials?: Record<string,string|null>, enabledModels?: string[], modelOverrides?: Record<string,{contextWindow?,maxTokens?}|null> } } }',
         },
         400,
       );
@@ -250,6 +258,18 @@ export function modelsRouter(
         target.enabledModels = payload.enabledModels.filter(
           (m): m is string => typeof m === "string" && m.length > 0,
         );
+      }
+
+      // Merge per model; `null` deletes. Value validation (finite,
+      // positive numbers) is store.save()'s normalize().
+      if (payload.modelOverrides && typeof payload.modelOverrides === "object") {
+        const next = { ...(target.modelOverrides ?? {}) };
+        for (const [modelId, o] of Object.entries(payload.modelOverrides)) {
+          if (o === null) delete next[modelId];
+          else next[modelId] = o;
+        }
+        if (Object.keys(next).length > 0) target.modelOverrides = next;
+        else delete target.modelOverrides;
       }
       merged[pid] = target;
     }

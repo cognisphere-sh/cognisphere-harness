@@ -213,7 +213,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       // Tail-read keeps this cheap even for large jsonls.
       const lastSessionId = activeSessionId ?? sessions[0]?.sessionId ?? null;
       const lastContext = lastSessionId
-        ? readLastAssistantUsage(join(tDir, `${lastSessionId}.jsonl`))
+        ? readLastAssistantUsage(models, join(tDir, `${lastSessionId}.jsonl`))
         : null;
       // Sum cost.total across every assistant message in every session
       // file (main + each sub-agent) so the sidebar can show running
@@ -368,14 +368,14 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
           if (!f.isFile() || !f.name.endsWith(".jsonl")) continue;
           aggregateAgentFile(join(subDir, f.name), subState);
         }
-        subagents.push(stateToAgentUsage(ent.name, subState));
+        subagents.push(stateToAgentUsage(models, ent.name, subState));
       }
       subagents.sort((a, b) => a.agent.localeCompare(b.agent));
     }
 
     return c.json({
       threadId,
-      main: stateToAgentUsage("main", mainState),
+      main: stateToAgentUsage(models, "main", mainState),
       subagents,
     });
   });
@@ -564,7 +564,8 @@ interface ModelUsageAgg {
 
 interface LastContextInfo {
   tokens: number;
-  /** `null` when the model isn't in pi-ai's registry (e.g. a custom id). */
+  /** `null` when the model isn't in pi-ai's registry (e.g. a custom id)
+   *  and no `modelOverrides` entry in `.secrets/models.json` supplies it. */
   contextWindow: number | null;
   model: string;
 }
@@ -585,7 +586,11 @@ function newAgentState(): AgentState {
   return { models: new Map(), latest: null };
 }
 
-function stateToAgentUsage(name: string, state: AgentState): AgentUsage {
+function stateToAgentUsage(
+  store: ModelsStore,
+  name: string,
+  state: AgentState,
+): AgentUsage {
   const latest = state.latest;
   return {
     agent: name,
@@ -593,7 +598,7 @@ function stateToAgentUsage(name: string, state: AgentState): AgentUsage {
     lastContext: latest
       ? {
           tokens: latest.tokens,
-          contextWindow: getContextWindow(latest.provider, latest.model),
+          contextWindow: getContextWindow(store, latest.provider, latest.model),
           model: latest.provider
             ? `${latest.provider}/${latest.model}`
             : latest.model,
@@ -689,8 +694,16 @@ function lastUsageTokens(usage: Record<string, unknown>): number {
   );
 }
 
-function getContextWindow(provider: string, modelId: string): number | null {
+function getContextWindow(
+  store: ModelsStore,
+  provider: string,
+  modelId: string,
+): number | null {
   if (!provider || !modelId) return null;
+  // Operator override from .secrets/models.json wins over the built-in catalog.
+  const override =
+    store.getProvider(provider)?.modelOverrides?.[modelId]?.contextWindow;
+  if (typeof override === "number") return override;
   // pi-ai's `getBuiltinModel` is generic over a literal model-id union; we
   // cast to a dynamic signature since the runtime impl is just a Map lookup
   // that returns undefined on miss.
@@ -706,7 +719,10 @@ function getContextWindow(provider: string, modelId: string): number | null {
  *  list, which polls every 5s and can't afford to slurp every session
  *  file in full. Returns null if no assistant message lives within
  *  the tail window. */
-function readLastAssistantUsage(filePath: string): LastContextInfo | null {
+function readLastAssistantUsage(
+  store: ModelsStore,
+  filePath: string,
+): LastContextInfo | null {
   let fd: number;
   try {
     fd = openSync(filePath, "r");
@@ -751,7 +767,7 @@ function readLastAssistantUsage(filePath: string): LastContextInfo | null {
       const model = typeof msg.model === "string" ? msg.model : "";
       return {
         tokens,
-        contextWindow: getContextWindow(provider, model),
+        contextWindow: getContextWindow(store, provider, model),
         model: provider ? `${provider}/${model}` : model,
       };
     }

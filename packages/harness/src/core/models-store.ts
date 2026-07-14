@@ -6,7 +6,8 @@
  *     "providers": {
  *       "<providerId>": {
  *         "credentials": { "<key>": "<plaintext>", ... },
- *         "enabledModels": ["<modelId>", ...]
+ *         "enabledModels": ["<modelId>", ...],
+ *         "modelOverrides": { "<modelId>": { "contextWindow": 1000000, "maxTokens": 64000 }, ... }
  *       }
  *     }
  *   }
@@ -19,7 +20,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ModelsConfig, ProviderConfig } from "./types.js";
+import type { ModelOverride, ModelsConfig, ProviderConfig } from "./types.js";
 
 const PLACEHOLDER: ModelsConfig = { providers: {} };
 
@@ -71,7 +72,7 @@ function normalize(input: unknown): ModelsConfig {
   const out: Record<string, ProviderConfig> = {};
   for (const [pid, val] of Object.entries(raw.providers as Record<string, unknown>)) {
     if (!val || typeof val !== "object" || Array.isArray(val)) continue;
-    const v = val as { credentials?: unknown; enabledModels?: unknown };
+    const v = val as { credentials?: unknown; enabledModels?: unknown; modelOverrides?: unknown };
     const credentials: Record<string, string> = {};
     if (v.credentials && typeof v.credentials === "object" && !Array.isArray(v.credentials)) {
       for (const [k, raw] of Object.entries(v.credentials as Record<string, unknown>)) {
@@ -81,7 +82,24 @@ function normalize(input: unknown): ModelsConfig {
     const enabledModels = Array.isArray(v.enabledModels)
       ? v.enabledModels.filter((m): m is string => typeof m === "string")
       : [];
-    out[pid] = { credentials, enabledModels };
+    let modelOverrides: Record<string, ModelOverride> | undefined;
+    if (v.modelOverrides && typeof v.modelOverrides === "object" && !Array.isArray(v.modelOverrides)) {
+      const parsed: Record<string, ModelOverride> = {};
+      for (const [modelId, o] of Object.entries(v.modelOverrides as Record<string, unknown>)) {
+        if (!o || typeof o !== "object" || Array.isArray(o)) continue;
+        const src = o as { contextWindow?: unknown; maxTokens?: unknown };
+        const entry: ModelOverride = {};
+        if (typeof src.contextWindow === "number" && Number.isFinite(src.contextWindow) && src.contextWindow > 0) {
+          entry.contextWindow = src.contextWindow;
+        }
+        if (typeof src.maxTokens === "number" && Number.isFinite(src.maxTokens) && src.maxTokens > 0) {
+          entry.maxTokens = src.maxTokens;
+        }
+        if (Object.keys(entry).length > 0) parsed[modelId] = entry;
+      }
+      if (Object.keys(parsed).length > 0) modelOverrides = parsed;
+    }
+    out[pid] = { credentials, enabledModels, ...(modelOverrides ? { modelOverrides } : {}) };
   }
   return { providers: out };
 }
