@@ -18,6 +18,30 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.12]
+
+### Changed
+
+- `telegram/telegram-cli`: `send-message`, `edit-message`, and `send-file`
+  captions now auto-convert standard markdown (`**bold**`, `*italic*`,
+  `` `code` ``, ``` blocks, links, headers, bullets) to Telegram HTML when
+  no `--parse-mode` is passed; markdown tables render as column-aligned
+  monospace `<pre>` blocks (Telegram has no table markup). If Telegram
+  rejects the generated HTML, the message is automatically resent as plain
+  text, so formatting can never drop a message. Explicit `--parse-mode`
+  keeps the previous raw behavior.
+- Telegram seed prompt: agents are told to write plain markdown and not
+  pass `--parse-mode`; removed the stale `--parse-mode Markdown` example.
+
+### Breaking changes
+
+- Seeded `scripts/telegram/telegram-cli` changed (markdown→HTML
+  auto-formatting). Existing agents keep their provisioned copies; re-copy
+  from the new seed to pick it up.   [affects: agents/*/scripts/telegram/*]
+- Telegram section of seeded system prompts changed (markdown guidance,
+  removed `--parse-mode Markdown` example). Graft into existing agents'
+  `system_prompt.md`.   [affects: agents/*/system_prompt.md]
+
 ## [0.3.11]
 
 ### Changed
