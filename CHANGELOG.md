@@ -18,6 +18,18 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.10]
+
+### Added
+
+- Optional per-provider `modelOverrides` in `.secrets/models.json`
+  (`{ "<modelId>": { "contextWindow"?, "maxTokens"? } }`), layered over
+  pi-ai's built-in catalog and used for context-window reporting
+  (`lastContext.contextWindow` in the threads-list and usage endpoints —
+  an override wins over the registry). Accepted and returned by
+  `PUT/GET /api/models` (`null` per model deletes the entry). Existing
+  configs without the field are unchanged.
+
 ## [0.3.9]
 
 ### Changed
