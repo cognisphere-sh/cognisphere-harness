@@ -18,6 +18,26 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.7]
+
+### Added
+
+- New built-in `agent-messaging` plugin (opt-in): inter-/intra-agent messaging.
+  Each enabled agent gets an HTTP inbox at
+  `/webhook/<agent>/agent-messaging/api/send` and a seeded
+  `scripts/agent-msg/send` CLI; a received note wakes the target agent on the
+  target thread (`silent` delivers for awareness only).
+
+### Changed
+
+- Upgraded `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` from
+  `^0.78.0` to `^0.80.6` (switched the static catalog read to
+  `getBuiltinModel` from `@earendil-works/pi-ai/providers/all`).
+- Plugin seed provisioning now re-asserts `chmod 755` on every file under the
+  agent's `scripts/` after copying a plugin's `seed/` tree. Seeds land after
+  `bootstrap.sh`'s exec-bit repair pass, so a seeded script that lost its exec
+  bit would otherwise stay broken until the next restart.
+
 ## [0.3.6]
 
 ### Changed

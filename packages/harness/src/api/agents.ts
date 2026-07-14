@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { getModel } from "@earendil-works/pi-ai";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { AgentManager } from "../core/agent-manager.js";
 import { LifecycleError } from "../core/agent-manager.js";
 import { agentDir, secretsRoot } from "../core/config.js";
@@ -691,10 +691,10 @@ function lastUsageTokens(usage: Record<string, unknown>): number {
 
 function getContextWindow(provider: string, modelId: string): number | null {
   if (!provider || !modelId) return null;
-  // pi-ai's `getModel` is generic over a literal model-id union; we cast
-  // to a dynamic signature since the runtime impl is just a Map lookup
+  // pi-ai's `getBuiltinModel` is generic over a literal model-id union; we
+  // cast to a dynamic signature since the runtime impl is just a Map lookup
   // that returns undefined on miss.
-  const fn = getModel as unknown as (
+  const fn = getBuiltinModel as unknown as (
     p: string,
     m: string,
   ) => { contextWindow?: number } | undefined;

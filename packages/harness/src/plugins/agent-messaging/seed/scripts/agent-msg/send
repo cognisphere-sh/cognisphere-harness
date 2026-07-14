@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# agent-msg/send — message another agent's thread (inter-agent) or one of your
+# own other threads (intra-agent). Seeded by the `agent-messaging` plugin.
+#
+#   send --to-agent <agent> --thread-id <threadId> --message "…" \
+#        --from-agent <self> --from-thread-id <yourThreadId> [--subject "…"] [--silent]
+#
+# The note lands on <agent>'s thread <threadId> and WAKES that agent there so it
+# acts on it. `--from-agent`/`--from-thread-id` identify YOUR agent id and the
+# thread you're sending from, so the receiver can reply straight back to you.
+# `--silent` logs it for awareness only (no action prompted).
+#
+# Routing cheatsheet:
+#   - Yourself, a different thread      → --to-agent <self> --thread-id <otherThread>
+#   - Reach Chris/Bhoumik (via relay)   → --to-agent <self> --thread-id admin
+#   - Another agent's thread            → --to-agent <agent> --thread-id <theirThread>
+#
+# Base URL defaults to the local harness; override with HARNESS_BASE_URL.
+set -euo pipefail
+
+base="${HARNESS_BASE_URL:-http://127.0.0.1:7331}"
+to="" thread="" message="" subject="" from="" from_thread="" silent=false selfcheck=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --to-agent)  to="$2"; shift 2 ;;
+    --thread-id) thread="$2"; shift 2 ;;
+    --message)   message="$2"; shift 2 ;;
+    --subject)   subject="$2"; shift 2 ;;
+    --from-agent|--from) from="$2"; shift 2 ;;  # --from kept as legacy alias
+    --from-thread-id) from_thread="$2"; shift 2 ;;
+    --silent)    silent=true; shift ;;
+    --self-check) selfcheck=true; shift ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+
+payload() { # build the JSON body from current vars
+  jq -cn --arg from "$from" --arg fthread "$from_thread" --arg thread "$thread" --arg msg "$message" --arg subj "$subject" --argjson silent "$silent" \
+    '{from_agent:$from, from_thread_id:$fthread, thread_id:$thread, message:$msg, silent:$silent} + (if $subj=="" then {} else {subject:$subj} end)'
+}
+
+if $selfcheck; then
+  from="lexi" from_thread="lead-42" message="ping" subject="" silent=true
+  payload | jq -e '.from_agent=="lexi" and .from_thread_id=="lead-42" and .message=="ping" and .silent==true and (has("subject")|not)' >/dev/null \
+    && { echo "self-check OK"; exit 0; } || { echo "self-check FAILED" >&2; exit 1; }
+fi
+
+[ -n "$to" ] && [ -n "$thread" ] && [ -n "$message" ] && [ -n "$from" ] && [ -n "$from_thread" ] || {
+  echo "usage: send --to-agent A --thread-id T --message M --from-agent SELF --from-thread-id ST [--subject S] [--silent]" >&2; exit 2; }
+
+resp="$(curl -sS -X POST -H 'content-type: application/json' -w $'\n%{http_code}' \
+  --data "$(payload)" "$base/webhook/$to/agent-messaging/api/send")" \
+  || { echo "send failed — could not reach '$to' inbox at $base (is the harness running?)" >&2; exit 1; }
+code="${resp##*$'\n'}"; body="${resp%$'\n'*}"
+if [ "$code" != "200" ]; then
+  echo "send failed (HTTP $code) to '$to' thread=$thread: $body" >&2; exit 1
+fi
+echo "delivered to $to thread=$thread: $body"

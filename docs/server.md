@@ -917,6 +917,10 @@ in progress", "conflict")`.
    `scripts/<id>/…`), so the agent picks up the plugin's system-prompt
    fragment and helper CLIs. Seed files are plugin-owned, namespaced, and
    overwritten on every start to track the installed package version.
+   After the copy, every file under `<agentDir>/scripts/` is `chmod 755`
+   — seeds land *after* bootstrap.sh's exec-bit repair pass (step 4), so
+   a seeded script that lost its exec bit in transit would otherwise stay
+   broken until the next restart.
 7. **Start the runner.** Mark the agent `running` and log a single
    `agent started` line with running/failed plugin lists.
 
@@ -1568,7 +1572,7 @@ Agent-runner subsystem (HTTP API surface omitted — see
 | **subtotal (agent-runner)** | **~3 200** | |
 
 Built-in plugins live in `packages/harness/src/plugins/<id>/`: `admin`,
-`scheduler`, `telegram`, `gws`, `gmail` (stub). `admin` and `scheduler` are
+`scheduler`, `telegram`, `gws`, `agent-messaging`. `admin` and `scheduler` are
 **core** (`CORE_PLUGIN_IDS`) — auto-installed on every agent and refused by
 `cognisphere plugin add`; the rest are opt-in per agent via a `plugins/<id>/`
 dir.

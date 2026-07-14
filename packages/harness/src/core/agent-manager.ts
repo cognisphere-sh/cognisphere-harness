@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
@@ -575,7 +575,13 @@ export class AgentManager {
     // drops everything in place. Files are plugin-owned and namespaced, and are
     // overwritten on every start so they track the installed package version.
     const seedDir = join(entry.sourceDir, "seed");
-    if (existsSync(seedDir)) cpSync(seedDir, dir, { recursive: true });
+    if (existsSync(seedDir)) {
+      cpSync(seedDir, dir, { recursive: true });
+      // Seeds are copied AFTER bootstrap.sh's chmod pass (step 2.5 of
+      // startAgent), so a seeded script that lost its exec bit in transit
+      // would stay broken until the next restart. Re-assert +x here.
+      makeScriptsExecutable(join(dir, "scripts"));
+    }
 
     const pdir = join(dir, "plugins", pluginId);
     const cfgPath = join(pdir, "config.json");
@@ -697,6 +703,21 @@ function runBootstrap(dir: string, log: Logger): Promise<void> {
       resolve();
     });
   });
+}
+
+/**
+ * Recursively `chmod +x` every regular file under `scriptsDir` (no-op if the
+ * dir is absent). Mirrors bootstrap.sh's exec-bit repair, but runs at seed-copy
+ * time so plugin scripts provisioned after bootstrap are immediately runnable.
+ * ponytail: chmods every file, not just shebang'd ones — scripts/ holds only
+ * wrappers and the odd .md, and a +x .md is harmless.
+ */
+function makeScriptsExecutable(scriptsDir: string): void {
+  if (!existsSync(scriptsDir)) return;
+  for (const entry of readdirSync(scriptsDir, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile()) continue;
+    chmodSync(join(entry.parentPath, entry.name), 0o755);
+  }
 }
 
 function scanPluginDirs(dir: string): string[] {
