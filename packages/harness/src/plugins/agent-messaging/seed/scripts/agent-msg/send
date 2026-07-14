@@ -12,7 +12,6 @@
 #
 # Routing cheatsheet:
 #   - Yourself, a different thread      → --to-agent <self> --thread-id <otherThread>
-#   - Reach Chris/Bhoumik (via relay)   → --to-agent <self> --thread-id admin
 #   - Another agent's thread            → --to-agent <agent> --thread-id <theirThread>
 #
 # Base URL defaults to the local harness; override with HARNESS_BASE_URL.

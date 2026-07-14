@@ -90,7 +90,7 @@ export default class AgentMessagingPlugin implements Plugin {
           `[AGENT MESSAGE] from ${from}` +
           (fromThread ? ` (their thread ${fromThread})` : "") +
           (subject ? ` — ${subject}` : "") +
-          ` (on thread ${thread}). Internal note from another agent — NOT a customer message; never forward it to a customer.` +
+          ` (on thread ${thread}). Internal note from another agent — NOT an external message; never forward it outside the harness.` +
           (fromThread
             ? ` To respond, reply to the sender: \`bash scripts/agent-msg/send --to-agent ${from} --thread-id ${fromThread} --from-agent ${ctx.agentId} --from-thread-id ${thread} --message "…"\`.`
             : "");
