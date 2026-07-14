@@ -25,6 +25,46 @@ function decodeEscapes(s) {
   );
 }
 
+// Convert standard markdown (what the agent naturally writes) to Telegram
+// HTML. Telegram's own "Markdown" modes don't understand **bold** and
+// MarkdownV2 requires escaping half the ASCII table, so HTML is the safe
+// target. ponytail: regex-based, no nesting inside code spans is the only
+// guarantee; swap for a real parser if formatting bugs pile up.
+function mdToHtml(md) {
+  const esc = (s) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const stash = [];
+  const stashIt = (html) => `\x00${stash.push(html) - 1}\x00`;
+  let s = md.replace(/```\w*\n?([\s\S]*?)```/g, (_, code) =>
+    stashIt(`<pre>${esc(code.replace(/\n$/, ""))}</pre>`),
+  );
+  s = s.replace(/`([^`\n]+)`/g, (_, code) => stashIt(`<code>${esc(code)}</code>`));
+  // Markdown tables → aligned monospace <pre> (Telegram has no table markup).
+  s = s.replace(/(?:^\|.*\|[ \t]*(?:\n|$)){2,}/gm, (block) => {
+    const rows = block
+      .trimEnd()
+      .split("\n")
+      .map((l) => l.trim().slice(1, -1).split("|").map((c) => c.trim().replace(/\*\*/g, "")))
+      .filter((r) => !r.every((c) => /^:?-+:?$/.test(c)));
+    const w = [];
+    for (const r of rows) r.forEach((c, i) => (w[i] = Math.max(w[i] ?? 0, c.length)));
+    const text = rows
+      .map((r) => r.map((c, i) => c.padEnd(w[i])).join("  ").trimEnd())
+      .join("\n");
+    return `${stashIt(`<pre>${esc(text)}</pre>`)}\n`;
+  });
+  s = esc(s);
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/\*\*([^*\n](?:[^\n]*?[^*\n])?)\*\*/g, "<b>$1</b>");
+  s = s.replace(/__([^_\n](?:[^\n]*?[^_\n])?)__/g, "<b>$1</b>");
+  s = s.replace(/(^|[\s(])\*([^\s*][^*\n]*?)\*(?=[\s.,!?:;)]|$)/gm, "$1<i>$2</i>");
+  s = s.replace(/(^|[\s(])_([^\s_][^_\n]*?)_(?=[\s.,!?:;)]|$)/gm, "$1<i>$2</i>");
+  s = s.replace(/~~([^~\n]+)~~/g, "<s>$1</s>");
+  s = s.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
+  s = s.replace(/^(\s*)[-*]\s+/gm, "$1• ");
+  return s.replace(/\x00(\d+)\x00/g, (_, i) => stash[Number(i)]);
+}
+
 function parseFlags(args) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -47,7 +87,7 @@ function getToken() {
   return token;
 }
 
-async function tg(method, body) {
+async function tg(method, body, { soft = false } = {}) {
   const token = getToken();
   const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
@@ -56,13 +96,28 @@ async function tg(method, body) {
   });
   const json = await res.json();
   if (!res.ok || !json.ok) {
+    if (soft) return null;
     console.error(json?.description ?? `HTTP ${res.status}`);
     exit(1);
   }
   return json.result;
 }
 
-async function tgMultipart(method, form) {
+// Send with markdown→HTML formatting; if Telegram rejects the HTML (parse
+// error), resend the original text unformatted rather than failing.
+async function tgFormatted(method, body) {
+  if (body.text !== undefined) {
+    const out = await tg(
+      method,
+      { ...body, text: mdToHtml(body.text), parse_mode: "HTML" },
+      { soft: true },
+    );
+    if (out !== null) return out;
+  }
+  return tg(method, body);
+}
+
+async function tgMultipart(method, form, { soft = false } = {}) {
   const token = getToken();
   const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
@@ -70,6 +125,7 @@ async function tgMultipart(method, form) {
   });
   const json = await res.json();
   if (!res.ok || !json.ok) {
+    if (soft) return null;
     console.error(json?.description ?? `HTTP ${res.status}`);
     exit(1);
   }
@@ -92,6 +148,10 @@ COMMANDS
   send-reaction  --chat-id <ID> --message-id <ID> --emoji "👍"
 
 Literal \\n, \\t, \\r inside --text/--caption are decoded to real characters.
+Without --parse-mode, standard markdown in --text/--caption (**bold**, \`code\`,
+links, headers) is auto-converted to Telegram HTML; if Telegram rejects the
+formatting the message is resent as plain text. Pass --parse-mode to send
+raw Telegram Markdown/HTML yourself.
 On success prints {"message_id":N} for sends, "ok" for edit/delete/reaction.
 `;
 
@@ -110,8 +170,13 @@ async function main() {
       if (flags["reply-to"]) {
         body.reply_parameters = { message_id: Number(flags["reply-to"]) };
       }
-      if (flags["parse-mode"]) body.parse_mode = flags["parse-mode"];
-      const out = await tg("sendMessage", body);
+      let out;
+      if (flags["parse-mode"]) {
+        body.parse_mode = flags["parse-mode"];
+        out = await tg("sendMessage", body);
+      } else {
+        out = await tgFormatted("sendMessage", body);
+      }
       console.log(JSON.stringify({ message_id: out.message_id }));
       return;
     }
@@ -140,17 +205,28 @@ async function main() {
       }
       const fileData = await readFile(filePath);
       const blob = new Blob([fileData]);
-      const form = new FormData();
-      form.set("chat_id", chatId);
-      form.set(entry.field, blob, basename(filePath));
-      if (flags.caption) form.set("caption", decodeEscapes(flags.caption));
-      if (flags["reply-to"]) {
-        form.set(
-          "reply_parameters",
-          JSON.stringify({ message_id: Number(flags["reply-to"]) }),
-        );
+      const caption = flags.caption ? decodeEscapes(flags.caption) : undefined;
+      const buildForm = (cap, parseMode) => {
+        const form = new FormData();
+        form.set("chat_id", chatId);
+        form.set(entry.field, blob, basename(filePath));
+        if (cap !== undefined) form.set("caption", cap);
+        if (parseMode) form.set("parse_mode", parseMode);
+        if (flags["reply-to"]) {
+          form.set(
+            "reply_parameters",
+            JSON.stringify({ message_id: Number(flags["reply-to"]) }),
+          );
+        }
+        return form;
+      };
+      let out = null;
+      if (caption !== undefined) {
+        out = await tgMultipart(entry.method, buildForm(mdToHtml(caption), "HTML"), {
+          soft: true,
+        });
       }
-      const out = await tgMultipart(entry.method, form);
+      if (out === null) out = await tgMultipart(entry.method, buildForm(caption));
       console.log(JSON.stringify({ message_id: out.message_id }));
       return;
     }
@@ -161,8 +237,12 @@ async function main() {
         message_id: Number(flags["message-id"]),
         text: decodeEscapes(flags.text),
       };
-      if (flags["parse-mode"]) body.parse_mode = flags["parse-mode"];
-      await tg("editMessageText", body);
+      if (flags["parse-mode"]) {
+        body.parse_mode = flags["parse-mode"];
+        await tg("editMessageText", body);
+      } else {
+        await tgFormatted("editMessageText", body);
+      }
       console.log("ok");
       return;
     }

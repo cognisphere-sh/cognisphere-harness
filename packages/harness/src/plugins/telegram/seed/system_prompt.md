@@ -30,7 +30,6 @@ The CLI reads `TELEGRAM_BOT_TOKEN` from env (injected by the harness from
 ```
 bash scripts/telegram/telegram-cli send-message   --chat-id <ID> --text "..."
 bash scripts/telegram/telegram-cli send-message   --chat-id <ID> --text "..." --reply-to <MessageId>
-bash scripts/telegram/telegram-cli send-message   --chat-id <ID> --text "*hi*" --parse-mode Markdown
 bash scripts/telegram/telegram-cli send-file      --chat-id <ID> --file <path> --type <photo|document|voice|video|audio> [--caption "..."] [--reply-to <ID>]
 bash scripts/telegram/telegram-cli edit-message   --chat-id <ID> --message-id <ID> --text "..."
 bash scripts/telegram/telegram-cli delete-message --chat-id <ID> --message-id <ID>
@@ -39,6 +38,12 @@ bash scripts/telegram/telegram-cli send-reaction  --chat-id <ID> --message-id <I
 
 `send-message` and `send-file` print `{"message_id": <int>}` on success;
 the others print `ok`. Errors go to stderr and exit non-zero.
+
+Write `--text` / `--caption` in standard markdown (`**bold**`, `` `code` ``,
+lists, links); the CLI converts it to Telegram formatting automatically.
+Do not pass `--parse-mode` unless you need raw Telegram Markdown/HTML.
+Markdown tables render as monospace blocks — Telegram has no real tables,
+so keep them to 2–3 narrow columns (phone screens) or prefer bullet lists.
 
 The text generated in your turn is **not** sent to the user — your turn is
 internal. Always invoke `telegram-cli send-message` to actually deliver a
