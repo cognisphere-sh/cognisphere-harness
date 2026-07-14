@@ -18,6 +18,24 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.9]
+
+### Changed
+
+- Base-agent template prompts: per-thread notes move to
+  `workspace/threads/<ThreadId>/` (bare ThreadId as dir name), new
+  `workspace/daily_notes/YYYY-MM-DD.md` convention, cross-thread knowledge
+  relocated from `workspace/knowledge/` to agent-root `knowledge/`, and
+  `session-reader` documented as directly executable (invoking it via `bash`
+  fails — it's a Node script).
+
+### Breaking changes
+
+- Base template `system_prompts/0-base_prompt.md` and `0.1-main-agent.md`
+  changed (workspace layout + knowledge dir + session-reader invocation).
+  Existing agents keep their forked copies; graft the edits if you want the
+  new conventions.   [affects: agents/*/system_prompts/*]
+
 ## [0.3.8]
 
 ### Added
