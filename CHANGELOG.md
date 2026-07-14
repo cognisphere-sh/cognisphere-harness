@@ -18,6 +18,29 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.11]
+
+### Changed
+
+- Every seeded script now answers `-h`/`--help`: base-agent
+  `scripts/agent/{subagent,agent-browser,ddgs,markitdown}` and plugin seeds
+  `scheduler/scheduler-cli` (also bare `help`), `telegram/telegram-cli`
+  (also bare `help`), and `agent-msg/send`. The three thin wrappers print a
+  wrapper note (what they resolve, env knobs) and then forward to the
+  underlying CLI's own help; `--help` exits 0 even when the underlying
+  binary isn't installed yet. `session-reader` and `gws/format-email`
+  already had `--help` and are unchanged.
+- Fixed: `scheduler-cli --help` (or any invocation from outside the agent
+  dir) no longer aborts before printing — the state-file init ran before
+  command parsing and `set -e` killed the script when
+  `plugins/scheduler/state/` didn't exist.
+
+### Breaking changes
+
+- Seeded scripts under `scripts/` changed (`--help` support). Existing
+  agents keep their provisioned copies; graft the edits or re-copy from the
+  new seeds to pick them up.   [affects: agents/*/scripts/*]
+
 ## [0.3.10]
 
 ### Added
