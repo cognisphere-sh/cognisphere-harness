@@ -18,6 +18,23 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.15]
+
+### Added
+
+- New `create-plugin` agent skill: guides authoring a user-scope plugin in a
+  harness's `plugins/<id>/` (contract, seed layout, per-agent enable/config,
+  secrets, verification), with a tested hello-plugin template.
+- The package now bundles the harness-facing agent skills
+  (`cognisphere-deploy`, `cognisphere-upgrade`, `create-plugin`) under
+  `skills/` (prepack), and `cognisphere init` copies them into the new
+  harness dir's `.claude/skills/` and `.agents/skills/` so agents working
+  inside the harness discover them.
+
+### Breaking changes
+
+- Existing harness dirs predate the bundled agent skills; copy them in: `cp -R node_modules/@cognisphere-sh/cognisphere-harness/skills/. .claude/skills/ && cp -R node_modules/@cognisphere-sh/cognisphere-harness/skills/. .agents/skills/`   [affects: .claude/skills/]
+
 ## [0.3.14]
 
 ### Fixed
