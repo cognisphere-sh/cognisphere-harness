@@ -18,6 +18,32 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.13]
+
+### Added
+
+- New seeded pi extension `extensions/bash-guard.ts`: every agent `bash`
+  command now runs under `set -u`, so a `$...` inside double quotes (e.g.
+  `--text "costs $100"`, where bash silently expanded `$1` to nothing and
+  sent "costs 00") fails loudly with an `unbound variable` error instead of
+  silently corrupting CLI arguments. On that error, a quoting hint is
+  appended to the tool result so the agent self-corrects. Agents can opt
+  out per-command with `set +u`.
+
+### Changed
+
+- Base system prompt: bash tool guidelines now tell agents to single-quote
+  literal text arguments (or use a file / quoted heredoc `<<'EOF'`), and
+  document that commands run under `set -u`.
+
+### Breaking changes
+
+- New seeded file `extensions/bash-guard.ts`. Copy it from the new seed
+  into existing agents.   [affects: agents/*/extensions/*]
+- Bash tool guidelines section of the seeded base system prompt changed
+  (single-quoting rule, `set -u` note). Graft into existing agents'
+  `system_prompt.md`.   [affects: agents/*/system_prompt.md]
+
 ## [0.3.12]
 
 ### Changed
