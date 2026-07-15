@@ -5,8 +5,8 @@
  */
 import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join, relative } from "node:path";
-import { fail, info, packageVersion, run, writeJson } from "./util.js";
+import { join, relative, resolve } from "node:path";
+import { PKG_ROOT, copyDir, fail, info, packageVersion, run, writeJson } from "./util.js";
 
 const GITIGNORE = `node_modules/
 .secrets/
@@ -60,6 +60,8 @@ export function cmdInit(argv: string[]): void {
   writeFileSync(join(dir, "agents", ".gitkeep"), "");
   writeFileSync(join(dir, "plugins", ".gitkeep"), "");
 
+  copySkills(dir);
+
   // The harness dir is a git repo so upgrades are reviewable diffs (§9).
   run("git", ["init", "--quiet", dir]);
 
@@ -74,6 +76,28 @@ export function cmdInit(argv: string[]): void {
   info("  pnpm install");
   info("  cognisphere agent new <name>                     # add your first agent");
   info("  cognisphere dev                                  # run locally (hot reload)");
+}
+
+/**
+ * Copy the harness-dir-facing agent skills (deploy, upgrade, create-plugin)
+ * into the new dir's `.claude/skills/` and `.agents/skills/`, so agents
+ * working inside the harness discover them. Source is the package's bundled
+ * `skills/` (prepack); falls back to the monorepo's `.claude/skills/` when
+ * running from a checkout (same pattern as the upgrade command's CHANGELOG).
+ */
+function copySkills(dir: string): void {
+  const shipped = join(PKG_ROOT, "skills");
+  const source = existsSync(shipped)
+    ? shipped
+    : resolve(PKG_ROOT, "..", "..", ".claude", "skills");
+  if (!existsSync(source)) return;
+  for (const id of ["cognisphere-deploy", "cognisphere-upgrade", "create-plugin"]) {
+    const src = join(source, id);
+    if (!existsSync(src)) continue;
+    for (const target of [".claude", ".agents"]) {
+      copyDir(src, join(dir, target, "skills", id));
+    }
+  }
 }
 
 function parseArgs(argv: string[]): {

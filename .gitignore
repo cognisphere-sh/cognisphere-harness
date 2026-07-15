@@ -3,6 +3,7 @@ dist/
 # Generated at publish time by packages/harness/scripts/prepack.mjs
 packages/harness/dist-web/
 packages/harness/CHANGELOG.md
+packages/harness/skills/
 .env
 .env.local
 *.log

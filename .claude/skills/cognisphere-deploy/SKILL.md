@@ -42,9 +42,11 @@ pnpm install                                               # pins code via lockf
 ```
 
 `init` writes `harness.json` (`{version, timezone}`), a `.secrets/` dir with a
-generated `session-key` (0600), `package.json`, `.npmrc`, `.gitignore`, and an
-empty `agents/` + `plugins/`. The dir is a git repo — commit it (excluding
-`.secrets/`, which `.gitignore` already excludes).
+generated `session-key` (0600), `package.json`, `.npmrc`, `.gitignore`, an
+empty `agents/` + `plugins/`, and copies the harness-facing agent skills
+(deploy, upgrade, create-plugin) into `.claude/skills/` + `.agents/skills/`.
+The dir is a git repo — commit it (excluding `.secrets/`, which `.gitignore`
+already excludes).
 
 ### 2. Agents + plugins
 

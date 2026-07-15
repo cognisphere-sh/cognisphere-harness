@@ -32,3 +32,18 @@ if (existsSync(changelog)) {
   cpSync(changelog, resolve(pkgRoot, "CHANGELOG.md"));
   console.log("[prepack] CHANGELOG.md bundled");
 }
+
+// 3. Bundle the harness-dir-facing agent skills so `cognisphere init` can copy
+//    them into new harness dirs (.claude/skills/ + .agents/skills/).
+const skillsSrc = resolve(pkgRoot, "..", "..", ".claude", "skills");
+const skillsDst = resolve(pkgRoot, "skills");
+rmSync(skillsDst, { recursive: true, force: true });
+for (const id of ["cognisphere-deploy", "cognisphere-upgrade", "create-plugin"]) {
+  const src = resolve(skillsSrc, id);
+  if (!existsSync(src)) {
+    console.error(`[prepack] expected skill at ${src} — aborting`);
+    process.exit(1);
+  }
+  cpSync(src, resolve(skillsDst, id), { recursive: true });
+}
+console.log(`[prepack] skills bundled → ${skillsDst}`);

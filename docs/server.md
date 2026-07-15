@@ -126,6 +126,8 @@ is `<rootDir>/<harnessId>`.
 │   └── session-key                   32-byte HMAC key for signed session cookies
 ├── plugins/                      ← (optional) user-space plugins; user
 │   └── <plugin-id>/index.ts          plugins shadow built-ins on id collision
+├── .claude/skills/               ← agent skills (deploy, upgrade, create-plugin),
+├── .agents/skills/                   copied in by `cognisphere init` from the package
 └── agents/
     └── <agent-id>/
         ├── agent.json
