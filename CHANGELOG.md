@@ -18,6 +18,26 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.14]
+
+### Fixed
+
+- gws and telegram seed prompts moved from `seed/system_prompt.md` (copied
+  to the agent dir root, where `assembleSystemPrompt` never reads) to
+  `seed/system_prompts/plugin-<id>.md` — the layout every other plugin uses.
+  Until now, neither plugin's system-prompt fragment was ever included in
+  the agent's assembled prompt. The fragments load automatically on next
+  agent start (seeds are re-copied every start).
+- gws helper files (`format-email.ts`, `format-email-lib.mjs`,
+  `format-email-lib.d.mts`) moved from loose `seed/scripts/` into the
+  namespaced `seed/scripts/gws/`; the seeded `scripts/gws/format-email` CLI
+  now imports the lib from its own directory.
+
+### Breaking changes
+
+- gws/telegram seed prompt renamed `system_prompt.md` → `system_prompts/plugin-<id>.md`; delete the stale, never-read `system_prompt.md` at the agent dir root   [affects: agents/*/system_prompt.md]
+- gws helper lib namespaced under `scripts/gws/`; delete the stale loose copies `format-email.ts`, `format-email-lib.mjs`, `format-email-lib.d.mts` directly under `scripts/`   [affects: agents/*/scripts/format-email*]
+
 ## [0.3.13]
 
 ### Added
