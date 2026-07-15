@@ -14,7 +14,7 @@ import {
   formatEmail,
   formatTs,
   type GmailMessage,
-} from "./seed/scripts/format-email.js";
+} from "./seed/scripts/gws/format-email.js";
 
 const execFileP = promisify(execFile);
 const UNREAD_LABEL = "UNREAD";

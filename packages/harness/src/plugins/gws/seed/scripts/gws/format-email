@@ -4,7 +4,7 @@
  * `gws gmail users messages get --params '{"userId":"me","id":"<id>","format":"full"}'`),
  * print the body and an attachment listing in the same shape the gws plugin
  * delivers in `email_received` notifications. Decoding logic is shared with
- * the plugin runtime via `../format-email-lib.mjs`.
+ * the plugin runtime via `./format-email-lib.mjs`.
  *
  * Also accepts a Gmail `Thread` JSON (from `gws gmail users threads get`)
  * with `--list`, which prints one metadata block per message (id, from,
@@ -53,7 +53,7 @@ import {
   pickTextBody,
   sanitizeFilename,
   stripQuotedHistory,
-} from "../format-email-lib.mjs";
+} from "./format-email-lib.mjs";
 
 const execFileP = promisify(execFile);
 const runGws = (args) => execFileP("gws", args, { maxBuffer: 64 * 1024 * 1024 });

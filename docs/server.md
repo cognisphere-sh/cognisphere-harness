@@ -138,7 +138,7 @@ is `<rootDir>/<harnessId>`.
         │   ├── 0-base_prompt.md  ← shared base context (all agents); also appended to sub-agents
         │   ├── 0.1-main-agent.md ← main-agent-only role (threads, plugins, comms, how to spawn sub-agents); vars baked at create
         │   ├── 1-agent.md        ← persona, hand-written
-        │   └── N-<plugin>.md     ← plugin seeds (when installed)
+        │   └── plugin-<id>.md    ← plugin seeds (when installed)
         ├── scripts/agent/
         │   ├── subagent          ← wrapper around `pi -p`; appends base + sub-agent prompt
         │   └── sub-agent-prompt.md ← sub-agent-only role (NOT in system_prompts, so it never leaks into the main prompt)
