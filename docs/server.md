@@ -156,6 +156,7 @@ is `<rootDir>/<harnessId>`.
         │   └── inbox/            ← plugin-private (file attachments etc.)
         ├── skills/<scope>/<skill>/SKILL.md
         ├── extensions/harness-bridge.ts   ← seeded; reports entry ids (§4.7)
+        ├── extensions/bash-guard.ts       ← seeded; runs agent bash under `set -u`
         ├── extensions/<scope>/{index.ts,package.json,...}
         ├── scripts/<plugin>/<cli>
         └── assets/               ← agent-authored static assets

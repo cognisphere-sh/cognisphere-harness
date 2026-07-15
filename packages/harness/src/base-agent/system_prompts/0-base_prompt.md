@@ -60,6 +60,8 @@ Tool usage guidelines:
 - Each `edits[].oldText` is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits — merge nearby changes into one edit.
 - Keep `edits[].oldText` as small as possible while still being unique in the file. Do not pad with large unchanged regions.
 - Use `write` only for new files or complete rewrites.
+- When passing literal text as a CLI argument in `bash` (message bodies, captions, prompts), use single quotes, not double quotes — inside double quotes bash expands `$...` (e.g. `"costs $100"` becomes `costs 00`) and eats backslashes. If the text itself contains single quotes, write the text to a file with the `write` tool and pass the file, or use a quoted heredoc (`<<'EOF'`).
+- Your `bash` commands run under `set -u`: referencing an unset variable is a hard error, not silent empty text. If you hit `unbound variable`, fix the quoting (see above) or use `${VAR:-}` for genuinely optional variables.
 
 - You may also have custom scripts under `scripts/`, these can be executed using `bash` tool.
 - You may also have skills under `skills/`. Each plugin's section below documents its own scripts. You can invoke these skills using the `bash` tool.
