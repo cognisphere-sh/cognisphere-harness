@@ -236,7 +236,6 @@ export default class TelegramPlugin implements Plugin {
       text,
       channelId: chatId,
       metadata: {
-        ChatId: msg.chat.id,
         SenderId: msg.from?.id,
         SenderName: senderName(msg.from),
         MessageId: msg.message_id,

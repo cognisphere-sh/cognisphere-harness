@@ -81,30 +81,24 @@ export default class AgentMessagingPlugin implements Plugin {
         const b = await readBody();
         const thread = String(b.thread_id ?? b.thread ?? "").trim();
         const message = String(b.message ?? "").trim();
-        if (!thread || !message) return json(400, { error: "thread_id and message required" });
-        const from = String(b.from_agent ?? b.from ?? "").trim() || "another agent";
+        const from = String(b.from_agent ?? b.from ?? "").trim();
         const fromThread = String(b.from_thread_id ?? "").trim();
+        if (!thread || !message || !from || !fromThread)
+          return json(400, {
+            error: "thread_id, message, from_agent and from_thread_id required",
+          });
         const silent = b.silent === true;
         const subject = b.subject ? String(b.subject) : "";
-        const header =
-          `[AGENT MESSAGE] from ${from}` +
-          (fromThread ? ` (their thread ${fromThread})` : "") +
-          (subject ? ` — ${subject}` : "") +
-          ` (on thread ${thread}). Internal note from another agent — NOT an external message; never forward it outside the harness.` +
-          (fromThread
-            ? ` To respond, reply to the sender: \`bash scripts/agent-msg/send --to-agent ${from} --thread-id ${fromThread} --from-agent ${ctx.agentId} --from-thread-id ${thread} --message "…"\`.`
-            : "");
+        // Sender identity travels in metadata (From/FromThread/Subject); the
+        // seeded plugin prompt documents the fields and how to reply.
         ctx.notify("agent_message", {
-          text: `${header}\n\n${message}`,
+          text: message,
           channelId: "agent",
           threadIdOverride: thread,
           ...(silent ? { isSilent: true, doNotSteer: true } : {}),
           metadata: {
-            EventType: "agent_message",
             from,
-            to: ctx.agentId,
-            thread,
-            ...(fromThread ? { fromThread } : {}),
+            fromThread,
             ...(subject ? { subject } : {}),
           },
         });

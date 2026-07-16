@@ -414,9 +414,6 @@ export default class GwsPlugin implements Plugin {
       const timestamp = m.internalDate
         ? formatTs(Number(m.internalDate), ctx.timezone)
         : (h.get("date") ?? "(unknown)");
-      const timestampUtc = m.internalDate
-        ? new Date(Number(m.internalDate)).toISOString()
-        : "(unknown)";
 
       const header = [
         `Subject: ${subject}`,
@@ -456,10 +453,8 @@ export default class GwsPlugin implements Plugin {
         text,
         metadata: {
           MessageId: m.id,
-          GmailThreadId: threadId,
           From: from,
           ReceivedAt: timestamp,
-          ReceivedAtUtc: timestampUtc,
         },
       });
     }

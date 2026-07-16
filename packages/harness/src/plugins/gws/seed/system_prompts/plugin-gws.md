@@ -26,23 +26,20 @@ Your own address comes from `gws gmail users getProfile --params
 Metadata fields per message:
 
 - `Plugin: gws`
-- `Channel: <gmailThreadId>` — the raw Gmail thread id
+- `Channel: <gmailThreadId>` — the raw Gmail thread id; use it wherever a
+  command below takes a Gmail thread id
 - `MessageId: <gmailMessageId>` — the reply target for this email
-- `ThreadId: <gmailThreadId>` — same as `Channel`, present for symmetry
 - `From: <sender>`
 - `ReceivedAt: <YYYY-MM-DD HH:MM:SS TZ>` — when the email landed in the
   mailbox (Gmail `internalDate`, rendered in the harness timezone). Distinct
   from the harness-supplied `Timestamp:`, which is when the notification
   was enqueued — these diverge for backlog runs.
-- `ReceivedAtUtc: <ISO-8601 Z>` — same instant as `ReceivedAt` in UTC ISO
-  form (e.g. `2026-05-01T13:00:00.000Z`). Use this when you need an
-  unambiguous, timezone-free timestamp (sorting, diffing, persistence).
 
-The harness thread id (you'll see it in the assembled prompt footer as
-`ThreadId: …`, and it scopes session JSONLs under `sessions/<threadId>/`)
-is `<Subject>[<gmailThreadId>]` — frozen on the first message of the
-Gmail thread so a later `Re: …` rewrite still routes to the same harness
-thread.
+The harness `ThreadId:` in the same block (it scopes session JSONLs under
+`sessions/<threadId>/`) is `<Subject>[<gmailThreadId>]` — frozen on the
+first message of the Gmail thread so a later `Re: …` rewrite still routes
+to the same harness thread. Don't confuse it with `Channel`, the raw Gmail
+thread id.
 
 ### Body shape of `email_received`
 
@@ -73,7 +70,7 @@ users messages get` through `scripts/gws/format-email`:
 ```
 bash gws gmail users messages get \
   --params '{"userId":"me","id":"<MessageId>","format":"full"}' \
-  | scripts/gws/format-email --attachments-dir plugins/gws/inbox/<GmailThreadId>
+  | scripts/gws/format-email --attachments-dir plugins/gws/inbox/<Channel>
 ```
 
 `scripts/gws/format-email` reads a Gmail `Message` JSON from stdin and
@@ -92,7 +89,7 @@ date, and snippet, then fetch only the messages you actually need:
 
 ```
 bash gws gmail users threads get \
-  --params '{"userId":"me","id":"<GmailThreadId>","format":"metadata"}' \
+  --params '{"userId":"me","id":"<Channel>","format":"metadata"}' \
   | scripts/gws/format-email --list
 ```
 

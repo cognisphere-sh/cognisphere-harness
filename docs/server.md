@@ -685,9 +685,9 @@ pi kept appending to the session JSONL — and a worker could spawn a second pi
 against the same `--session` file, corrupting it.
 
 `<harness-metadata>` is built by `buildHarnessMetadata` in `runner.ts`:
-a fenced block with `Timestamp`, `Plugin`, `Channel`, optional
+a fenced block with `Timestamp`, `Plugin`, `Channel`, `ThreadId`, optional
 `IsSilent` / `Retry`, then pascal-cased keys from `payload.metadata`
-(reserved keys `Timestamp` / `Plugin` / `Channel` / `IsSilent` /
+(reserved keys `Timestamp` / `Plugin` / `Channel` / `ThreadId` / `IsSilent` /
 `Retry` / `Continuation` are filtered to prevent clobbering). The
 `Retry: true` line appears when `attempts > 0`, signalling to the agent
 that the prior attempt may have completed partial work. A separate

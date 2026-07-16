@@ -8,8 +8,8 @@ in long-poll mode server-side; you don't need a public webhook URL.
 User messages and edits arrive as `<harness-metadata>` blocks with:
 
 - `Plugin: telegram`
-- `Channel: <chatId>` (same as `ChatId` below — use this when replying)
-- `ChatId`, `SenderId`, `SenderName`, `MessageId`, `EventType` (`message` | `edit`)
+- `Channel: <chatId>` — the Telegram chat id; use this when replying
+- `SenderId`, `SenderName`, `MessageId`, `EventType` (`message` | `edit`)
 - `ReplyToMessageId` — present when the user replied to an earlier message
 - `MediaGroupId` — present on album / grouped media
 - `Attachments` — comma-separated paths (relative to the agent dir) to downloaded media files
@@ -25,7 +25,7 @@ conversion guidelines).
 
 The CLI reads `TELEGRAM_BOT_TOKEN` from env (injected by the harness from
 `secrets.json`) and calls the Telegram Bot API directly. Always pass
-`--chat-id <ChatId>` from the inbound metadata.
+`--chat-id <Channel>` from the inbound metadata.
 
 ```
 bash scripts/telegram/telegram-cli send-message   --chat-id <ID> --text "..."

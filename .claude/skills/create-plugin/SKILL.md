@@ -3,7 +3,7 @@ name: create-plugin
 description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin", or "write a plugin for the harness".
 metadata:
   author: cognisphere
-  version: "1.0.0"
+  version: "1.1.0"
   argument-hint: <plugin-id>
 ---
 
@@ -48,6 +48,43 @@ harness types, so the plugin has no build step and no dependencies.
 `notify` payload needs at least `{ text, channelId }`; optional `metadata`,
 `threadIdOverride`, `isSilent`, `doNotSteer`, `priority`. It enqueues an event
 and wakes the agent (or steers a live run).
+
+### Event & metadata conventions
+
+Every delivered event is wrapped by the runner in a `<harness-metadata>`
+block (`buildHarnessMetadata`, `core/runner.ts`). Design your `metadata`
+around what the runner already does:
+
+- **The runner adds the common fields for you**: `Timestamp`, `Plugin`,
+  `Channel`, `ThreadId`, plus conditional `IsSilent`/`Retry`/`Continuation`.
+  These keys are reserved — if your metadata uses them they are **silently
+  dropped**, and near-duplicates are noise (don't emit a `ChatId` when
+  `channelId` *is* the chat id; the builtins made exactly this mistake).
+- **Rendering**: keys are PascalCased (`fromThread` → `FromThread`),
+  `null`/`undefined` values are dropped, arrays are comma-joined, objects
+  JSON-stringified. Conditional fields are fine — just omit them.
+- **The notify event name is NOT delivered** — `notify("edited", …)` vs
+  `notify("message_received", …)` is invisible to the agent. If your plugin
+  emits more than one event kind on the same channel, add an `EventType`
+  metadata key (telegram: `message` | `edit`). If it emits one kind, skip
+  it — `Plugin: <id>` already identifies the source.
+- **Identity/routing goes in metadata, content goes in `text`.** Don't
+  prepend a `[MY PLUGIN] from X…` header to the text that repeats metadata
+  — put the fields in `metadata` and the *behavioral* guidance ("how to
+  reply", "never forward this") in the seed prompt.
+- **Document every metadata field in `seed/system_prompts/plugin-<id>.md`**
+  — it is the agent's only manual for your events. Name the fields exactly
+  as rendered (PascalCase) and say what to pass back into your CLI (e.g.
+  "use `Channel` as `--chat-id`").
+- **Webhook plugins: validate required fields and 400 on what's missing.**
+  Keep the CLI flags, the HTTP body fields, and the seed prompt in
+  agreement — a field optional in one place and required in another is a
+  latent bug.
+
+**Maintenance:** when you add/rename/remove a metadata field or an event
+kind, update the seed prompt in the same diff — a stale prompt makes the
+agent parse fields that no longer exist. `grep` your field names across
+`index.ts` + `seed/` before shipping.
 
 ## 2. Seed — prompt fragment + agent-facing CLIs
 
@@ -138,12 +175,20 @@ Config/secret edits need an agent restart to take effect:
 - **Plugin discovery is boot-time only.** A new `plugins/<id>/` dir needs a
   server restart (`cognisphere dev` watches harness *code*, not new plugin
   dirs — touch a watched file or bounce it).
+- **Fresh harness dir + pnpm ≥ 10: `better-sqlite3` build script is
+  ignored** (`[ERR_PNPM_IGNORED_BUILDS]`; the scaffolded
+  `pnpm.onlyBuiltDependencies` in package.json is no longer read). The
+  server then can't open its queue DB. Fix:
+  `printf 'allowBuilds:\n  better-sqlite3: true\n' > pnpm-workspace.yaml
+  && pnpm rebuild better-sqlite3`.
 
 ## Reference
 
 - Full lifecycle + on-disk layout: `docs/server.md` §4.9.3 and §5 (in this
   repo, or bundled with the installed package).
-- Builtin plugins are the best examples: `telegram` (long-poll + CLI),
-  `gws` (poller + shared lib in seed), `scheduler` (cron + CLI),
-  `admin` (HTTP loopback). Installed:
+- Builtin plugins are the best examples: `telegram` (long-poll + CLI +
+  multi-kind `EventType`), `gws` (poller + shared lib in seed),
+  `scheduler` (cron + CLI), `agent-messaging` (webhook inbox with
+  required-field validation + metadata-documented seed prompt), `admin`
+  (HTTP loopback). Installed:
   `node_modules/@cognisphere-sh/cognisphere-harness/src/plugins/`.

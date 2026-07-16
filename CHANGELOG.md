@@ -18,6 +18,45 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.16]
+
+### Added
+
+- Every `<harness-metadata>` block now carries a `ThreadId` common field
+  (after `Channel`), so agents can pass the routing id to plugin CLIs
+  (`--thread-id`) without guessing it. `ThreadId` joined the reserved
+  metadata keys — plugin-contributed values under that key are dropped.
+- Base main-agent prompt documents `ThreadId`: what it is, that it equals
+  `{{ThreadId}}`, and that it is distinct from plugin-side ids (Telegram
+  chat id, Gmail thread id).
+
+### Changed
+
+- **agent-messaging: `POST …/api/send` now rejects requests missing
+  `from_agent` or `from_thread_id` (400).** The seeded `agent-msg/send` CLI
+  already required both, so only direct HTTP callers are affected.
+- agent-messaging: the `[AGENT MESSAGE] from …` header prepended to the
+  delivered text is gone — the text is now the sender's message verbatim.
+  Sender identity travels only in metadata (`From`, `FromThread`, optional
+  `Subject`); the redundant `EventType`, `to`, and `thread` metadata keys
+  were dropped. The seed prompt documents the metadata fields and the
+  reply recipe.
+- telegram: dropped the redundant `ChatId` metadata key (always identical
+  to the common `Channel` field). Seed prompt now points at `Channel`.
+- gws: dropped the redundant `GmailThreadId` (identical to `Channel`) and
+  `ReceivedAtUtc` (same instant as `ReceivedAt`) metadata keys. Seed
+  prompt updated accordingly, including its stale `ThreadId` bullet.
+- `create-plugin` agent skill: new "Event & metadata conventions" section
+  (reserved/common fields, PascalCase rendering, when to emit `EventType`,
+  identity-in-metadata vs content-in-text, seed-prompt sync rule) and a
+  pnpm ≥ 10 `allowBuilds`/`better-sqlite3` gotcha.
+
+### Breaking changes
+
+- Seeded base main-agent prompt changed (`ThreadId` documented in the
+  message-metadata section). Existing agents keep their provisioned
+  copies; re-copy or graft from the new seed.   [affects: agents/*/system_prompts/0.1-main-agent.md]
+
 ## [0.3.15]
 
 ### Added

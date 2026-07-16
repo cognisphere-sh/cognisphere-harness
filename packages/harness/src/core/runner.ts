@@ -19,6 +19,7 @@ const RESERVED_META = new Set([
   "Timestamp",
   "Plugin",
   "Channel",
+  "ThreadId",
   "IsSilent",
   "Retry",
   "Continuation",
@@ -63,6 +64,7 @@ export function buildHarnessMetadata(m: BatchMessage, tz: string): string {
     `Timestamp: ${fmtTs(m.enqueuedAt, tz)}`,
     `Plugin: ${m.pluginId}`,
     `Channel: ${m.channelId}`,
+    `ThreadId: ${m.threadId}`,
   ];
   if (m.isSilent) lines.push("IsSilent: true");
   if (m.attempts > 0) lines.push("Retry: true");
