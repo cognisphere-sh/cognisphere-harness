@@ -1,0 +1,18 @@
+# One-time AWS provisioning params. Copy to `config` in this directory:
+#   cp scripts/aws/config.example scripts/aws/config
+# Sourced by scripts/aws/setup.sh (plain shell, no spaces around =).
+
+AWS_PROFILE=             # optional named aws-cli profile (blank = default creds)
+AWS_REGION=us-east-1
+
+S3_BUCKET=my-app-backups         # bucket to create (also the IAM role's read/write scope)
+EC2_NAME=my-app-server           # EC2 Name tag; also used for the security group + IAM role names
+EC2_TYPE=t3.medium               # instance type
+EC2_DISK_GB=30                   # root EBS volume size in GB (gp3)
+UBUNTU_VERSION=24.04             # Ubuntu release (latest AMI via SSM), e.g. 24.04, 26.04
+EIP_NAME=my-app-ip               # Elastic IP Name tag
+KEY_NAME=my-app-key              # key pair name; private key saved to ~/.ssh/<name>.pem
+IAM_ROLE=                        # blank = <EC2_NAME>-role
+SSH_HOST_ALIAS=my-app            # `Host` entry written to ~/.ssh/config (ssh <alias>)
+SSH_OPEN=false                   # true = port 22 from anywhere; false = only this machine's IP
+GIT_REPO=                        # repo to clone on the box (blank = this repo's origin)

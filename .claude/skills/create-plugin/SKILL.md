@@ -12,7 +12,9 @@ metadata:
 Plugins live at `<harnessDir>/plugins/<id>/` (user scope — shadows a bundled
 plugin of the same id). The registry scans that dir at server boot, imports
 `index.ts` via tsx, and instantiates the default-export class. Paths below are
-relative to the **harness data dir** (the dir with `harness.json`).
+relative to the **harness data dir** (the dir with `harness.json`) — in an app
+home (the `cognisphere init` scaffold) that's `harness/`, and this skill lives
+at the home root, so the template is at `../.claude/skills/create-plugin/template`.
 
 A tested template lives in this skill dir under `template/` — copy it and
 rename. Every command below was run and verified.
@@ -106,7 +108,7 @@ agent dir.
 ## 3. Scaffold
 
 ```bash
-cp -R .claude/skills/create-plugin/template plugins/<id>
+cp -R ../.claude/skills/create-plugin/template plugins/<id>   # cwd = harness/
 mv plugins/<id>/seed/system_prompts/plugin-hello.md plugins/<id>/seed/system_prompts/plugin-<id>.md
 mv plugins/<id>/seed/scripts/hello plugins/<id>/seed/scripts/<id>
 # then edit index.ts: rename the class, write your manifest/start/stop
@@ -175,10 +177,10 @@ Config/secret edits need an agent restart to take effect:
 - **Plugin discovery is boot-time only.** A new `plugins/<id>/` dir needs a
   server restart (`cognisphere dev` watches harness *code*, not new plugin
   dirs — touch a watched file or bounce it).
-- **Fresh harness dir + pnpm ≥ 10: `better-sqlite3` build script is
-  ignored** (`[ERR_PNPM_IGNORED_BUILDS]`; the scaffolded
-  `pnpm.onlyBuiltDependencies` in package.json is no longer read). The
-  server then can't open its queue DB. Fix:
+- **Hand-rolled harness dir + pnpm ≥ 10: `better-sqlite3` build script is
+  ignored** (`[ERR_PNPM_IGNORED_BUILDS]`) and the server can't open its
+  queue DB. The `cognisphere init` scaffold already allowlists it
+  (`allowBuilds` in the home's `pnpm-workspace.yaml`); elsewhere, fix with:
   `printf 'allowBuilds:\n  better-sqlite3: true\n' > pnpm-workspace.yaml
   && pnpm rebuild better-sqlite3`.
 

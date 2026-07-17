@@ -1,0 +1,34 @@
+# Deploy params. Copy to `config` and edit:  cp config.example config
+# Sourced by the scripts under scripts/ (plain shell, no spaces around =).
+
+APP_NAME=                           # short name for systemd units / nginx / backups (blank = this directory's name)
+DOMAIN=app.example.com              # user-facing app — only used when app/ exists
+CONSOLE_DOMAIN=console.example.com  # harness operator console (needs its own DNS A record)
+EMAIL=you@example.com               # Let's Encrypt registration / renewal notices
+
+APP_PORT=3000        # user-facing app (e.g. next start) — nginx proxies $DOMAIN here
+HARNESS_PORT=7331    # cognisphere backend + operator console — nginx proxies $CONSOLE_DOMAIN here
+
+NODE_MAJOR=22        # Node LTS to install
+RUN_USER=            # OS user the services run as (blank = invoking sudo user)
+
+# Operator login. scripts/server.sh secrets writes these into
+# harness/.secrets/users.json (the harness user) and, when app/ exists,
+# app/.env.local (HARNESS_USER/HARNESS_PASS for the app's harness client).
+APP_USER=operator    # username to sign in with
+APP_PASS=            # password (blank = a random one is generated once and reused)
+
+# ---- backups: whole-dir zip → S3 on a cron (written by setup-server.sh) ----
+# Blank bucket = backups off. SQLite DBs are snapshotted consistently
+# (sqlite3 .backup) before zipping; node_modules/.next/.venv are excluded
+# (reproducible). AWS auth = the CLI chain (EC2 IAM role; no keys needed).
+BACKUP_S3_BUCKET=        # bucket or bucket/prefix, e.g. my-backups/my-app
+BACKUP_EVERY_HOURS=24    # 1-23 = every N hours; 24+ = daily at 03:00 UTC
+BACKUP_KEEP=14           # newest N zips kept in S3; older ones deleted
+AWS_PROFILE=             # local testing only: named aws-cli profile (EC2 uses the IAM role)
+
+# Token for the private @cognisphere-sh/* packages on GitHub Packages.
+# Leave blank to use the run user's `gh` CLI token (it must have the
+# `read:packages` scope: gh auth refresh -s read:packages). Or paste a
+# GitHub PAT with read:packages here for a non-interactive box.
+COGNISPHERE_NPM_TOKEN=

@@ -1,9 +1,10 @@
 /**
  * Shared helpers for the `cognisphere` CLI. The CLI runs in two contexts:
  *
- *  1. Bootstrap — `npx @cognisphere-sh/cognisphere-harness init <id>` (no harness yet).
- *  2. Inside an installed harness — cwd is the harness data dir, which has a
- *     `package.json` depending on the harness and `node_modules/.../cli`.
+ *  1. Bootstrap — `npx @cognisphere-sh/cognisphere-harness init <name>` (no harness yet).
+ *  2. Inside an installed harness — cwd is the harness data dir (or the app
+ *     home containing it at `./harness`), whose `package.json` depends on the
+ *     harness and provides `node_modules/.../cli`.
  *
  * `PKG_ROOT` is the package root (holds `package.json` and the bundled
  * `dist-web/` + `CHANGELOG.md`); `SRC_ROOT` is `src/` inside it (the engine,
@@ -96,16 +97,22 @@ export interface HarnessDir {
 }
 
 /**
- * Resolve the harness the command operates on: the current working directory.
- * A harness is identified by its `harness.json`. Fails with a hint when the
- * cwd is not a harness dir.
+ * Resolve the harness the command operates on. A harness is identified by its
+ * `harness.json`; the cwd may be the harness data dir itself or the app home
+ * that contains it at `./harness` (the `init` scaffold's layout). Fails with
+ * a hint when neither matches.
  */
 export function requireHarnessDir(): HarnessDir {
-  const dir = process.cwd();
-  if (!existsSync(join(dir, "harness.json"))) {
+  const cwd = process.cwd();
+  const dir = existsSync(join(cwd, "harness.json"))
+    ? cwd
+    : existsSync(join(cwd, "harness", "harness.json"))
+      ? join(cwd, "harness")
+      : null;
+  if (!dir) {
     fail(
-      `${dir} is not a harness dir (no harness.json).\n` +
-        `  cd into a harness, or create one with: cognisphere init <id>`,
+      `${cwd} is not a harness dir (no harness.json here or in ./harness).\n` +
+        `  cd into an app home, or create one with: cognisphere init <name>`,
     );
   }
   return { dir, rootDir: dirname(dir), id: basename(dir) };

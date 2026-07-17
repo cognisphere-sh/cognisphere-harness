@@ -18,6 +18,45 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0]
+
+### Changed
+
+- **`cognisphere init <name>` now scaffolds an app home**, not a bare harness
+  data dir: a pnpm workspace with the harness data dir at `harness/`, a
+  user-facing app placeholder at `app/`, lifecycle scripts under `scripts/`
+  (`setup-server.sh`, `server.sh`, `build.sh`), per-platform provisioning +
+  backup under `scripts/<platform>/` (`scripts/aws/setup.sh`,
+  `scripts/aws/backup.sh`, `scripts/aws/config.example`), and
+  `config.example` at the root. AWS is
+  the only supported deploy target for now (GWS and similar later). The agent
+  skills are copied into the home root's `.claude/skills/` + `.agents/skills/`
+  (not into `harness/`).
+- The CLI accepts either the harness data dir or the app home as cwd
+  (`./harness` is resolved automatically).
+- The scaffolded `.npmrc` no longer embeds the `_authToken` line — pnpm
+  refuses env-var credentials from a committed project `.npmrc`; the token
+  belongs in the user's `~/.npmrc` (`scripts/setup-server.sh` writes it on a
+  deployed box).
+
+### Removed
+
+- **`cognisphere up` / `logs` / `status`** (the `cognisphere@<id>` systemd
+  user service). Deployment is the scaffolded `scripts/` now:
+  `sudo ./scripts/setup-server.sh` once, then
+  `git pull && sudo ./scripts/server.sh restart`.
+- The `cognisphere-deploy` agent skill (superseded by the scaffolded deploy
+  scripts).
+
+### Breaking changes
+
+- Existing harness data dirs keep working as-is (the runtime layout is
+  unchanged), but deployments that used `cognisphere up` must move to the
+  scripted model: create a new app home with `cognisphere init`, move the old
+  harness dir's contents into its `harness/`, then `cp config.example config`,
+  edit, and run `sudo ./scripts/setup-server.sh`. Remove the old
+  `cognisphere@<id>` systemd user unit.   [affects: the whole harness dir]
+
 ## [0.3.16]
 
 ### Added

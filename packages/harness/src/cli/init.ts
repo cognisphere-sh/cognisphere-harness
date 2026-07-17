@@ -1,24 +1,59 @@
 /**
- * `cognisphere init <id>` — scaffold a harness data dir: a small pnpm project
- * that depends on the harness package and holds the harness's data (agents,
- * plugins, secrets). The code is installed from the registry, not copied.
+ * `cognisphere init <name>` — scaffold an app home: a pnpm workspace holding
+ * the harness data dir (`harness/`), a placeholder for the user-facing app
+ * (`app/`), and the AWS deploy scripts (`scripts/`). The harness code is
+ * installed from the registry, not copied.
  */
 import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, relative, resolve } from "node:path";
-import { PKG_ROOT, copyDir, fail, info, packageVersion, run, writeJson } from "./util.js";
+import {
+  PKG_ROOT,
+  copyDir,
+  fail,
+  info,
+  packageVersion,
+  run,
+  writeJson,
+} from "./util.js";
 
 const GITIGNORE = `node_modules/
 .secrets/
 .venv/
 dist/
+.next/
+logs/
+.env.local
+config
 **/sessions/
 **/inbox/
 **/inboxes/
 `;
 
-const NPMRC = `@cognisphere-sh:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=\${GITHUB_TOKEN}
+// The auth token deliberately is NOT here: pnpm refuses to expand env-var
+// credentials from a committed project .npmrc, so the _authToken line must
+// live in the run user's ~/.npmrc (scripts/setup-server.sh writes it on the
+// server; `init` prints the one-liner for local installs).
+const NPMRC = `# @cognisphere-sh/* packages live on GitHub Packages, not npmjs.org.
+@cognisphere-sh:registry=https://npm.pkg.github.com
+`;
+
+const WORKSPACE_YAML = `packages:
+  - harness
+  - app
+# Native/postinstall builds the harness needs: better-sqlite3 (session DB) and
+# esbuild (tsx loader) must compile to run. \`allowBuilds\` is the pnpm 11
+# setting name, \`onlyBuiltDependencies\` the pnpm ≤10 one — keep in sync.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+# Our own package — skip pnpm's release-age wait so fresh harness releases
+# install immediately.
+minimumReleaseAgeExclude:
+  - '@cognisphere-sh/cognisphere-harness'
 `;
 
 export function cmdInit(argv: string[]): void {
@@ -31,59 +66,79 @@ export function cmdInit(argv: string[]): void {
 
   const version = packageVersion();
 
-  mkdirSync(join(dir, "agents"), { recursive: true });
-  mkdirSync(join(dir, "plugins"), { recursive: true });
-  mkdirSync(join(dir, ".secrets"), { recursive: true, mode: 0o700 });
+  // ── workspace root (the app home) ────────────────────────────────────────
+  mkdirSync(dir, { recursive: true });
+  writeJson(join(dir, "package.json"), {
+    name: id,
+    private: true,
+    description: `${id}: cognisphere app home — the agent harness (harness/) + the user-facing app (app/). Workspace members are listed in pnpm-workspace.yaml.`,
+  });
+  writeFileSync(join(dir, "pnpm-workspace.yaml"), WORKSPACE_YAML);
+  writeFileSync(join(dir, ".npmrc"), NPMRC);
+  writeFileSync(join(dir, ".gitignore"), GITIGNORE);
+
+  // Deploy scripts, config templates, and the app/ placeholder — shipped with
+  // the package as a verbatim template (cpSync and npm pack both preserve the
+  // scripts' exec bits). Platform-specific provisioning lives in
+  // scripts/<platform>/ (aws only, for now).
+  copyDir(join(PKG_ROOT, "home-template"), dir);
+
+  // ── harness data dir ──────────────────────────────────────────────────────
+  const harnessDir = join(dir, "harness");
+  mkdirSync(join(harnessDir, "agents"), { recursive: true });
+  mkdirSync(join(harnessDir, "plugins"), { recursive: true });
+  mkdirSync(join(harnessDir, ".secrets"), { recursive: true, mode: 0o700 });
 
   // Data/migration version mirrors the installed package version (see §6).
-  writeJson(join(dir, "harness.json"), { version, timezone });
+  writeJson(join(harnessDir, "harness.json"), { version, timezone });
 
   // Generate the session-signing key now so the dir is deploy-ready and
   // sessions are stable from first boot (the server would otherwise lazily
   // create it). 0600 — never commit (.gitignore excludes .secrets/).
-  writeFileSync(join(dir, ".secrets", "session-key"), randomBytes(32), {
+  writeFileSync(join(harnessDir, ".secrets", "session-key"), randomBytes(32), {
     mode: 0o600,
   });
 
-  writeJson(join(dir, "package.json"), {
-    name: `cognisphere-harness-${id}`,
+  writeJson(join(harnessDir, "package.json"), {
+    name: `${id}-harness`,
     private: true,
     type: "module",
     dependencies: { "@cognisphere-sh/cognisphere-harness": version },
-    // better-sqlite3 ships a native addon; pnpm 10 blocks build scripts unless
-    // the package is pre-approved here.
-    pnpm: { onlyBuiltDependencies: ["better-sqlite3"] },
   });
 
-  writeFileSync(join(dir, ".npmrc"), NPMRC);
-  writeFileSync(join(dir, ".gitignore"), GITIGNORE);
-  writeFileSync(join(dir, "agents", ".gitkeep"), "");
-  writeFileSync(join(dir, "plugins", ".gitkeep"), "");
+  writeFileSync(join(harnessDir, "agents", ".gitkeep"), "");
+  writeFileSync(join(harnessDir, "plugins", ".gitkeep"), "");
 
   copySkills(dir);
 
-  // The harness dir is a git repo so upgrades are reviewable diffs (§9).
+  // The app home is a git repo so upgrades are reviewable diffs (§9).
   run("git", ["init", "--quiet", dir]);
 
   const rel = relative(process.cwd(), dir);
   const cdTarget = rel && !rel.startsWith("..") ? rel : dir;
 
-  info(`Created harness "${id}" at ${dir}`);
+  info(`Created app home "${id}" at ${dir}`);
+  info("  harness/  the cognisphere harness (agents, plugins, secrets)");
+  info("  app/      your user-facing app (see app/README.md)");
+  info("  scripts/  AWS deploy + lifecycle scripts (see config.example)");
   info("");
   info("Next steps:");
   info(`  cd ${cdTarget}`);
-  info("  export GITHUB_TOKEN=<token with read:packages>   # to install the harness");
+  info("  # the private registry needs a read:packages token in YOUR ~/.npmrc");
+  info("  # (same env var the deploy scripts use — export it before installing):");
+  info("  echo '//npm.pkg.github.com/:_authToken=${COGNISPHERE_NPM_TOKEN}' >> ~/.npmrc");
   info("  pnpm install");
-  info("  cognisphere agent new <name>                     # add your first agent");
-  info("  cognisphere dev                                  # run locally (hot reload)");
+  info("  cd harness");
+  info("  pnpm exec cognisphere agent new <name>           # add your first agent");
+  info("  pnpm exec cognisphere dev                        # run locally (hot reload)");
 }
 
 /**
- * Copy the harness-dir-facing agent skills (deploy, upgrade, create-plugin)
- * into the new dir's `.claude/skills/` and `.agents/skills/`, so agents
- * working inside the harness discover them. Source is the package's bundled
- * `skills/` (prepack); falls back to the monorepo's `.claude/skills/` when
- * running from a checkout (same pattern as the upgrade command's CHANGELOG).
+ * Copy the home-facing agent skills (upgrade, create-plugin) into the app
+ * home's `.claude/skills/` and `.agents/skills/`, so agents working inside
+ * the home discover them. Source is the package's bundled `skills/`
+ * (prepack); falls back to the monorepo's `.claude/skills/` when running
+ * from a checkout (same pattern as the upgrade command's CHANGELOG).
  */
 function copySkills(dir: string): void {
   const shipped = join(PKG_ROOT, "skills");
@@ -91,7 +146,7 @@ function copySkills(dir: string): void {
     ? shipped
     : resolve(PKG_ROOT, "..", "..", ".claude", "skills");
   if (!existsSync(source)) return;
-  for (const id of ["cognisphere-deploy", "cognisphere-upgrade", "create-plugin"]) {
+  for (const id of ["cognisphere-upgrade", "create-plugin"]) {
     const src = join(source, id);
     if (!existsSync(src)) continue;
     for (const target of [".claude", ".agents"]) {
@@ -107,8 +162,8 @@ function parseArgs(argv: string[]): {
 } {
   let id: string | undefined;
   let timezone = "UTC";
-  // Default to the current directory — the harness lands at ./<id>. `--root`
-  // overrides (e.g. `--root ~/.cognisphere` for a conventional deploy layout).
+  // Default to the current directory — the app home lands at ./<name>.
+  // `--root` overrides.
   let root = process.cwd();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -122,9 +177,9 @@ function parseArgs(argv: string[]): {
       fail(`unknown option: ${a}`);
     }
   }
-  if (!id) fail("usage: cognisphere init <id> [--timezone <IANA>] [--root <dir>]");
+  if (!id) fail("usage: cognisphere init <name> [--timezone <IANA>] [--root <dir>]");
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(id)) {
-    fail(`invalid harness id "${id}" — use letters, digits, ._- (no slashes)`);
+    fail(`invalid app name "${id}" — use letters, digits, ._- (no slashes)`);
   }
   return { id, timezone, root };
 }

@@ -15,10 +15,11 @@ Drive the **two-phase upgrade** (see `docs/distribution-and-deployment.md` §9):
 2. **Data** — *this skill*: edit the harness dir (agents, plugins, secrets) to
    match the new version, then stamp `harness.json`.
 
-You are operating **inside a harness data dir** (cwd has `harness.json`, a
-`package.json` depending on `@cognisphere-sh/cognisphere-harness`, and `agents/`).
-The harness dir is a git repo, so every change is a reviewable diff with trivial
-rollback. **Do not** touch `.secrets/` contents unless a breaking change
+You are operating **on a harness data dir** — the dir with `harness.json`, a
+`package.json` depending on `@cognisphere-sh/cognisphere-harness`, and `agents/`.
+In an app home (the `cognisphere init` scaffold) that's `harness/` under the
+home root; the CLI accepts either dir as cwd. The home is a git repo, so every
+change is a reviewable diff with trivial rollback. **Do not** touch `.secrets/` contents unless a breaking change
 explicitly requires it, and never commit `.secrets/`.
 
 ## Procedure
@@ -86,9 +87,9 @@ the code:
 cognisphere upgrade --set-version <code-version>
 ```
 
-Then suggest the operator review and commit the harness dir, and restart the
-server (`cognisphere dev`/`serve`, or `cognisphere up` on a deployed host) so the
-running runners pick up the migrated config.
+Then suggest the operator review and commit the change, and restart the
+server (`cognisphere dev`/`serve` locally, or `sudo ./scripts/server.sh restart`
+on a deployed host) so the running runners pick up the migrated config.
 
 ## Guardrails
 

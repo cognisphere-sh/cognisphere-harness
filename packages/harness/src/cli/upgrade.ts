@@ -36,9 +36,17 @@ export function cmdUpgrade(argv: string[]): void {
 /** Phase 1 — bump the installed code. */
 function phaseBump(version: string | undefined): void {
   if (!version) fail("usage: cognisphere upgrade --to <version>");
-  requireHarnessDir();
+  // Target the resolved harness dir, not the cwd — from an app-home root the
+  // cwd is the workspace umbrella, and pnpm would refuse (or bump the wrong
+  // package.json).
+  const { dir } = requireHarnessDir();
   info(`Bumping @cognisphere-sh/cognisphere-harness to ${version} …`);
-  const status = run("pnpm", ["add", `@cognisphere-sh/cognisphere-harness@${version}`]);
+  const status = run("pnpm", [
+    "add",
+    `@cognisphere-sh/cognisphere-harness@${version}`,
+    "--dir",
+    dir,
+  ]);
   if (status !== 0) fail("pnpm add failed");
   info("");
   info("Code updated. Next, migrate the harness data:");

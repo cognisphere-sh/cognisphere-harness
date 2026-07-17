@@ -38,7 +38,7 @@ if (existsSync(changelog)) {
 const skillsSrc = resolve(pkgRoot, "..", "..", ".claude", "skills");
 const skillsDst = resolve(pkgRoot, "skills");
 rmSync(skillsDst, { recursive: true, force: true });
-for (const id of ["cognisphere-deploy", "cognisphere-upgrade", "create-plugin"]) {
+for (const id of ["cognisphere-upgrade", "create-plugin"]) {
   const src = resolve(skillsSrc, id);
   if (!existsSync(src)) {
     console.error(`[prepack] expected skill at ${src} — aborting`);

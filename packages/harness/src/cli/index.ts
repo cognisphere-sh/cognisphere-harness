@@ -7,7 +7,6 @@ import { cmdAgentNew } from "./agent.js";
 import { cmdInit } from "./init.js";
 import { cmdPluginAdd } from "./plugin.js";
 import { cmdRun } from "./run.js";
-import { cmdLogs, cmdStatus, cmdUp } from "./service.js";
 import { cmdUpgrade } from "./upgrade.js";
 import { fail, info, packageVersion } from "./util.js";
 
@@ -16,16 +15,13 @@ const USAGE = `cognisphere — multi-agent harness CLI (v${packageVersion()})
 Usage: cognisphere <command> [args]
 
 Scaffold
-  init <id> [--timezone <tz>] [--root <dir>]   create a harness data dir
+  init <name> [--timezone <tz>] [--root <dir>] create an app home (harness/ + app/ + scripts/)
   agent new <name>                             fork the base template
   plugin add <id> [--force]                    fork a catalog plugin
 
-Run
+Run (deployment is scripts/setup-server.sh + scripts/server.sh in the app home)
   dev [--port <n>] [--web-port <n>] [--no-web] backend (watch) + Vite dev server
   serve [--port <n>] [--headless]              backend only (--headless: no web UI)
-  up [id] [--reinstall]                        enable+start the systemd unit
-  logs [id] [-f]                               tail the service logs
-  status [id]                                  systemd unit status
 
 Upgrade
   upgrade                                       show the pending migration window
@@ -49,12 +45,6 @@ function main(): void {
       return cmdRun("dev", rest);
     case "serve":
       return cmdRun("serve", rest);
-    case "up":
-      return cmdUp(rest);
-    case "logs":
-      return cmdLogs(rest);
-    case "status":
-      return cmdStatus(rest);
     case "upgrade":
       return cmdUpgrade(rest);
     case "-h":

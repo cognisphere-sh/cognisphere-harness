@@ -142,36 +142,45 @@ dynamically imported on boot.
 **Prerequisites:** Node ≥ 20 and pnpm. Two ways in: **run a harness** (you
 operate agents) or **develop the harness** (you hack on CogniSphere itself).
 
-### Run a harness (the `cognisphere` CLI)
+### Run an app (the `cognisphere` CLI)
 
-CogniSphere installs as a **versioned dependency** — you scaffold a small data
-dir and point it at the package, with no codebase copy per deployment. The code
-is managed by the lockfile; your agents, plugins, and secrets are the only thing
-you own. See [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md).
+CogniSphere installs as a **versioned dependency** inside an **app home** — a
+small pnpm workspace holding the agent harness (`harness/`), your user-facing
+app (`app/`), and the AWS deploy scripts (`scripts/`). No codebase copy per
+deployment: the code is managed by the lockfile; your agents, plugins, app, and
+secrets are the only thing you own. See
+[`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md).
 
 ```bash
 # The package lives on a private registry (GitHub Packages) — authenticate once:
-export GITHUB_TOKEN=<token with read:packages>
+# (COGNISPHERE_NPM_TOKEN is the same env var the deploy scripts use)
+export COGNISPHERE_NPM_TOKEN=<GitHub token with read:packages>
+echo '//npm.pkg.github.com/:_authToken=${COGNISPHERE_NPM_TOKEN}' >> ~/.npmrc
 
-# 1. Scaffold a harness data dir in the current directory (./my-harness)
-npx @cognisphere-sh/cognisphere-harness init my-harness   # --root <dir> to put it elsewhere
+# 1. Scaffold an app home in the current directory (./my-app)
+npx @cognisphere-sh/cognisphere-harness init my-app   # --root <dir> to put it elsewhere
 
-# 2. Install the harness, then scaffold an agent + (optional) a catalog plugin
-cd my-harness
-pnpm install
-cognisphere agent new dr-renu          # forks the base template into agents/dr-renu/
-cognisphere plugin add telegram        # forks a catalog plugin into plugins/telegram/
+# 2. Install, then scaffold an agent + (optional) a catalog plugin
+cd my-app && pnpm install
+cd harness
+pnpm exec cognisphere agent new dr-renu    # forks the base template into harness/agents/dr-renu/
+pnpm exec cognisphere plugin add telegram  # forks a catalog plugin into harness/plugins/telegram/
 
 # 3. Run it locally (hot reload). Serves the bundled web console on the same port.
-cognisphere dev                        # --port <n> to change the backend port
+pnpm exec cognisphere dev                  # --port <n> to change the backend port
 ```
 
-Configure the agent's model + secrets (Models/Secrets settings, or `.secrets/`),
-then edit `agents/dr-renu/` freely — it's yours, git-tracked. Deploy to a Linux
-host with `cognisphere up` (systemd) and migrate across versions with
-`cognisphere upgrade`. For a **backend-only** host (no operator console), run
-`cognisphere serve --headless` — the server exposes only the API/webhook/admin
-surfaces and mounts no web UI. Full command surface:
+Configure the agent's model + secrets (Models/Secrets settings, or
+`harness/.secrets/`), then edit `harness/agents/dr-renu/` freely — it's yours,
+git-tracked. Drop your user-facing app into `app/` (the scaffolded
+`app/README.md` documents the contract). Deploy to AWS with the scaffolded
+scripts — `./scripts/aws/setup.sh` provisions the EC2 box, `sudo
+./scripts/setup-server.sh` sets it up (systemd + nginx + HTTPS), and the deploy
+loop is `git pull && sudo ./scripts/server.sh restart` (AWS is the only
+supported target for now; GWS and similar come later). Migrate across versions
+with `cognisphere upgrade`. For a **backend-only** host (no operator console),
+run `cognisphere serve --headless` — the server exposes only the
+API/webhook/admin surfaces and mounts no web UI. Full command surface:
 [distribution-and-deployment.md §10](docs/distribution-and-deployment.md#10-cli-surface).
 
 ### Develop the harness (monorepo)
@@ -186,8 +195,8 @@ pnpm run dev                 # tsx watch (hot reload) — or `pnpm start`
 
 The server listens on `http://127.0.0.1:7331`, running against
 `~/.cognisphere/default` (override with the env vars below). For **full-stack
-dev** — backend *and* the Vite dev server (HMR) together — scaffold a harness
-dir and run `cognisphere dev` from it: in the monorepo it starts both and points
+dev** — backend *and* the Vite dev server (HMR) together — scaffold an app
+home and run `cognisphere dev` from it: in the monorepo it starts both and points
 Vite's `/api` proxy at the backend (`--port` / `--web-port` to choose ports).
 Equivalently, run `pnpm run dev` and `pnpm run dev:web` in separate terminals.
 
@@ -205,7 +214,8 @@ Set via environment (a `.env` file in the package cwd is loaded automatically):
 | `COGNISPHERE_HEADLESS` | _unset_ | When set (`1`/`true`/`yes`), the server mounts no web UI — API/webhook/admin only. Equivalent to `cognisphere serve --headless`. |
 
 > The CLI derives `COGNISPHERE_ROOT_DIR` / `COGNISPHERE_ID` from the harness dir
-> (the cwd), so `cognisphere dev` / `serve` need no env wiring.
+> (the cwd, or `./harness` when run from an app home), so `cognisphere dev` /
+> `serve` need no env wiring.
 
 Sensitive files (`secrets.json`, `models.json`, `users.json`, `session-key`)
 live under `<rootDir>/<harnessId>/.secrets/` (mode `0600`, kept out of VCS by the
@@ -234,6 +244,8 @@ cognisphere-harness/                # pnpm workspace
 │   ├── harness/                    # @cognisphere-sh/cognisphere-harness (publishable backend)
 │   │   ├── bin/cognisphere.mjs     # CLI entry shim (published `cognisphere` bin)
 │   │   ├── scripts/prepack.mjs     # publish-time: bundle web dist + CHANGELOG
+│   │   ├── home-template/          # the app-home template `init` scaffolds from
+│   │   │                           # (AWS deploy scripts/, config examples, app/ placeholder)
 │   │   └── src/                    # all TypeScript source + shipped runtime assets
 │   │       ├── core/               # agent-runner engine + the process entrypoint
 │   │       │   ├── main.ts         # boot + route wiring
@@ -243,7 +255,7 @@ cognisphere-harness/                # pnpm workspace
 │   │       │   ├── rpc.ts          # pi --mode rpc client
 │   │       │   └── plugin-registry.ts
 │   │       ├── api/                # HTTP routes (/api, /admin, /webhook)
-│   │       ├── cli/                # the `cognisphere` CLI (init, agent, plugin, dev, up, upgrade)
+│   │       ├── cli/                # the `cognisphere` CLI (init, agent, plugin, dev, serve, upgrade)
 │   │       ├── plugins/            # built-in plugins: admin, scheduler, telegram, gws
 │   │       └── base-agent/         # the base template every agent forks from
 │   └── web/                        # cognisphere-web — React + Vite + shadcn/ui console
@@ -261,7 +273,7 @@ cognisphere-harness/                # pnpm workspace
 | [`docs/hld.md`](docs/hld.md) | High-level design — the contract for all subsystems. |
 | [`docs/server.md`](docs/server.md) | Implemented agent-runner subsystem: process model, on-disk layout, components, flows. |
 | [`docs/api.md`](docs/api.md) | HTTP surface: auth model, every route, request/response shapes. |
-| [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) | How CogniSphere is packaged, installed, deployed, and upgraded — the `cognisphere` CLI, the registry, multi-harness deployment, the upgrade flow. |
+| [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) | How CogniSphere is packaged, installed, deployed, and upgraded — the `cognisphere` CLI, the registry, the app-home scaffold and its AWS deploy scripts, the upgrade flow. |
 | [`docs/v0-deferred.md`](docs/v0-deferred.md) | What v0 cut from the HLD, with manual workflows in place. |
 | [`docs/improvement-design.md`](docs/improvement-design.md) | Roadmap for self-evolution and memory features. |
 | [`docs/cognisphere-vs-hermes.html`](docs/cognisphere-vs-hermes.html) | Scored comparison vs `hermes-agent`. |
@@ -273,7 +285,8 @@ cognisphere-harness/                # pnpm workspace
 
 CogniSphere is at **v0**. Shipping today: the runner, per-agent queue, plugin
 contract, the four built-in plugins, the operator web console, and the
-`cognisphere` CLI for scaffolding/running/deploying/upgrading a harness.
+`cognisphere` CLI for scaffolding/running/upgrading an app home, with AWS
+deploy scripts included in the scaffold.
 
 Designed but **deferred** (see [`docs/v0-deferred.md`](docs/v0-deferred.md)):
 

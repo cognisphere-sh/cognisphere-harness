@@ -12,8 +12,9 @@
  * default 7330), `--no-web` (dev: skip the Vite dev server), `--headless`
  * (the backend serves no web UI at all — for backend-only deployments).
  *
- * The harness data dir is the cwd, so `COGNISPHERE_ROOT_DIR` / `COGNISPHERE_ID`
- * are derived from it — matching the server's `loadConfig()` resolution.
+ * The harness data dir is the cwd (or `./harness` when run from the app
+ * home), so `COGNISPHERE_ROOT_DIR` / `COGNISPHERE_ID` are derived from it —
+ * matching the server's `loadConfig()` resolution.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";

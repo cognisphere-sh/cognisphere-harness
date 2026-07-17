@@ -113,8 +113,27 @@ disk, so the runner sees the same artifacts whichever path created them.
 ## 3. On-disk layout
 
 `<rootDir>` is `$COGNISPHERE_ROOT_DIR` (defaults to `~/.cognisphere`).
-`<harnessId>` is `$COGNISPHERE_ID` (defaults to `default`). The harness home
-is `<rootDir>/<harnessId>`.
+`<harnessId>` is `$COGNISPHERE_ID` (defaults to `default`). The harness data
+dir is `<rootDir>/<harnessId>`.
+
+In the `cognisphere init` scaffold (an **app home**), the harness data dir is
+the `harness/` member of a pnpm workspace that also holds the user-facing app
+and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home,
+`COGNISPHERE_ID` = `harness` (see
+[`distribution-and-deployment.md`](./distribution-and-deployment.md) §2):
+
+```
+<app-home>/
+├── package.json  pnpm-workspace.yaml  .npmrc  .gitignore
+├── config.example                ← deploy params (cp to `config`)
+├── scripts/                      ← lifecycle (setup-server, server, build)
+│   └── aws/                         + per-platform provisioning & backup
+│                                    (setup.sh, backup.sh, config.example)
+├── .claude/skills/               ← agent skills (upgrade, create-plugin), copied
+├── .agents/skills/                   in by `cognisphere init` from the package
+├── app/                          ← the user-facing app (placeholder until built)
+└── harness/                      ← the harness data dir documented below
+```
 
 ```
 <rootDir>/<harnessId>/
@@ -126,8 +145,6 @@ is `<rootDir>/<harnessId>`.
 │   └── session-key                   32-byte HMAC key for signed session cookies
 ├── plugins/                      ← (optional) user-space plugins; user
 │   └── <plugin-id>/index.ts          plugins shadow built-ins on id collision
-├── .claude/skills/               ← agent skills (deploy, upgrade, create-plugin),
-├── .agents/skills/                   copied in by `cognisphere init` from the package
 └── agents/
     └── <agent-id>/
         ├── agent.json

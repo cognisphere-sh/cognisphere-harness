@@ -1,6 +1,6 @@
 {
   "name": "@cognisphere-sh/cognisphere-harness",
-  "version": "0.3.16",
+  "version": "0.4.0",
   "type": "module",
   "repository": {
     "type": "git",
@@ -13,6 +13,7 @@
   "files": [
     "bin",
     "src",
+    "home-template",
     "dist-web",
     "skills",
     "CHANGELOG.md"
