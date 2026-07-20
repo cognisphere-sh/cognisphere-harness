@@ -44,6 +44,7 @@ function renderMetaValue(v: unknown): string | null {
 function fmtTs(unixMs: number, tz: string): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
+    weekday: "short",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -55,7 +56,8 @@ function fmtTs(unixMs: number, tz: string): string {
   }).formatToParts(new Date(unixMs));
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   const hour = get("hour") === "24" ? "00" : get("hour");
-  return `${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
+  const weekday = get("weekday").replace(".", "");
+  return `${weekday} ${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
 }
 
 export function buildHarnessMetadata(m: BatchMessage, tz: string): string {

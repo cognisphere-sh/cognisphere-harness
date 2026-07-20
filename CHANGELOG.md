@@ -18,6 +18,20 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1]
+
+### Changed
+
+- The `Timestamp` field in every `<harness-metadata>` block now includes the
+  day of week (e.g. `Fri 2026-04-17 14:30:05 IST`), for both incoming
+  messages and continuation nudges. Base main-agent prompt example updated.
+
+### Breaking changes
+
+- Seeded base main-agent prompt changed (`Timestamp` example now shows the
+  weekday). Existing agents keep their provisioned copies; re-copy or graft
+  from the new seed.   [affects: agents/*/system_prompts/0.1-main-agent.md]
+
 ## [0.4.0]
 
 ### Changed
