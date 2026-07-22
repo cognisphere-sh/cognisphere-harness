@@ -72,9 +72,9 @@ do_build() {
 case "${1:-}" in
   secrets) gen_secrets ;;
   build)   do_build ;;
-  start)   gen_secrets; do_build; systemctl start   "${UNITS[@]}" ;;
+  # systemctl restart also starts stopped units, so start == restart.
+  start|restart) gen_secrets; do_build; systemctl restart "${UNITS[@]}" ;;
   stop)    systemctl stop    "${UNITS[@]}" ;;
-  restart) gen_secrets; do_build; systemctl restart "${UNITS[@]}" ;;
   status)  systemctl status --no-pager "${UNITS[@]}" ;;
   logs)
     JARGS=(-u "$NAME-harness")

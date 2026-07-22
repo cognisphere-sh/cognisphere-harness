@@ -18,6 +18,39 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.2]
+
+### Added
+
+- **Contabo deploy target**: `scripts/contabo/setup.sh` + `config.example`
+  (`cntb`-driven provision: object storage + backup bucket, SSH-key secret,
+  Cloud VPS, `~/.ssh/config` entry, `ufw` in the remote bootstrap since
+  Contabo has no security groups). Re-runnable; the first run places a paid
+  monthly order. Prints the four `BACKUP_*` values for the root `config`.
+- `scripts/aws/backup.sh` now works against any S3-compatible store: new
+  `BACKUP_S3_ENDPOINT` / `BACKUP_S3_ACCESS_KEY` / `BACKUP_S3_SECRET_KEY` keys
+  in the root `config.example` (blank = AWS CLI chain / IAM role, as before).
+
+### Changed
+
+- `scripts/server.sh start` is now the same as `restart` (secrets + build +
+  `systemctl restart`, which also starts stopped units) — previously `start`
+  on a running server was a silent no-op.
+- `scripts/setup-server.sh` retires units/nginx site/backup cron left behind
+  by a previous `APP_NAME` (matched by `WorkingDirectory`) before writing the
+  new ones, so renaming the app can't leave two instances fighting over the
+  ports.
+- The `[0.4.0]` section below gained a breaking-change entry documenting the
+  session-cwd migration gap (pi session JSONLs store the absolute harness
+  path) and its rewrite recipe.
+
+### Breaking changes
+
+- The scaffolded lifecycle scripts changed (`server.sh`, `setup-server.sh`,
+  `aws/backup.sh`, root `config.example`). Existing app homes keep their
+  copies; re-copy `scripts/` and graft the new `BACKUP_S3_*` keys into
+  `config` to pick up the fixes.   [affects: the app home's scripts/ + config.example (not the harness data dir)]
+
 ## [0.4.1]
 
 ### Changed
@@ -70,6 +103,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
   harness dir's contents into its `harness/`, then `cp config.example config`,
   edit, and run `sudo ./scripts/setup-server.sh`. Remove the old
   `cognisphere@<id>` systemd user unit.   [affects: the whole harness dir]
+- **Moving/renaming the harness dir breaks resumption of existing pi
+  sessions.** Every pi session JSONL records the absolute working directory
+  it was created in (`"cwd": …` in its header line); on resume pi validates
+  that path and exits 1 if it no longer exists (`Stored session working
+  directory does not exist`), so every pre-migration thread fails on its next
+  message while new threads work fine. After moving the old harness contents
+  to the new path, rewrite the stored cwd in place (stop the harness first):
+
+  ```
+  grep -rl '"cwd":"<OLD_HARNESS_PATH>' harness/agents/*/sessions/ \
+    | xargs sed -i 's#<OLD_HARNESS_PATH>#<NEW_HARNESS_PATH>#g'
+  ```
+
+  where the paths are the absolute old/new locations of the harness data dir
+  (e.g. `/home/ubuntu/myapp/lps-harness` → `/home/ubuntu/myapp/harness`).   [affects: agents/*/sessions/**/*.jsonl]
 
 ## [0.3.16]
 

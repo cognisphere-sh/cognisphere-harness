@@ -123,6 +123,20 @@ PNPM_BIN_DIR="$(dirname "$PNPM_BIN")"
 # root-owned. Must be on the unit PATH or bare `agent-browser`/`pi` spawns 127.
 UNIT_PATH="$RUN_HOME/.local/bin:$RUN_HOME/.npm-global/bin:$PNPM_BIN_DIR:$NODE_BIN_DIR:/usr/bin:/bin"
 
+# A previous run under a different APP_NAME leaves its units behind, and both
+# names would then fight over the same ports. Retire anything pointing at this
+# ROOT under another name (units + nginx site + backup cron).
+for u in /etc/systemd/system/*-harness.service; do
+  [[ -f "$u" ]] || continue
+  OLD="$(basename "$u" -harness.service)"
+  [[ "$OLD" == "$NAME" ]] && continue
+  grep -q "^WorkingDirectory=$ROOT/harness$" "$u" || continue
+  echo ">> retiring stale units from previous name '$OLD'"
+  systemctl disable --now "$OLD-harness.service" "$OLD-app.service" 2>/dev/null || true
+  rm -f "/etc/systemd/system/$OLD-harness.service" "/etc/systemd/system/$OLD-app.service" \
+        "/etc/nginx/sites-enabled/$OLD" "/etc/nginx/sites-available/$OLD" "/etc/cron.d/$OLD-backup"
+done
+
 cat > "/etc/systemd/system/$NAME-harness.service" <<EOF
 [Unit]
 Description=$NAME cognisphere harness (backend + operator console)
@@ -226,7 +240,8 @@ certbot --nginx "${CERT_DOMAINS[@]}" \
 # ---- S3 backups (cron) -----------------------------------------------------
 # scripts/aws/backup.sh zips the whole app dir (consistent SQLite snapshots,
 # minus node_modules/.next/.venv) to BACKUP_S3_BUCKET and prunes to
-# BACKUP_KEEP. AWS auth = the instance IAM role; no keys in config needed.
+# BACKUP_KEEP. Auth: the instance IAM role on AWS, or BACKUP_S3_ENDPOINT +
+# BACKUP_S3_ACCESS_KEY/_SECRET_KEY for S3-compatible stores (Contabo).
 if [[ -n "${BACKUP_S3_BUCKET:-}" ]]; then
   H="${BACKUP_EVERY_HOURS:-24}"
   # cron can't express "every N hours" for N>=24 — degrade to daily at 03:00 UTC.

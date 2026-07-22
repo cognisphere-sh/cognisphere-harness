@@ -1,0 +1,24 @@
+# One-time Contabo provisioning params. Copy to `config` in this directory:
+#   cp scripts/contabo/config.example scripts/contabo/config
+# Sourced by scripts/contabo/setup.sh (plain shell, no spaces around =).
+#
+# Contabo API auth is NOT stored here. cntb keeps its own credentials in
+# ~/.cntb.yaml — one-time setup with the four values from
+# https://my.contabo.com -> Your Account -> API:
+#   cntb config set-credentials --oauth2-clientid=... --oauth2-client-secret=... \
+#     --oauth2-user=<account email> --oauth2-password=<API password>
+# (Or CNTB_OAUTH2_CLIENTID/_CLIENT_SECRET/_USER/_PASSWORD env vars on CI.)
+
+REGION=EU                    # instance region: EU, UK, US-central, US-east, US-west, SIN, AUS, IND, JPN
+PRODUCT_ID=V92               # Cloud VPS product id (product list: https://contabo.com/en/vps/)
+UBUNTU_VERSION=24.04         # matched against the standard images (cntb get images)
+PERIOD=1                     # contract months: 1, 3, 6 or 12 — creating an instance is a PAID order
+INSTANCE_NAME=my-app-server  # displayName; setup.sh finds + reuses the instance by this name
+
+STORAGE_REGION=EU            # object storage region: EU, US-central, SIN (max ONE storage per region)
+STORAGE_TB=0.25              # purchased space in TB (0.25 = 250 GB, the minimum) — also a paid order
+BUCKET=my-app-backups        # backup bucket created inside the object storage
+
+SSH_KEY=~/.ssh/id_ed25519    # private key for login; generated if missing, pubkey uploaded as a cntb secret
+SSH_HOST_ALIAS=my-app        # `Host` entry written to ~/.ssh/config (ssh <alias>)
+GIT_REPO=                    # repo to clone on the box (blank = this repo's origin)

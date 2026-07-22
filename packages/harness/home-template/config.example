@@ -21,10 +21,15 @@ APP_PASS=            # password (blank = a random one is generated once and reus
 # ---- backups: whole-dir zip → S3 on a cron (written by setup-server.sh) ----
 # Blank bucket = backups off. SQLite DBs are snapshotted consistently
 # (sqlite3 .backup) before zipping; node_modules/.next/.venv are excluded
-# (reproducible). AWS auth = the CLI chain (EC2 IAM role; no keys needed).
+# (reproducible). On AWS, auth = the CLI chain (EC2 IAM role; no keys needed).
+# On S3-compatible stores (Contabo object storage), set the endpoint + keys —
+# scripts/contabo/setup.sh prints all four values.
 BACKUP_S3_BUCKET=        # bucket or bucket/prefix, e.g. my-backups/my-app
 BACKUP_EVERY_HOURS=24    # 1-23 = every N hours; 24+ = daily at 03:00 UTC
 BACKUP_KEEP=14           # newest N zips kept in S3; older ones deleted
+BACKUP_S3_ENDPOINT=      # non-AWS S3 endpoint, e.g. https://eu2.contabostorage.com (blank = AWS)
+BACKUP_S3_ACCESS_KEY=    # keys for that endpoint (blank = aws CLI chain / IAM role)
+BACKUP_S3_SECRET_KEY=
 AWS_PROFILE=             # local testing only: named aws-cli profile (EC2 uses the IAM role)
 
 # Token for the private @cognisphere-sh/* packages on GitHub Packages.

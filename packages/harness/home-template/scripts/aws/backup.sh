@@ -12,6 +12,8 @@
 #
 # AWS auth: the aws CLI default chain — on EC2 that's the instance IAM role
 # (needs s3:PutObject/ListBucket/DeleteObject on the backup bucket).
+# Non-AWS S3-compatible stores (e.g. Contabo object storage): set
+# BACKUP_S3_ENDPOINT + BACKUP_S3_ACCESS_KEY/_SECRET_KEY in the root config.
 set -euo pipefail
 
 # Config comes from the app home's root `config` (the BACKUP_* keys) — NOT
@@ -23,6 +25,14 @@ NAME="${APP_NAME:-$(basename "$ROOT")}"
 [[ -n "${BACKUP_S3_BUCKET:-}" ]] || exit 0   # backups disabled
 # Local testing: honor the config's named aws-cli profile (EC2 uses the IAM role).
 [[ -n "${AWS_PROFILE:-}" ]] && export AWS_PROFILE
+# S3-compatible endpoint (Contabo etc): static keys, and a region the CLI
+# accepts (Contabo ignores it but the CLI demands one).
+[[ -n "${BACKUP_S3_ACCESS_KEY:-}" ]] && export AWS_ACCESS_KEY_ID="$BACKUP_S3_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$BACKUP_S3_SECRET_KEY"
+[[ -n "${BACKUP_S3_ENDPOINT:-}" ]] && export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-default}"
+s3() {
+  if [[ -n "${BACKUP_S3_ENDPOINT:-}" ]]; then aws --endpoint-url "$BACKUP_S3_ENDPOINT" s3 "$@"
+  else aws s3 "$@"; fi
+}
 
 KEEP="${BACKUP_KEEP:-14}"
 DEST="s3://${BACKUP_S3_BUCKET%/}"
@@ -43,12 +53,12 @@ cd "$ROOT/.."
 zip -qr "$TMP/$ZIP" "$(basename "$ROOT")" \
   -x '*/node_modules/*' '*/.next/*' '*/.venv/*' '*.db' '*.db-wal' '*.db-shm'
 
-aws s3 cp --only-show-errors "$TMP/$ZIP" "$DEST/$ZIP"
+s3 cp --only-show-errors "$TMP/$ZIP" "$DEST/$ZIP"
 
 # Retention: keep the newest $KEEP, delete the rest (names sort chronologically).
-aws s3 ls "$DEST/" \
+s3 ls "$DEST/" \
   | awk -v n="$NAME" '$4 ~ ("^" n "-[0-9]{8}-[0-9]{6}\\.zip$") {print $4}' \
   | sort | head -n -"$KEEP" \
-  | while read -r old; do aws s3 rm --only-show-errors "$DEST/$old"; done
+  | while read -r old; do s3 rm --only-show-errors "$DEST/$old"; done
 
 echo "$(date -u +%FT%TZ) backup ok: $ZIP -> $DEST (keep $KEEP)"

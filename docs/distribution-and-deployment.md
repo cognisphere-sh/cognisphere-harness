@@ -19,7 +19,7 @@ and upgraded. It supersedes the copy-the-codebase-per-deployment workflow.
 5. [Plugins: core vs. catalog](#5-plugins-core-vs-catalog)
 6. [Versioning model](#6-versioning-model)
 7. [Distribution & the private registry](#7-distribution--the-private-registry)
-8. [Deployment (AWS)](#8-deployment-aws)
+8. [Deployment (AWS & Contabo)](#8-deployment-aws--contabo)
 9. [Updates & the upgrade skill](#9-updates--the-upgrade-skill)
 10. [CLI surface](#10-cli-surface)
 11. [Open decisions](#11-open-decisions)
@@ -58,7 +58,8 @@ init <name>` scaffolds it:
 ├── .npmrc                     → @cognisphere-sh scope → GitHub Packages (no token — see §7)
 ├── config.example             → deploy params; cp to `config` (gitignored) and edit
 ├── scripts/                   → lifecycle scripts + per-platform provisioning (§8)
-│   └── aws/                      (setup.sh + config.example; cp to `config` there)
+│   ├── aws/                      (setup.sh + backup.sh + config.example; cp to `config` there)
+│   └── contabo/                  (setup.sh + config.example; same pattern, cntb-driven)
 ├── .claude/skills/            → agent skills (upgrade, create-plugin), copied in by init
 ├── .agents/skills/               (same set — for non-Claude coding agents)
 ├── app/                       ← the user-facing app (placeholder README until you
@@ -224,11 +225,11 @@ Setup:
 hook; loses `@latest` resolution). Move to self-hosted **Verdaccio** only once
 there are many consumers or a need to cache public deps.
 
-## 8. Deployment (AWS)
+## 8. Deployment (AWS & Contabo)
 
-Deployment target: **one EC2 box per app home**, driven entirely by the
-scaffolded `scripts/` (AWS is the only supported target for now; GWS and
-similar providers come later). The runtime shape on the box:
+Deployment target: **one Ubuntu box per app home**, driven entirely by the
+scaffolded `scripts/` (AWS and Contabo are the supported targets; others come
+later). The runtime shape on the box:
 
 ```
 browser ──https──> nginx ──┬─ $DOMAIN         → app (next start, :$APP_PORT)
@@ -242,6 +243,14 @@ Two systemd units — `<name>-harness.service` (WorkingDirectory `harness/`,
 Encrypt certs for both hostnames. The harness binds localhost only; nginx is
 the sole public entry. AWS specifics: EC2 + Elastic IP + an instance IAM role
 scoped to the backup bucket (no static keys on the box), S3 for backups.
+Contabo specifics: Cloud VPS + its S3-compatible object storage for backups.
+API auth is `cntb`'s own — a one-time `cntb config set-credentials` with the
+ClientId / ClientSecret / API User / API Password from my.contabo.com → API,
+stored in `~/.cntb.yaml`, never in repo config. Contabo has no IAM roles, so
+the box authenticates to the backup store with static object-storage keys
+(`BACKUP_S3_ENDPOINT` / `BACKUP_S3_ACCESS_KEY` / `BACKUP_S3_SECRET_KEY` in the
+root `config`), and no security groups, so the bootstrap enables `ufw`
+(22/80/443). Instance IPs are static — no Elastic-IP equivalent needed.
 
 The scripts — lifecycle sourced from the root `config`, provisioning from the
 platform dir's own `scripts/<platform>/config`:
@@ -249,22 +258,24 @@ platform dir's own `scripts/<platform>/config`:
 | Script | Where it runs | What it does |
 |---|---|---|
 | `scripts/aws/setup.sh` | locally (admin AWS creds) | one-time provision: S3 bucket, key pair, IAM role + instance profile, security group, EC2 (latest Ubuntu via SSM), Elastic IP, `~/.ssh/config` entry; then remote-bootstraps `gh` + Claude Code and clones the repo. Re-runnable — resources are found by name and reused. |
-| `scripts/setup-server.sh` | on the box, as root, once | apt deps (nginx, sqlite3, agent runtime libs, certbot), Node + pnpm, the GitHub Packages token into the run user's `~/.npmrc`, secrets, build, per-agent bootstrap, systemd units, nginx + HTTPS, backup cron. Re-runnable. |
-| `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json` + `app/.env.local`; `start`/`restart` run secrets + build first, so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. |
+| `scripts/contabo/setup.sh` | locally (`cntb` + `jq`) | one-time provision: object storage + backup bucket, SSH-key secret, Cloud VPS (Ubuntu), `~/.ssh/config` entry; same remote bootstrap as AWS plus `ufw` (Contabo has no security groups). Re-runnable — resources are found by displayName/region and reused; **the first run places a paid monthly order**. Prints the four `BACKUP_*` values to paste into the root `config`. |
+| `scripts/setup-server.sh` | on the box, as root, once | apt deps (nginx, sqlite3, agent runtime libs, certbot), Node + pnpm, the GitHub Packages token into the run user's `~/.npmrc`, secrets, build, per-agent bootstrap, systemd units, nginx + HTTPS, backup cron. Re-runnable; on an `APP_NAME` change it retires the previous name's units/nginx site/cron before writing the new ones. |
+| `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json` + `app/.env.local`; `start`/`restart` are the same command (secrets + build + `systemctl restart`, which also starts stopped units), so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. |
 | `scripts/build.sh` | on the box (or locally) | `pnpm install --frozen-lockfile` + the app build (when `app/` exists). |
-| `scripts/aws/backup.sh` | cron (written by setup-server) | zips the whole home to S3 with consistent SQLite snapshots, prunes to `BACKUP_KEEP`. Reads the root `config` (the `BACKUP_*` keys), not `scripts/aws/config`. |
+| `scripts/aws/backup.sh` | cron (written by setup-server) | zips the whole home to S3 with consistent SQLite snapshots, prunes to `BACKUP_KEEP`. Reads the root `config` (the `BACKUP_*` keys), not `scripts/aws/config`. Provider-neutral despite the path: `BACKUP_S3_ENDPOINT` + keys point it at any S3-compatible store (Contabo). |
 
 **Future platforms.** The platform seam is *platform-specific vs. lifecycle*.
-Platform-specific scripts live in their own directory — today `scripts/aws/`
-is the only one: `setup.sh` (provisioning, driven by `scripts/<platform>/config`
-copied from the `config.example` beside it) and `backup.sh` (the S3 backup
-target). The lifecycle scripts at `scripts/` top level (`setup-server.sh`,
-`server.sh`, `build.sh`) are platform-neutral — they assume nothing beyond an
-Ubuntu box with systemd + nginx, however it was rented. Adding GWS or another
-provider = adding a `scripts/<platform>/` dir (its own `setup.sh` and, if it
-brings a different backup store, its own `backup.sh` — `setup-server.sh`'s
-cron block points at the platform's backup script); if platforms ever carry
-heavy assets, an `init --platform` flag can copy only the chosen one.
+Platform-specific scripts live in their own directory (`scripts/aws/`,
+`scripts/contabo/`): a `setup.sh` (provisioning, driven by
+`scripts/<platform>/config` copied from the `config.example` beside it) and,
+if the platform brings a backup store that is not S3-compatible, its own
+`backup.sh` (`setup-server.sh`'s cron block points at the platform's backup
+script). Contabo's store *is* S3-compatible, so it reuses `scripts/aws/backup.sh`
+via `BACKUP_S3_ENDPOINT` rather than shipping a copy. The lifecycle scripts at
+`scripts/` top level (`setup-server.sh`, `server.sh`, `build.sh`) are
+platform-neutral — they assume nothing beyond an Ubuntu box with systemd +
+nginx, however it was rented. If platforms ever carry heavy assets, an
+`init --platform` flag can copy only the chosen one.
 
 Note: because one harness already hosts **many agents**, a new product is often
 a new *agent*, not a new *app home*. Reach for a new home only when you need
