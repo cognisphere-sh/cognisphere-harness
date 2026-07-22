@@ -739,7 +739,7 @@ After saving, the route reloads every running agent whose
 
 Browser-driven sign-in for subscription providers (Anthropic Claude
 Pro/Max, OpenAI Codex). The server drives pi-ai's OAuth flow via
-pi-coding-agent's `AuthStorage`; tokens land in pi's own
+pi-coding-agent's `ModelRuntime`; tokens land in pi's own
 `<piAgentDir>/auth.json` (default `~/.pi/agent/auth.json`), never in
 models.json. See `docs/server.md` §oauth-logins for the design
 rationale. All routes require auth. `:provider` must be a catalog entry

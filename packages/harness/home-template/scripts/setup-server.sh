@@ -176,7 +176,7 @@ Environment=NODE_ENV=production
 Environment=PORT=$APP_PORT
 Environment=HARNESS_URL=http://127.0.0.1:$HARNESS_PORT
 Environment=COGNISPHERE_NPM_TOKEN=
-# `next start` honors \$PORT; passing "-- -p" trips Next 16's arg parser (it
+# 'next start' honors \$PORT; passing "-- -p" trips Next 16's arg parser (it
 # reads -p as a project dir), so rely on the PORT env above.
 ExecStart=$PNPM_BIN start
 Restart=on-failure

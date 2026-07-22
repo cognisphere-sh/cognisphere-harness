@@ -18,6 +18,22 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3]
+
+### Changed
+
+- **pi upgraded to 0.81.1** (`@earendil-works/pi-ai` +
+  `@earendil-works/pi-coding-agent`, from 0.80.6). pi 0.80.8 removed the
+  `AuthStorage` export the harness used for OAuth subscription login; the
+  harness now drives login/logout through pi-coding-agent's `ModelRuntime`
+  (one shared lazy instance) and reads stored credentials via
+  `readStoredCredential`. Behavior parity: same routes, same polled
+  status shapes, tokens still in pi's own `<piAgentDir>/auth.json`.
+  Internally the login interaction moved to pi-ai's `AuthInteraction`
+  (`prompt`/`notify`): select cancellation now rejects the prompt, and
+  per-prompt abort signals (manual-code paste raced against the callback
+  server) clear the pending waiter state.
+
 ## [0.4.2]
 
 ### Added

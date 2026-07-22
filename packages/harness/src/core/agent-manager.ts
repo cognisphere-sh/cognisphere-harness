@@ -1,7 +1,7 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { Ajv, type ErrorObject } from "ajv";
 import type { ServerConfig } from "./config.js";
 import { agentDir, agentsRoot, secretsRoot } from "./config.js";
@@ -762,7 +762,7 @@ function resolveAndValidateProvider(
   // models.json credentials — pi children resolve auth.json themselves,
   // so nothing extra is injected; only the model allowlist still applies.
   const oauthConnected =
-    entry.oauth === true && AuthStorage.create().has(providerId);
+    entry.oauth === true && readStoredCredential(providerId)?.type === "oauth";
   const cfg =
     models.getProvider(providerId) ??
     (oauthConnected ? { credentials: {}, enabledModels: [] } : undefined);

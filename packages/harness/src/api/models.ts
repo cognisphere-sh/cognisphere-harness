@@ -1,4 +1,4 @@
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { Hono } from "hono";
 import { join } from "node:path";
 import type { AgentManager } from "../core/agent-manager.js";
@@ -112,7 +112,6 @@ export function modelsRouter(
 
   r.get("/", (c) => {
     const data = store.load();
-    const auth = AuthStorage.create();
     const providers: ProviderInfo[] = PROVIDER_CATALOG.map((entry) => {
       const cfgEntry = data.providers[entry.id];
       const stored = cfgEntry?.credentials ?? {};
@@ -133,7 +132,9 @@ export function modelsRouter(
           const v = stored[f.key];
           return typeof v === "string" && v.length > 0;
         });
-      const oauthConnected = entry.oauth === true && auth.has(entry.id);
+      const oauthConnected =
+        entry.oauth === true &&
+        readStoredCredential(entry.id)?.type === "oauth";
       // OAuth-only providers (no cred fields) are configured iff connected;
       // otherwise OAuth connection satisfies missing required fields.
       const configured =
@@ -159,14 +160,16 @@ export function modelsRouter(
   });
 
   // ── OAuth subscription login ─────────────────────────────────────
-  const oauthEntry = (providerId: string) => {
+  const oauthEntry = async (providerId: string) => {
     const entry = PROVIDER_CATALOG.find((p) => p.id === providerId);
-    return entry?.oauth && oauth.supported(providerId) ? entry : undefined;
+    return entry?.oauth && (await oauth.supported(providerId))
+      ? entry
+      : undefined;
   };
 
   r.post("/oauth/:provider/login", async (c) => {
     const providerId = c.req.param("provider");
-    if (!oauthEntry(providerId)) {
+    if (!(await oauthEntry(providerId))) {
       return c.json({ error: `provider ${providerId} does not support OAuth` }, 404);
     }
     const state = await oauth.start(providerId);
@@ -200,11 +203,11 @@ export function modelsRouter(
 
   r.delete("/oauth/:provider", async (c) => {
     const providerId = c.req.param("provider");
-    if (!oauthEntry(providerId)) {
+    if (!(await oauthEntry(providerId))) {
       return c.json({ error: `provider ${providerId} does not support OAuth` }, 404);
     }
     await oauth.cancel(providerId);
-    oauth.logout(providerId);
+    await oauth.logout(providerId);
     const restarted = await reloadAgentsUsingProviders(am, new Set([providerId]));
     log.info({ providerId, restarted }, "oauth signed out; agents reloaded");
     return c.json({ ok: true, restarted });

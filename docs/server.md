@@ -204,7 +204,7 @@ Conventions worth knowing:
   *outside* this tree, in pi's own `~/.pi/agent/auth.json`
   (0600, file-locked; path follows `PI_CODING_AGENT_DIR` if set).
   Written by the server's login flow via pi-coding-agent's
-  `AuthStorage`, read and auto-refreshed by every spawned pi child —
+  `ModelRuntime`, read and auto-refreshed by every spawned pi child —
   see §4.5.1.
 
 ---
@@ -373,8 +373,9 @@ credential).
 
 Server-driven OAuth login flows for subscription providers (catalog
 entries with `oauth: true`), exposed over `/api/models/oauth/*` (see
-`docs/api.md` §7.1). Reuses pi-coding-agent's `AuthStorage` — the same
-machinery behind pi's `/login` command.
+`docs/api.md` §7.1). Reuses pi-coding-agent's `ModelRuntime` — the same
+machinery behind pi's `/login` command (one shared instance, created
+lazily on first use).
 
 **Storage decision:** tokens persist to pi's own
 `<piAgentDir>/auth.json` (default `~/.pi/agent/auth.json`, 0600,
@@ -394,28 +395,31 @@ injection. pi's credential priority is auth.json (api_key, then OAuth)
 **before** env vars — so a connected OAuth subscription takes
 precedence over an `ANTHROPIC_API_KEY` from models.json.
 
-**Flow:** `start(providerId)` runs `AuthStorage.login()` in the
-background with pi-ai's `OAuthLoginCallbacks` and resolves once the
-flow surfaces its first interaction. The callbacks map onto the
-polled status (`/api/models/oauth/:provider/status`) like so:
+**Flow:** `start(providerId)` runs `ModelRuntime.login(providerId,
+"oauth", interaction)` in the background with pi-ai's
+`AuthInteraction` (`notify(event)` + `prompt(prompt)`) and resolves
+once the flow surfaces its first interaction. The events/prompts map
+onto the polled status (`/api/models/oauth/:provider/status`) like so:
 
-- `onAuth` → `url` + `instructions`. The browser opens the URL; either
-  the provider's localhost callback server (fixed port, e.g. 53692 for
-  Anthropic, 1455 for Codex) completes the flow — works when the
-  harness runs on the operator's machine — or the operator pastes the
-  final redirect URL back (`submitInput(kind: "text")`, wired to
-  `onManualCodeInput` / `onPrompt`).
-- `onSelect` → `select` (e.g. Codex: browser vs device-code login),
-  answered via `submitInput(kind: "select")` with an option id;
-  cancel resolves it with `undefined` (the provider treats that as a
-  user cancel).
-- `onDeviceCode` → `deviceCode` (`userCode` + `verificationUri`); the
-  operator enters the code in a browser while pi-ai polls the token
-  endpoint (abortable via the entry's `AbortController`). This is the
-  path of choice when the harness is hosted remotely — no localhost
-  callback involved.
-- `onPrompt` → `prompt` (free-text question), answered via
-  `submitInput(kind: "text")`.
+- `notify({type: "auth_url"})` → `url` + `instructions`. The browser
+  opens the URL; either the provider's localhost callback server
+  (fixed port, e.g. 53692 for Anthropic, 1455 for Codex) completes the
+  flow — works when the harness runs on the operator's machine — or
+  the operator pastes the final redirect URL back
+  (`submitInput(kind: "text")`, wired to the `manual_code` prompt).
+- `prompt({type: "select"})` → `select` (e.g. Codex: browser vs
+  device-code login), answered via `submitInput(kind: "select")` with
+  an option id; cancel rejects the prompt (the provider treats that as
+  a user cancel).
+- `notify({type: "device_code"})` → `deviceCode` (`userCode` +
+  `verificationUri`); the operator enters the code in a browser while
+  pi-ai polls the token endpoint (abortable via the entry's
+  `AbortController`). This is the path of choice when the harness is
+  hosted remotely — no localhost callback involved.
+- `prompt({type: "text" | "secret"})` → `prompt` (free-text question),
+  answered via `submitInput(kind: "text")`. A prompt may carry its own
+  `AbortSignal` (the `manual_code` paste is raced against the callback
+  server); an abort clears the pending waiter and prompt state.
 
 One pending login per provider (the callback port is fixed); `start`
 cancels any prior pending flow. On success/logout the models router

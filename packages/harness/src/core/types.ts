@@ -217,9 +217,9 @@ export interface CredField {
  * the card for provider-specific guidance (e.g. Bedrock alt auth modes).
  *
  * `oauth: true` marks providers with subscription OAuth support in
- * pi-ai's OAuth registry (the id must match an `OAuthProviderInterface`
- * id there). Tokens are persisted to pi's own `<agentDir>/auth.json`
- * via `AuthStorage` — never to models.json — so spawned pi children
+ * pi-ai (the id must match a provider whose `auth.oauth` flow is
+ * defined there). Tokens are persisted to pi's own `<agentDir>/auth.json`
+ * via `ModelRuntime` — never to models.json — so spawned pi children
  * pick them up and auto-refresh them natively. See `oauth-logins.ts`.
  */
 export interface ProviderCatalogEntry {
