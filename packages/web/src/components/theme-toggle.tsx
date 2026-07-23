@@ -1,5 +1,4 @@
 import { Moon, Sun } from "lucide-react";
-import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/lib/theme";
 
@@ -12,15 +11,9 @@ export function ThemeToggle() {
       onClick={toggle}
       aria-label={`switch to ${theme === "dark" ? "light" : "dark"} mode`}
     >
-      <motion.div
-        key={theme}
-        initial={{ rotate: -45, opacity: 0 }}
-        animate={{ rotate: 0, opacity: 1 }}
-        transition={{ duration: 0.18 }}
-        className="flex"
-      >
+      <div key={theme} className="flex animate-in fade-in spin-in-45 duration-200">
         {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-      </motion.div>
+      </div>
     </Button>
   );
 }

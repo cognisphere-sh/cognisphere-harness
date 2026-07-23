@@ -1,17 +1,25 @@
-import { create } from "zustand";
+import { useSyncExternalStore } from "react";
 import { endpoints } from "./api";
 
-interface AuthStore {
+interface AuthState {
   user: string | null;
   status: "unknown" | "anon" | "authed";
-  refresh: () => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
 }
 
-export const useAuth = create<AuthStore>((set) => ({
-  user: null,
-  status: "unknown",
+let state: AuthState = { user: null, status: "unknown" };
+const listeners = new Set<() => void>();
+
+function set(next: AuthState): void {
+  state = next;
+  for (const l of listeners) l();
+}
+
+function subscribe(l: () => void): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
+const actions = {
   refresh: async () => {
     try {
       const me = await endpoints.me();
@@ -20,7 +28,7 @@ export const useAuth = create<AuthStore>((set) => ({
       set({ user: null, status: "anon" });
     }
   },
-  login: async (username, password) => {
+  login: async (username: string, password: string) => {
     const res = await endpoints.login(username, password);
     set({ user: res.username, status: "authed" });
   },
@@ -28,4 +36,9 @@ export const useAuth = create<AuthStore>((set) => ({
     await endpoints.logout().catch(() => {});
     set({ user: null, status: "anon" });
   },
-}));
+};
+
+export function useAuth() {
+  const s = useSyncExternalStore(subscribe, () => state);
+  return { ...s, ...actions };
+}

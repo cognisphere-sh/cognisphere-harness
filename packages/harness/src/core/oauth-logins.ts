@@ -29,7 +29,7 @@
  * login per provider — the callback server binds a fixed port.
  */
 
-import { ModelRuntime, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthPrompt } from "@earendil-works/pi-ai";
 import type { Logger } from "./logger.js";
 
@@ -101,11 +101,6 @@ export class OAuthLoginManager {
   private runtime(): Promise<ModelRuntime> {
     this.runtimePromise ??= ModelRuntime.create();
     return this.runtimePromise;
-  }
-
-  /** OAuth credentials present in pi's auth.json for this provider. */
-  connected(providerId: string): boolean {
-    return readStoredCredential(providerId)?.type === "oauth";
   }
 
   /** Provider has an OAuth login flow in pi-ai's registry. */

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import {
   Bot,
   ChevronRight,
@@ -163,25 +162,15 @@ export function Sidebar() {
           <Menu className="size-4" />
         </button>
         {mobileOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="fixed inset-0 z-40 flex"
-          >
-            <motion.div
-              initial={{ x: -260 }}
-              animate={{ x: 0 }}
-              exit={{ x: -260 }}
-              transition={{ type: "tween", duration: 0.18 }}
-              className="h-full"
-            >
+          <div className="fixed inset-0 z-40 flex animate-in fade-in duration-200">
+            <div className="h-full animate-in slide-in-from-left-full duration-200">
               {drawer}
-            </motion.div>
+            </div>
             <div
               className="flex-1 bg-background/70 backdrop-blur-sm"
               onClick={() => setMobileOpen(false)}
             />
-          </motion.div>
+          </div>
         )}
       </div>
     </>

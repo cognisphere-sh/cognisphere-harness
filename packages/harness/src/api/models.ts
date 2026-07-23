@@ -9,6 +9,12 @@ import { PROVIDER_CATALOG } from "../core/models-catalog.js";
 import { ModelsStore } from "../core/models-store.js";
 import { OAuthLoginManager } from "../core/oauth-logins.js";
 import type { CredField, ProviderConfig } from "../core/types.js";
+import {
+  applyMaskedPut,
+  MASK,
+  maskCredential,
+  requiredCredentialsPresent,
+} from "./credentials.js";
 
 /**
  * /api/models — global (cross-agent) provider + model configuration.
@@ -43,8 +49,6 @@ import type { CredField, ProviderConfig } from "../core/types.js";
  *   - `MASK` (string)   → leave existing value untouched
  *   - any other string  → set this value
  */
-
-const MASK = "********";
 
 export interface ProviderInfo {
   id: string;
@@ -117,21 +121,9 @@ export function modelsRouter(
       const stored = cfgEntry?.credentials ?? {};
       const values: Record<string, string> = {};
       for (const field of entry.credentials) {
-        const v = stored[field.key];
-        if (typeof v !== "string" || v.length === 0) {
-          values[field.key] = "";
-        } else if (field.secret) {
-          values[field.key] = MASK;
-        } else {
-          values[field.key] = v;
-        }
+        values[field.key] = maskCredential(stored[field.key], field.secret);
       }
-      const requiredOk = entry.credentials
-        .filter((f) => f.required)
-        .every((f) => {
-          const v = stored[f.key];
-          return typeof v === "string" && v.length > 0;
-        });
+      const requiredOk = requiredCredentialsPresent(entry.credentials, stored);
       const oauthConnected =
         entry.oauth === true &&
         readStoredCredential(entry.id)?.type === "oauth";
@@ -245,14 +237,8 @@ export function modelsRouter(
         const validKeys = new Set(entry.credentials.map((f) => f.key));
         for (const [k, v] of Object.entries(payload.credentials)) {
           if (!validKeys.has(k)) continue;
-          if (v === null) {
-            delete nextCreds[k];
-          } else if (v === MASK) {
-            // unchanged — leave existing value intact
-          } else if (typeof v === "string") {
-            if (v.length === 0) delete nextCreds[k];
-            else nextCreds[k] = v;
-          }
+          // Empty string clears the field, same as null.
+          applyMaskedPut(nextCreds, k, v === "" ? null : v);
         }
       }
       target.credentials = nextCreds;

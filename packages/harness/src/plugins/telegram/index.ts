@@ -1,6 +1,5 @@
 import { writeFile } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   Plugin,
   PluginInstanceContext,
@@ -170,15 +169,6 @@ export default class TelegramPlugin implements Plugin {
     this.ctx = undefined;
   }
 
-  // No webhook in v0. Define the handler so `httpBaseUrl` is set on the
-  // context (kept for future extension), but reject everything.
-  async handleHttpRequest(
-    _req: IncomingMessage,
-    res: ServerResponse,
-  ): Promise<void> {
-    res.writeHead(404).end();
-  }
-
   // ── poll loop ────────────────────────────────────────────────────────
 
   private async pollLoop(): Promise<void> {
@@ -222,6 +212,20 @@ export default class TelegramPlugin implements Plugin {
     const chatId = String(msg.chat.id);
     if (this.allowed && !this.allowed.has(chatId)) return;
     if (!this.ctx) return;
+
+    // `/reset` is handled by the plugin, never delivered to the agent: wipe
+    // the thread's context so the next message starts a fresh session.
+    if (!isEdit && /^\/reset(@\w+)?$/.test((msg.text ?? "").trim())) {
+      let reply: string;
+      try {
+        this.ctx.resetThread(chatId);
+        reply = "Context reset — starting fresh.";
+      } catch (err) {
+        reply = `Reset failed: ${(err as Error).message}`;
+      }
+      await this.api("sendMessage", { chat_id: chatId, text: reply });
+      return;
+    }
 
     const attachments = await this.downloadAttachments(msg);
     const baseText = msg.text ?? msg.caption ?? "";

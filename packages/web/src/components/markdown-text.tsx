@@ -1,6 +1,5 @@
 import { Children, Fragment, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { rawFileUrl } from "@/lib/api";
 import { splitWithPaths } from "@/lib/format";
@@ -26,6 +25,17 @@ function linkifyString(text: string, agentId: string): ReactNode {
       </a>
     );
   });
+}
+
+// Chat text treats a lone newline as a line break (what remark-breaks did):
+// turn it into a markdown hard break. Fenced code blocks are left untouched.
+// ponytail: replaces the remark-breaks dep; inline code spans with newlines
+// would get stray trailing spaces, which chat text doesn't produce.
+function hardBreaks(text: string): string {
+  return text
+    .split(/(```[\s\S]*?(?:```|$))/)
+    .map((seg, i) => (i % 2 ? seg : seg.replace(/([^\n])\n(?!\n)/g, "$1  \n")))
+    .join("");
 }
 
 function withLinkifiedText(children: ReactNode, agentId: string): ReactNode {
@@ -127,8 +137,8 @@ export function MarkdownText({
 
   return (
     <div className={cn("text-sm leading-relaxed", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
-        {text}
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {hardBreaks(text)}
       </ReactMarkdown>
     </div>
   );

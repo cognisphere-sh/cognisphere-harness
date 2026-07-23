@@ -78,6 +78,18 @@ interface Props {
   agentId: string;
 }
 
+/** Fire fn per target in parallel; report how many succeeded. */
+async function runBulk<T>(
+  targets: T[],
+  fn: (target: T) => Promise<unknown>,
+): Promise<{ total: number; ok: number }> {
+  const results = await Promise.allSettled(targets.map(fn));
+  return {
+    total: targets.length,
+    ok: results.filter((r) => r.status === "fulfilled").length,
+  };
+}
+
 export function EventsTable({ agentId }: Props) {
   const qc = useQueryClient();
   const [searchInput, setSearchInput] = useState("");
@@ -221,16 +233,11 @@ export function EventsTable({ agentId }: Props) {
   );
 
   const bulkSetStatus = useMutation({
-    mutationFn: async (status: EventStatus) => {
-      const targets = selectedNotInFlight.map((r) => r.id);
-      const results = await Promise.allSettled(
-        targets.map((id) => endpoints.setEventStatus(agentId, id, status)),
-      );
-      return {
-        total: targets.length,
-        ok: results.filter((r) => r.status === "fulfilled").length,
-      };
-    },
+    mutationFn: (status: EventStatus) =>
+      runBulk(
+        selectedNotInFlight.map((r) => r.id),
+        (id) => endpoints.setEventStatus(agentId, id, status),
+      ),
     onSuccess: ({ total, ok }, status) => {
       if (total === 0) toast.message("no eligible rows (in_flight rows skipped)");
       else if (ok === total) toast.success(`status → ${status} (${ok})`);
@@ -242,16 +249,11 @@ export function EventsTable({ agentId }: Props) {
   });
 
   const bulkDelete = useMutation({
-    mutationFn: async () => {
-      const targets = selectedNotInFlight.map((r) => r.id);
-      const results = await Promise.allSettled(
-        targets.map((id) => endpoints.discardEvent(agentId, id)),
-      );
-      return {
-        total: targets.length,
-        ok: results.filter((r) => r.status === "fulfilled").length,
-      };
-    },
+    mutationFn: () =>
+      runBulk(
+        selectedNotInFlight.map((r) => r.id),
+        (id) => endpoints.discardEvent(agentId, id),
+      ),
     onSuccess: ({ total, ok }) => {
       if (total === 0) toast.message("no eligible rows (in_flight rows skipped)");
       else if (ok === total) toast.success(`deleted ${ok}`);
@@ -263,18 +265,11 @@ export function EventsTable({ agentId }: Props) {
   });
 
   const bulkAbort = useMutation({
-    mutationFn: async () => {
-      const threadIds = [
-        ...new Set(selectedInFlight.map((r) => r.threadId)),
-      ];
-      const results = await Promise.allSettled(
-        threadIds.map((tid) => endpoints.abortChat(agentId, tid)),
-      );
-      return {
-        total: threadIds.length,
-        ok: results.filter((r) => r.status === "fulfilled").length,
-      };
-    },
+    mutationFn: () =>
+      runBulk(
+        [...new Set(selectedInFlight.map((r) => r.threadId))],
+        (tid) => endpoints.abortChat(agentId, tid),
+      ),
     onSuccess: ({ total, ok }) => {
       if (total === 0) toast.message("no in_flight rows selected");
       else if (ok === total) toast.success(`abort sent to ${ok} thread${ok === 1 ? "" : "s"}`);

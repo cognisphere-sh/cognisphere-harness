@@ -7,7 +7,6 @@ import {
   readdirSync,
   readFileSync,
   readSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -19,6 +18,7 @@ import { agentDir, secretsRoot } from "../core/config.js";
 import type { ServerConfig } from "../core/config.js";
 import { ModelsStore } from "../core/models-store.js";
 import { findProviderInCatalog } from "../core/models-catalog.js";
+import { requiredCredentialsPresent } from "./credentials.js";
 
 /**
  * /api/agents/* surface for the web UI.
@@ -181,7 +181,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       activeSessionId: string | null;
       sessions: SessionEntry[];
       lastContext: LastContextInfo | null;
-      totalCost: number | null;
+      totalCost: number;
       modelOverride: {
         provider: string;
         modelId: string;
@@ -217,14 +217,9 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
         : null;
       // Sum cost.total across every assistant message in every session
       // file (main + each sub-agent) so the sidebar can show running
-      // spend per thread. We *only* read the mtime cache here — if any
-      // file is cold, return `null` and schedule a background warm-up;
-      // otherwise the first /sessions call after a fresh boot would
-      // block on parsing every jsonl in the agent (which can be 1000+
-      // files for a long-running agent). The sidebar polls every 5s,
-      // so costs populate within a few ticks instead of stalling page
-      // load.
-      const totalCost = getThreadTotalCostFast(tDir);
+      // spend per thread. Per-file totals are cached by (path, mtime),
+      // so only new/changed jsonls are re-parsed on each poll.
+      const totalCost = sumThreadTotalCost(tDir);
       threads.push({
         threadId: ent.name,
         activeSessionId,
@@ -249,25 +244,12 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     if (!isSafeId(threadId)) {
       return c.json({ error: "invalid thread id" }, 400);
     }
-    if (inst.runner?.isThreadActive(threadId)) {
-      return c.json(
-        { error: "thread is currently in-flight — abort it first" },
-        409,
-      );
+    try {
+      const { events, removedDir } = am.deleteThread(id, threadId);
+      return c.json({ ok: true, threadId, events, removedDir });
+    } catch (err) {
+      return lifecycleErrorResponse(c, err);
     }
-    const dbRes = inst.db?.deleteThread(threadId) ?? { events: 0 };
-    const tDir = join(agentDir(cfg, id), "sessions", threadId);
-    let removedDir = false;
-    if (existsSync(tDir)) {
-      rmSync(tDir, { recursive: true, force: true });
-      removedDir = true;
-    }
-    return c.json({
-      ok: true,
-      threadId,
-      events: dbRes.events,
-      removedDir,
-    });
   });
 
   // Per-thread model override. Stored on the thread's `threads` row and read
@@ -303,13 +285,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
     if (!entry) return c.json({ error: `unknown provider "${provider}"` }, 400);
     const pcfg = models.getProvider(provider);
     const configured =
-      !!pcfg &&
-      entry.credentials
-        .filter((f) => f.required)
-        .every((f) => {
-          const v = pcfg.credentials[f.key];
-          return typeof v === "string" && v.length > 0;
-        });
+      !!pcfg && requiredCredentialsPresent(entry.credentials, pcfg.credentials);
     if (!configured) {
       return c.json({ error: `provider "${provider}" is not configured` }, 400);
     }
@@ -782,15 +758,8 @@ function numField(obj: Record<string, unknown>, key: string): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-/** Fast path for the threads-list endpoint: walk the thread's jsonls
- *  and sum from the mtime cache only. If any file is uncached (cold
- *  boot, new file, file mutated since last read), return `null` and
- *  schedule a background warm-up so the next poll returns the real
- *  number. Keeps page-open instant on large agents (1k+ session
- *  files). */
 // Every jsonl under a thread directory: the main agent's session files
-// plus each sub-agent dir under `subagents/`. Shared by the fast (cache-
-// only) and full (re-parse) cost walkers below.
+// plus each sub-agent dir under `subagents/`.
 function* threadJsonlFiles(threadDir: string): Generator<string> {
   for (const f of readdirSync(threadDir, { withFileTypes: true })) {
     if (f.isFile() && f.name.endsWith(".jsonl")) yield join(threadDir, f.name);
@@ -806,50 +775,8 @@ function* threadJsonlFiles(threadDir: string): Generator<string> {
   }
 }
 
-function getThreadTotalCostFast(threadDir: string): number | null {
-  let total = 0;
-  let cold = false;
-  for (const filePath of threadJsonlFiles(threadDir)) {
-    let mtimeMs: number;
-    try {
-      mtimeMs = statSync(filePath).mtimeMs;
-    } catch {
-      continue;
-    }
-    const hit = fileTotalCostCache.get(filePath);
-    if (hit && hit.mtimeMs === mtimeMs) total += hit.cost;
-    else cold = true;
-  }
-  if (cold) {
-    scheduleThreadCostWarmup(threadDir);
-    return null;
-  }
-  return total;
-}
-
-// In-flight warm-ups. One setImmediate per thread keeps the queue
-// from being double-scheduled across rapid polls while still
-// processing every uncached thread eventually.
-const warmingThreadDirs = new Set<string>();
-
-function scheduleThreadCostWarmup(threadDir: string): void {
-  if (warmingThreadDirs.has(threadDir)) return;
-  warmingThreadDirs.add(threadDir);
-  setImmediate(() => {
-    try {
-      sumThreadTotalCost(threadDir);
-    } catch {
-      // ignore — next poll will re-trigger if the dir is still readable
-    } finally {
-      warmingThreadDirs.delete(threadDir);
-    }
-  });
-}
-
 /** Sum `cost.total` across every assistant message in every jsonl
- *  under the thread directory (main agent + every sub-agent dir).
- *  Synchronous — only call off the request hot-path (e.g. from the
- *  background warm-up triggered by `getThreadTotalCostFast`). */
+ *  under the thread directory (main agent + every sub-agent dir). */
 function sumThreadTotalCost(threadDir: string): number {
   let total = 0;
   for (const filePath of threadJsonlFiles(threadDir)) {

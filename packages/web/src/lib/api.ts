@@ -128,7 +128,6 @@ export interface AgentDetail {
     threadIdStrategy: { type: string };
     maxConcurrentSlots?: number;
     maxAttempts?: number;
-    runtime?: string;
     secretsSchema?: unknown;
     configSchema?: unknown;
     config?: Record<string, string>;
@@ -468,8 +467,6 @@ export const endpoints = {
         offset: params?.offset,
       },
     ),
-  requeueEvent: (id: string, rowId: number) =>
-    api.post<{ ok: true; id: number }>(`/api/agents/${id}/events/${rowId}/requeue`),
   discardEvent: (id: string, rowId: number) =>
     api.delete<{ ok: true }>(`/api/agents/${id}/events/${rowId}`),
   setEventStatus: (id: string, rowId: number, status: EventStatus) =>

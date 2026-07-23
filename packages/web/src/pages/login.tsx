@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate, useLocation, Navigate } from "react-router-dom";
-import { motion } from "framer-motion";
 import { Bot, Loader2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -42,12 +41,7 @@ export function LoginPage() {
       <div className="absolute right-3 top-3 z-10">
         <ThemeToggle />
       </div>
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.18 }}
-        className="w-full max-w-sm"
-      >
+      <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
         <Card className="overflow-hidden">
           <CardHeader className="items-center text-center">
             <div className="mb-2 grid size-10 place-items-center rounded-md bg-primary text-primary-foreground">
@@ -96,7 +90,7 @@ export function LoginPage() {
             </form>
           </CardContent>
         </Card>
-      </motion.div>
+      </div>
     </div>
   );
 }

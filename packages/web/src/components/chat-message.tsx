@@ -1,4 +1,3 @@
-import { motion } from "framer-motion";
 import { Bot, Brain, User as UserIcon } from "lucide-react";
 import type { AssistantBubble, UserBubble } from "@/lib/session";
 import { splitHarnessMeta } from "@/lib/session";
@@ -14,12 +13,7 @@ interface UserProps {
 export function UserMessageBubble({ agentId, bubble }: UserProps) {
   const { meta, body } = splitHarnessMeta(bubble.text);
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.15 }}
-      className="flex justify-end"
-    >
+    <div className="flex justify-end animate-in fade-in slide-in-from-bottom-1.5 duration-150">
       <div className="flex max-w-[88%] gap-2 sm:max-w-[78%]">
         <div className="min-w-0 space-y-2">
           {meta && (
@@ -49,7 +43,7 @@ export function UserMessageBubble({ agentId, bubble }: UserProps) {
           <UserIcon className="size-3.5" />
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
@@ -60,12 +54,7 @@ interface AssistantProps {
 
 export function AssistantMessageBubble({ agentId, bubble }: AssistantProps) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.15 }}
-      className="flex justify-start"
-    >
+    <div className="flex justify-start animate-in fade-in slide-in-from-bottom-1.5 duration-150">
       <div className="flex max-w-[92%] gap-2 sm:max-w-[82%]">
         <div className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
           <Bot className="size-3.5" />
@@ -123,6 +112,6 @@ export function AssistantMessageBubble({ agentId, bubble }: AssistantProps) {
           </div>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }

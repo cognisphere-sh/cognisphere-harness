@@ -81,12 +81,14 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - [`docs/server.md`](docs/server.md) — agent-runner subsystem: process model, on-disk layout, components (`agent-manager`, `runner`, `queue`, `rpc`, `plugin-registry`, `secrets`, `models-store`, `models-catalog`, `types`, `config`, `logger`), key flows, design decisions.
 - [`docs/api.md`](docs/api.md) — HTTP surface: auth model, every route under `/healthz`, `/api/*`, `/admin/*`, `/webhook/*`, request/response shapes, error codes, conventions.
 - [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) — packaging, the `cognisphere` CLI, the app-home scaffold (`harness/` + `app/` + `scripts/`), the AWS deploy scripts, the upgrade flow.
+- [`packages/harness/home-template/docs/base-harness/`](packages/harness/home-template/docs/base-harness/) — the **user-facing** harness docs shipped into every app home (`docs/base-harness/` there): what cognisphere is, the CLI, agent/plugin anatomy, secrets/models, skills. **Owned in this repo** — every home treats its copy as read-only reference.
 
 **When to update which doc:**
 
 - Touching `packages/harness/src/core/agent-manager.ts`, `runner.ts`, `queue.ts`, `rpc.ts`, `plugin-registry.ts`, `secrets.ts`, `models-*.ts`, `types.ts`, `config.ts`, `logger.ts`, or built-in plugin runtime contracts → update `docs/server.md`.
 - Touching anything under `packages/harness/src/api/` or `packages/harness/src/core/main.ts`'s route wiring → update `docs/api.md`.
 - Touching `packages/harness/src/cli/` or `packages/harness/home-template/` (the scaffolded app-home layout / deploy scripts) → update `docs/distribution-and-deployment.md` (and `docs/server.md` §3 if the scaffolded tree changed).
+- Any harness change that alters **user-visible behavior** (CLI surface, agent/plugin anatomy, secrets/models shapes, base-agent contract, shipped plugins) → also update the shipped user docs in `packages/harness/home-template/docs/base-harness/`.
 - Changes that span both (e.g. a new lifecycle method exposed via a new HTTP route) → update both.
 - On-disk layout changes (file names, secrets shape, models.json shape, agent dir structure) → update `docs/server.md` §3 and the relevant section in `docs/api.md` if it's reachable over HTTP.
 

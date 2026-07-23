@@ -6,8 +6,6 @@ export type ThreadIdStrategy =
   | { type: "plugin" }
   | { type: "plugin_channel" };
 
-export type RuntimeKind = "subprocess";
-
 export interface AgentJson {
   name: string;
   model: {
@@ -30,7 +28,18 @@ export interface AgentJson {
   threadIdStrategy: ThreadIdStrategy;
   maxConcurrentSlots?: number;
   maxAttempts?: number;
-  runtime?: RuntimeKind;
+  /** This agent IS the deployment's developer agent (written by
+   *  `cognisphere agent new --dev`). The agent-messaging plugin uses it to
+   *  know when to enforce senders' `devAgentAccess`. */
+  devAgent?: boolean;
+  /**
+   * Whether this agent knows about / may reach the developer agent.
+   * Default true. When false: the base template's developer-agent prompt
+   * fragment (`system_prompts/0.2-dev-agent.md`) is omitted from the
+   * assembled system prompt, and the developer agent's agent-messaging
+   * inbox rejects messages from this agent.
+   */
+  devAgentAccess?: boolean;
   /**
    * Optional JSON-Schema describing agent-level secrets (env vars exposed
    * to the pi runtime that aren't owned by any single plugin — e.g. an
@@ -103,6 +112,11 @@ export interface JsonSchema {
   [key: string]: unknown;
 }
 
+/** The base-template fragment describing the developer agent. The CLI bakes
+ *  the dev agent's name into it at fork time; the runner omits it from the
+ *  assembled system prompt when `agent.json.devAgentAccess` is false. */
+export const DEV_AGENT_PROMPT_FILE = "0.2-dev-agent.md";
+
 export interface PluginManifest {
   displayName: string;
   description?: string;
@@ -122,6 +136,16 @@ export interface PluginInstanceContext {
    *  declaring their own `timezone` config field. */
   timezone: string;
   notify(name: string, payload: NotifyPayload): void;
+  /** Reset the conversation context of the thread this plugin/channel routes
+   *  to: deletes the thread's queue rows, session binding, and session files,
+   *  so the next message starts a fresh pi session. Throws if the agent isn't
+   *  running or a batch is currently in-flight on the thread. */
+  resetThread(channelId: string): void;
+  /** Whether this agent's inbox accepts agent-messages from `fromAgentId`.
+   *  Answered by the harness from its in-memory registry; currently enforces
+   *  only the developer-agent rule (a `devAgentAccess: false` sender may not
+   *  message a `devAgent: true` agent). */
+  allowsMessageFrom(fromAgentId: string): boolean;
   httpBaseUrl?: string;
   log: Logger;
 }

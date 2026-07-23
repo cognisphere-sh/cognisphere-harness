@@ -18,6 +18,58 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.4]
+
+### Added
+
+- **Developer agent**: `packages/harness/src/dev-agent/` is a persona
+  overlay on the base template. `cognisphere agent new <name> --dev` forks the
+  base + overlay, installs the cognisphere skills (`cognisphere-upgrade`,
+  `create-plugin`) into the agent's own `skills/agent/`, and enables the
+  telegram plugin (the dev agent's only channel); `cognisphere init`
+  pre-creates the developer agent in every home (`--dev-agent <name>`,
+  default `dory`). The chosen name is baked at create time into the
+  `{{DevAgentId}}`/`{{DevAgentName}}` placeholders of `0.2-dev-agent.md`
+  (every fork) and `1-dev-agent.md` (the dev fork). The developer agent
+  owns and modifies the home's code (agents, user plugins, the app — never
+  the installed harness library) and keeps `docs/harness/` + `docs/app/`
+  current.
+- **Plugin-driven thread reset**: `PluginInstanceContext.resetThread(channelId)`
+  deletes the thread's queue rows, session binding, and session files (refusing
+  while a batch is in-flight), so the next message starts a fresh pi session.
+  The telegram plugin intercepts a `/reset` message (never delivered to the
+  agent) and calls it, replying with a confirmation.
+- **App-home docs + guidelines**: `home-template/` now ships `CLAUDE.md`
+  (init copies it to `AGENT.md` too) and a `docs/` tree —
+  `docs/base-harness/` (shipped user reference for the harness library +
+  `skills.md`; init copies the package `CHANGELOG.md` in; refreshed by the
+  upgrade skill), `docs/harness/` and `docs/app/` (deployment-owned, updated
+  by the developer agent after every code change).
+- Base template: new `system_prompts/0.2-dev-agent.md` fragment — a
+  **Platform code changes** section telling every non-developer agent to pass
+  code-change requests to `dory`.
+- **Per-agent developer-agent access**: `agent.json.devAgentAccess` (default
+  true). When false, the `0.2-dev-agent.md` fragment is omitted from the
+  agent's system prompt and the developer agent's agent-messaging inbox
+  rejects that agent's messages (403). `agent new --dev` stamps
+  `devAgent: true` so the agent-messaging plugin knows which inbox to guard.
+
+### Changed
+
+- Web build fix: dropped stale `manualChunks` entries (`framer-motion`,
+  `remark-breaks`) left behind after those deps were removed — they broke
+  `vite build` (and therefore `prepack`) under current Rollup.
+- Internal refactors, no intended behavior change: provider-credential
+  handling extracted to `src/api/credentials.ts`; the AWS/Contabo setup
+  scripts now share `scripts/lib/remote-bootstrap.sh`; assorted CLI, logger,
+  and web-console cleanups.
+
+### Breaking changes
+
+- base template: new system_prompts/0.2-dev-agent.md fragment (route code-change requests to the developer agent; omitted when agent.json devAgentAccess=false) — copy it into each agent and replace the `{{DevAgentId}}`/`{{DevAgentName}}` placeholders with the dev agent's id/name [affects: agents/*]
+- app home: new CLAUDE.md + AGENT.md + docs/{base-harness,harness,app}/ — copy from the package's home-template/, then copy the package CHANGELOG.md to docs/base-harness/CHANGELOG.md [affects: <home root>]
+- app home: create the developer agent with `cognisphere agent new <name> --dev` (conventional name: dory), then set secrets.json → <name>.telegram.TELEGRAM_BOT_TOKEN and a model provider [affects: agents/]
+
 ## [0.4.3]
 
 ### Changed

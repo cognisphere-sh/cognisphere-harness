@@ -63,7 +63,7 @@ determine the exact edits. Common shapes:
   the user's forked copy under `agents/*/` (the user's edits are the baseline;
   graft the change, don't overwrite).
 - **Plugin contract change** → update each forked plugin under `plugins/*` that
-  is affected; check any `compatibleHarness` range and flag incompatibilities.
+  is affected and flag incompatibilities.
 - **Secrets/config reshape** → describe the required `.secrets/` edit for the
   operator to perform; prefer instructing over editing secret values yourself.
 
@@ -85,6 +85,15 @@ the code:
 
 ```bash
 cognisphere upgrade --set-version <code-version>
+```
+
+If the home has `docs/base-harness/` (newer scaffolds), refresh the shipped
+reference docs and changelog from the installed package so the developer agent
+sees the new version's docs:
+
+```bash
+cp -R harness/node_modules/@cognisphere-sh/cognisphere-harness/home-template/docs/base-harness/. docs/base-harness/
+cp harness/node_modules/@cognisphere-sh/cognisphere-harness/CHANGELOG.md docs/base-harness/CHANGELOG.md
 ```
 
 Then suggest the operator review and commit the change, and restart the

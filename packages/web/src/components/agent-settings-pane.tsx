@@ -90,11 +90,6 @@ const AGENT_CONFIG_SCHEMA: JsonSchema = {
       minimum: 1,
       description: "Retries before a message moves to the dead-letter queue.",
     },
-    runtime: {
-      type: "string",
-      enum: ["subprocess"],
-      description: "Execution runtime (only `subprocess` in v0).",
-    },
   },
 };
 

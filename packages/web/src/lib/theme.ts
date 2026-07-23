@@ -1,12 +1,6 @@
-import { create } from "zustand";
+import { useSyncExternalStore } from "react";
 
 type Theme = "light" | "dark";
-
-interface ThemeStore {
-  theme: Theme;
-  toggle: () => void;
-  set: (t: Theme) => void;
-}
 
 const KEY = "pi-theme";
 
@@ -31,19 +25,26 @@ function apply(t: Theme): void {
   }
 }
 
-export const useTheme = create<ThemeStore>((set, get) => {
-  const initial = readInitial();
-  apply(initial);
+let theme: Theme = readInitial();
+apply(theme);
+const listeners = new Set<() => void>();
+
+function setTheme(t: Theme): void {
+  apply(t);
+  theme = t;
+  for (const l of listeners) l();
+}
+
+function subscribe(l: () => void): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
+export function useTheme() {
+  const t = useSyncExternalStore(subscribe, () => theme);
   return {
-    theme: initial,
-    toggle: () => {
-      const next = get().theme === "dark" ? "light" : "dark";
-      apply(next);
-      set({ theme: next });
-    },
-    set: (t) => {
-      apply(t);
-      set({ theme: t });
-    },
+    theme: t,
+    toggle: () => setTheme(theme === "dark" ? "light" : "dark"),
+    set: setTheme,
   };
-});
+}

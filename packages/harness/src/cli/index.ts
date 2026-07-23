@@ -15,9 +15,11 @@ const USAGE = `cognisphere — multi-agent harness CLI (v${packageVersion()})
 Usage: cognisphere <command> [args]
 
 Scaffold
-  init <name> [--timezone <tz>] [--root <dir>] create an app home (harness/ + app/ + scripts/)
-  agent new <name>                             fork the base template
-  plugin add <id> [--force]                    fork a catalog plugin
+  init <name> [--timezone <tz>] [--root <dir>] [--dev-agent <name>]
+                                               create an app home (harness/ + app/ + scripts/;
+                                               --dev-agent names the developer agent, default "dory")
+  agent new <name> [--dev]                     fork the base template (--dev: developer-agent overlay)
+  plugin add <id>                              fork a catalog plugin
 
 Run (deployment is scripts/setup-server.sh + scripts/server.sh in the app home)
   dev [--port <n>] [--web-port <n>] [--no-web] backend (watch) + Vite dev server
@@ -37,7 +39,7 @@ function main(): void {
       return cmdInit(rest);
     case "agent":
       if (rest[0] === "new") return cmdAgentNew(rest.slice(1));
-      return fail("usage: cognisphere agent new <name>");
+      return fail("usage: cognisphere agent new <name> [--dev]");
     case "plugin":
       if (rest[0] === "add") return cmdPluginAdd(rest.slice(1));
       return fail("usage: cognisphere plugin add <id>");

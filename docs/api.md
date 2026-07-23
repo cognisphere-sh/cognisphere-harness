@@ -291,12 +291,7 @@ assistant message exists yet (or it's older than the tail window);
 message in every session file in the thread (main agent + every
 sub-agent dir under `subagents/`). Per-file totals are cached by
 `(path, mtimeMs)` so unchanged jsonls aren't re-parsed on each 5s
-poll. `0` when no assistant messages have landed yet, **`null` while
-the per-file cache is warming** for that thread — the threads list
-only reads from the cache on the hot path; cold entries trigger a
-background warm-up (single setImmediate per thread) and the next
-poll returns the real number. This keeps page-open fast on agents
-with hundreds of session files.
+poll. `0` when no assistant messages have landed yet.
 
 Per-session response:
 

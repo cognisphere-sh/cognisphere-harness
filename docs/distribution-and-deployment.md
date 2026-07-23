@@ -3,9 +3,7 @@
 Status: **mostly implemented.** The repository restructure into a
 `packages/{harness,web}` pnpm workspace (§3), the `cognisphere` CLI (§10), the
 publishing config (§7, §11), the app-home scaffold with its AWS deploy scripts
-(§2, §8), and the upgrade skill (§9) are built. What remains external: the
-plugin `compatibleHarness` manifest (the CLI honors it where present, but no
-builtin plugin declares one yet).
+(§2, §8), and the upgrade skill (§9) are built.
 
 This doc is the contract for how CogniSphere is packaged, installed, deployed,
 and upgraded. It supersedes the copy-the-codebase-per-deployment workflow.
@@ -56,10 +54,21 @@ init <name>` scaffolds it:
 ├── pnpm-workspace.yaml        → members: harness, app (+ allowBuilds for native deps)
 ├── pnpm-lock.yaml             → pins the exact versions
 ├── .npmrc                     → @cognisphere-sh scope → GitHub Packages (no token — see §7)
+├── CLAUDE.md / AGENT.md       → engineering guidelines for coding agents working in
+│                                 the home (identical copies; CLAUDE.md ships in
+│                                 home-template, init copies it to AGENT.md)
 ├── config.example             → deploy params; cp to `config` (gitignored) and edit
+├── docs/                      → project docs (ships in home-template):
+│   ├── base-harness/             shipped user reference for the harness library +
+│   │                             skills.md + CHANGELOG.md (copied by init, refreshed
+│   │                             by the upgrade skill) — read-only in the home
+│   ├── harness/                  this deployment's harness docs (agents, plugins)
+│   └── app/                      the frontend app's docs — both kept current by the
+│                                 developer agent after every code change
 ├── scripts/                   → lifecycle scripts + per-platform provisioning (§8)
 │   ├── aws/                      (setup.sh + backup.sh + config.example; cp to `config` there)
-│   └── contabo/                  (setup.sh + config.example; same pattern, cntb-driven)
+│   ├── contabo/                  (setup.sh + config.example; same pattern, cntb-driven)
+│   └── lib/                      (remote-bootstrap.sh — shared by the per-platform setup.sh)
 ├── .claude/skills/            → agent skills (upgrade, create-plugin), copied in by init
 ├── .agents/skills/               (same set — for non-Claude coding agents)
 ├── app/                       ← the user-facing app (placeholder README until you
@@ -69,6 +78,8 @@ init <name>` scaffolds it:
     ├── harness.json            → { "version": "0.3.0", "timezone": "UTC" }
     ├── .secrets/               → gitignored (secrets.json, models.json, users.json, session-key)
     ├── agents/                 → forked from base-agent, edited freely, git-tracked
+    │   └── dory/                 the developer agent, pre-created by init
+    │                             (default name; `--dev-agent` renames — §4)
     └── plugins/                → forked from the catalog, git-tracked
 ```
 
@@ -112,7 +123,8 @@ packages/
 │       ├── api/              ← HTTP route handlers (/api, /admin, /webhook)
 │       ├── cli/              ← the `cognisphere` CLI (init, agent, plugin, dev, serve, upgrade)
 │       ├── plugins/          ← admin, scheduler (core) + telegram, gws (catalog)
-│       └── base-agent/       ← the single base template every agent forks from
+│       ├── base-agent/       ← the single base template every agent forks from
+│       └── dev-agent/        ← overlay for the developer agent (§4)
 └── web/                      ← cognisphere-web (Vite/React UI → builds to dist)
 pnpm-workspace.yaml
 ```
@@ -146,6 +158,26 @@ to its own package is a contained move.
   agent descends from. The upgrade skill (§9) applies base-template breaking
   changes uniformly on top of the user's edits, with the git diff as the safety
   net.
+- **The developer agent.** `packages/harness/src/dev-agent/` is an overlay on
+  the base template: `agent new <name> --dev` forks the base, copies the
+  overlay on top (the persona, `system_prompts/1-dev-agent.md`), installs the
+  shipped cognisphere skills into the agent's own `skills/agent/` (pi only
+  loads `<agentDir>/skills`, so the home-root `.claude/skills/` copies aren't
+  visible to agents), and enables the telegram plugin (its only channel).
+  `init` pre-creates the developer agent this way in every home — named by
+  `--dev-agent <name>` (default `dory`). The name is baked at create time
+  into the `{{DevAgentId}}`/`{{DevAgentName}}` placeholders of
+  `0.2-dev-agent.md` (every fork reads the existing dev agent's id off
+  `agent.json.devAgent`) and `1-dev-agent.md`. Dory's job is owning and modifying the
+  home's code (agents, user plugins, the app — never the installed harness
+  library) and keeping `docs/harness/` + `docs/app/` current; the base
+  template's main-agent prompt tells every *other* agent to pass platform
+  code-change requests to it. Telegram's `/reset` command wipes its
+  conversation context (thread delete via the plugin-context `resetThread`).
+  The `--dev` scaffold stamps `devAgent: true` into the agent.json; every
+  other agent's `devAgentAccess` flag (default true) controls whether it
+  gets the hand-off prompt fragment (`0.2-dev-agent.md`) and may message the
+  developer agent over agent-messaging (set `false` to cut an agent off).
 
 ## 5. Plugins: core vs. catalog
 
@@ -164,15 +196,6 @@ Two kinds of plugins, distinguished by whether the user is meant to fork them:
   "install a catalog plugin" are the same mechanism.
 - **Enable/select is per-agent** (via `agent.json`), matching CogniSphere's
   native multi-agent shape — agent A gets Telegram, agent B doesn't.
-- Each plugin carries a manifest declaring harness compatibility:
-
-  ```json
-  { "id": "telegram", "version": "1.2.0", "compatibleHarness": ">=0.3.0 <0.5.0" }
-  ```
-
-  The CLI validates `compatibleHarness` against `harness.json.version` at
-  `plugin add` time; the upgrade skill re-checks every forked plugin at upgrade
-  time and flags incompatible ones.
 
 ## 6. Versioning model
 
@@ -259,7 +282,7 @@ platform dir's own `scripts/<platform>/config`:
 |---|---|---|
 | `scripts/aws/setup.sh` | locally (admin AWS creds) | one-time provision: S3 bucket, key pair, IAM role + instance profile, security group, EC2 (latest Ubuntu via SSM), Elastic IP, `~/.ssh/config` entry; then remote-bootstraps `gh` + Claude Code and clones the repo. Re-runnable — resources are found by name and reused. |
 | `scripts/contabo/setup.sh` | locally (`cntb` + `jq`) | one-time provision: object storage + backup bucket, SSH-key secret, Cloud VPS (Ubuntu), `~/.ssh/config` entry; same remote bootstrap as AWS plus `ufw` (Contabo has no security groups). Re-runnable — resources are found by displayName/region and reused; **the first run places a paid monthly order**. Prints the four `BACKUP_*` values to paste into the root `config`. |
-| `scripts/setup-server.sh` | on the box, as root, once | apt deps (nginx, sqlite3, agent runtime libs, certbot), Node + pnpm, the GitHub Packages token into the run user's `~/.npmrc`, secrets, build, per-agent bootstrap, systemd units, nginx + HTTPS, backup cron. Re-runnable; on an `APP_NAME` change it retires the previous name's units/nginx site/cron before writing the new ones. |
+| `scripts/setup-server.sh` | on the box, as root, once | apt deps (nginx, sqlite3, agent runtime libs, certbot), Node + pnpm, the GitHub Packages token into the run user's `~/.npmrc`, secrets, build, per-agent bootstrap, systemd units, nginx + HTTPS, backup cron. Re-runnable. Renaming `APP_NAME` is not handled — retire the previous name's units/nginx site/cron by hand before rerunning. |
 | `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json` + `app/.env.local`; `start`/`restart` are the same command (secrets + build + `systemctl restart`, which also starts stopped units), so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. |
 | `scripts/build.sh` | on the box (or locally) | `pnpm install --frozen-lockfile` + the app build (when `app/` exists). |
 | `scripts/aws/backup.sh` | cron (written by setup-server) | zips the whole home to S3 with consistent SQLite snapshots, prunes to `BACKUP_KEEP`. Reads the root `config` (the `BACKUP_*` keys), not `scripts/aws/config`. Provider-neutral despite the path: `BACKUP_S3_ENDPOINT` + keys point it at any S3-compatible store (Contabo). |
@@ -267,7 +290,10 @@ platform dir's own `scripts/<platform>/config`:
 **Future platforms.** The platform seam is *platform-specific vs. lifecycle*.
 Platform-specific scripts live in their own directory (`scripts/aws/`,
 `scripts/contabo/`): a `setup.sh` (provisioning, driven by
-`scripts/<platform>/config` copied from the `config.example` beside it) and,
+`scripts/<platform>/config` copied from the `config.example` beside it —
+the shared tail of every `setup.sh`, i.e. the `~/.ssh/config` entry, the
+SSH-wait loop, and the on-box gh + Claude Code bootstrap, lives in
+`scripts/lib/remote-bootstrap.sh`, sourced by each platform script) and,
 if the platform brings a backup store that is not S3-compatible, its own
 `backup.sh` (`setup-server.sh`'s cron block points at the platform's backup
 script). Contabo's store *is* S3-compatible, so it reuses `scripts/aws/backup.sh`
@@ -323,9 +349,9 @@ upgrade:
 
 | Command | Purpose |
 |---|---|
-| `cognisphere init <name>` | scaffold an **app home** at `./<name>` (cwd-relative; `--root <dir>` to override) — workspace root (`package.json`, `pnpm-workspace.yaml`, scope-only `.npmrc`, `.gitignore`), `scripts/` + `config.example` (§8), the `app/` placeholder, the `harness/` data dir (`harness.json`, `.secrets/` with a generated session-key, `package.json`, empty `agents/`/`plugins/`), the agent skills into `.claude/skills/`+`.agents/skills/`, git repo |
-| `cognisphere agent new <name>` | fork `base-agent` into `agents/<name>/` + write a starter `agent.json` |
-| `cognisphere plugin add <id>` | fork a catalog plugin into `plugins/<id>/` (refuses core plugins; honors `compatibleHarness` when declared) |
+| `cognisphere init <name>` | scaffold an **app home** at `./<name>` (cwd-relative; `--root <dir>` to override) — workspace root (`package.json`, `pnpm-workspace.yaml`, scope-only `.npmrc`, `.gitignore`), `CLAUDE.md`+`AGENT.md`, `docs/` (with the package CHANGELOG copied into `docs/base-harness/`), `scripts/` + `config.example` (§8), the `app/` placeholder, the `harness/` data dir (`harness.json`, `.secrets/` with a generated session-key, `package.json`, the developer agent (`--dev-agent <name>`, default `dory`), empty `plugins/`), the agent skills into `.claude/skills/`+`.agents/skills/`, git repo |
+| `cognisphere agent new <name> [--dev]` | fork `base-agent` into `agents/<name>/` + write a starter `agent.json`; `--dev` overlays the developer-agent persona and enables telegram (§4) |
+| `cognisphere plugin add <id>` | fork a catalog plugin into `plugins/<id>/` (refuses core plugins) |
 | `cognisphere dev` | backend under `tsx --watch` **plus** the Vite dev server (HMR) when the web package is present (the monorepo); flags `--port <n>` (backend), `--web-port <n>` (Vite), `--no-web` (backend only). Vite proxies `/api`/`/admin`/`/webhook` to the backend. |
 | `cognisphere serve` | run the backend once (no watch) — the production entry the `<name>-harness` systemd unit execs; `--port <n>`, `--headless` (mount no web UI — API/webhook/admin only, for backend-only hosts). The backend otherwise serves the bundled UI (`dist-web/`), so production needs no separate web process. |
 | `cognisphere upgrade` | drive the two-phase upgrade: show the changelog window, `--to <v>` bumps the dep, `--set-version <v>` stamps `harness.json` (§9) |

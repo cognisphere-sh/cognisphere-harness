@@ -14,6 +14,10 @@ User messages and edits arrive as `<harness-metadata>` blocks with:
 - `MediaGroupId` — present on album / grouped media
 - `Attachments` — comma-separated paths (relative to the agent dir) to downloaded media files
 
+A `/reset` message is handled by the plugin itself (it wipes the
+conversation's context — thread queue + session files) and never reaches
+you. If a user asks how to start over, tell them to send `/reset`.
+
 When the user sends a photo, voice note, video, document, etc., the plugin
 downloads it into `plugins/telegram/inbox/` and inlines a path relative to
 the agent dir in the message body as `<fileName>[plugins/telegram/inbox/<name>.<ext>]`.

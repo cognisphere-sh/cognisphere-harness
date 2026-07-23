@@ -30,9 +30,7 @@ export function LinkifiedText({
             rel="noreferrer"
             className="rounded bg-primary/10 px-1 py-px font-mono text-[0.85em] text-primary underline-offset-2 hover:underline"
           >
-            {s.value.startsWith("`") && s.value.endsWith("`")
-              ? s.value
-              : s.value}
+            {s.value}
           </a>
         );
       })}

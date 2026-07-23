@@ -506,14 +506,6 @@ export class AgentDb {
     return { events };
   }
 
-  /** Drop a still-queued row. Refuses if it has already advanced past queued. */
-  removeById(id: number): boolean {
-    const info = this.db
-      .prepare(`DELETE FROM events WHERE id = ? AND status = 'queued'`)
-      .run(id);
-    return info.changes > 0;
-  }
-
   /** Crash recovery: any row stuck in 'in_flight' is treated as a failed attempt. */
   sweepInFlight(maxAttempts: number, error = "process died mid-batch") {
     const rows = this.db
@@ -524,15 +516,6 @@ export class AgentDb {
     if (rows.length === 0) return { retrying: [], dead: [] };
     // sessionId=null preserves any existing pi_session_id via COALESCE.
     return this.markBatchFailed(rows.map((r) => r.id), `[crash] ${error}`, maxAttempts, null);
-  }
-
-  countPending(): number {
-    const r = this.db
-      .prepare<unknown[], { n: number }>(
-        `SELECT COUNT(*) as n FROM events WHERE status IN ('queued','in_flight')`,
-      )
-      .get();
-    return r?.n ?? 0;
   }
 
   // ── DLQ-style actions on failed rows ──────────────────────
@@ -563,14 +546,6 @@ export class AgentDb {
       )
       .run(Date.now(), id);
     return info.changes > 0 ? id : null;
-  }
-
-  /** Permanently delete a failed row. */
-  removeFailed(id: number): boolean {
-    const info = this.db
-      .prepare(`DELETE FROM events WHERE id = ? AND status = 'failed'`)
-      .run(id);
-    return info.changes > 0;
   }
 
   /**

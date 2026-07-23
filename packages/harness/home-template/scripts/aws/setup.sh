@@ -13,6 +13,8 @@ CONFIG="${1:-$ROOT/scripts/aws/config}"
 [[ -f "$CONFIG" ]] || { echo "no $CONFIG — run: cp scripts/aws/config.example scripts/aws/config && edit it"; exit 1; }
 # shellcheck source=config.example
 source "$CONFIG"
+# shellcheck source=../lib/remote-bootstrap.sh
+source "$ROOT/scripts/lib/remote-bootstrap.sh"
 command -v aws >/dev/null || { echo "aws CLI not installed (brew install awscli)"; exit 1; }
 [[ -n "${AWS_PROFILE:-}" ]] && export AWS_PROFILE
 export AWS_DEFAULT_REGION="$AWS_REGION"
@@ -128,68 +130,8 @@ IP="$(aq ec2 describe-addresses --allocation-ids "$ALLOC" --query 'Addresses[0].
 echo ">> $EC2_NAME: $INSTANCE_ID @ $IP (elastic ip $EIP_NAME)"
 
 # ---- 7. ~/.ssh/config --------------------------------------------------------
-if grep -qE "^Host[[:space:]]+$HOST_ALIAS\$" ~/.ssh/config 2>/dev/null; then
-  echo ">> ~/.ssh/config already has 'Host $HOST_ALIAS' — verify HostName is $IP"
-else
-  cat >> ~/.ssh/config <<EOF
-
-Host $HOST_ALIAS
-    HostName $IP
-    User ubuntu
-    IdentityFile $PEM
-EOF
-  echo ">> added 'Host $HOST_ALIAS' to ~/.ssh/config"
-fi
+add_ssh_config_entry ubuntu "$PEM"
 
 # ---- 8. remote bootstrap: gh + Claude Code (interactive auth) + clone --------
-REPO_URL="${GIT_REPO:-$(git -C "$ROOT" remote get-url origin)}"
-REPO_SLUG="$(sed -E 's#(git@github.com:|https://github.com/)##; s/\.git$//' <<<"$REPO_URL")"
-
-echo ">> waiting for SSH on $HOST_ALIAS"
-for _ in $(seq 1 30); do
-  ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 "$HOST_ALIAS" true 2>/dev/null && break
-  sleep 5
-done
-
-# Ship the bootstrap script, then run it with a tty (-t) so the interactive
-# gh / Claude Code auth flows work.
-ssh "$HOST_ALIAS" 'cat > ~/bootstrap.sh' <<'REMOTE'
-#!/usr/bin/env bash
-set -euo pipefail
-sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates
-
-# gh — official apt repo (the Ubuntu-archive gh is stale)
-if ! command -v gh >/dev/null; then
-  sudo mkdir -p -m 755 /etc/apt/keyrings
-  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-    | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-    | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-  sudo apt-get update -y && sudo apt-get install -y gh
-fi
-
-# Claude Code — native installer into ~/.local/bin
-command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
-grep -q '\.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-export PATH="$HOME/.local/bin:$PATH"
-
-# gh interactive auth — read:packages is required to install @cognisphere-sh packages
-if ! gh auth status >/dev/null 2>&1; then
-  gh auth login -s read:packages
-elif ! gh auth status 2>&1 | grep -q read:packages; then
-  gh auth refresh -s read:packages
-fi
-
-# Claude Code auth only — setup-token runs the OAuth flow and stores the
-# credential without starting a session. Skipped if already authenticated.
-[[ -f ~/.claude/.credentials.json ]] || claude setup-token
-
-# clone the repo
-REPO_DIR="$HOME/$(basename "$REPO_SLUG")"
-[[ -d "$REPO_DIR" ]] || gh repo clone "$REPO_SLUG" "$REPO_DIR"
-echo ">> bootstrap done: $REPO_DIR"
-REMOTE
-ssh -t "$HOST_ALIAS" "REPO_SLUG='$REPO_SLUG' bash ~/bootstrap.sh && rm ~/bootstrap.sh"
-
-echo ">> done. ssh $HOST_ALIAS   |   next: cd $(basename "$REPO_SLUG") && cp config.example config && sudo ./scripts/setup-server.sh"
+wait_for_ssh
+remote_bootstrap

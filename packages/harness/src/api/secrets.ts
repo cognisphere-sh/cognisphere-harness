@@ -11,6 +11,7 @@ import { secretsRoot } from "../core/config.js";
 import type { AgentManager } from "../core/agent-manager.js";
 import { AGENT_BUCKET } from "../core/secrets.js";
 import type { Logger } from "../core/logger.js";
+import { applyMaskedPut, MASK, maskCredential } from "./credentials.js";
 
 /**
  * /api/secrets — view (masked) and edit the harness secrets file.
@@ -37,8 +38,6 @@ type Secrets = Record<string, AgentBuckets>;
 type PutBucket = Record<string, string | null>;
 type PutAgent = Record<string, PutBucket>;
 
-const MASK = "********";
-
 export function secretsRouter(am: AgentManager, cfg: ServerConfig, log: Logger): Hono {
   const r = new Hono();
   const path = join(secretsRoot(cfg), "secrets.json");
@@ -54,7 +53,7 @@ export function secretsRouter(am: AgentManager, cfg: ServerConfig, log: Logger):
       for (const [bid, bucket] of Object.entries(agentBuckets)) {
         const m: Bucket = {};
         for (const [k, v] of Object.entries(bucket)) {
-          m[k] = v && typeof v === "string" ? MASK : "";
+          m[k] = maskCredential(v, true);
         }
         out[bid] = m;
       }
@@ -121,10 +120,7 @@ export function secretsRouter(am: AgentManager, cfg: ServerConfig, log: Logger):
         if (!bucket || typeof bucket !== "object") continue;
         const tBucket = (target[bid] ??= {});
         for (const [k, v] of Object.entries(bucket)) {
-          if (v === null) delete tBucket[k];
-          else if (v === MASK) {
-            // unchanged — keep existing value
-          } else if (typeof v === "string") tBucket[k] = v;
+          applyMaskedPut(tBucket, k, v);
         }
       }
     }

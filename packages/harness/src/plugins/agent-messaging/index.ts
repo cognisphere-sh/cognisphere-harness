@@ -87,6 +87,16 @@ export default class AgentMessagingPlugin implements Plugin {
           return json(400, {
             error: "thread_id, message, from_agent and from_thread_id required",
           });
+        // Refuse devAgentAccess:false senders on the developer agent's
+        // inbox. Advisory, not a security boundary — `from` is self-reported
+        // and any bash-capable agent could POST here directly; the flag's
+        // main effect is that such agents also don't get the dev-agent
+        // prompt fragment.
+        if (!ctx.allowsMessageFrom(from)) {
+          return json(403, {
+            error: `agent "${from}" is not allowed to message the developer agent (devAgentAccess: false)`,
+          });
+        }
         const silent = b.silent === true;
         const subject = b.subject ? String(b.subject) : "";
         // Sender identity travels in metadata (From/FromThread/Subject); the

@@ -1,18 +1,8 @@
 import pino from "pino";
 
+// Always plain JSON; pipe through `npx pino-pretty` for pretty dev logs.
 const baseLogger = pino({
   level: process.env.LOG_LEVEL ?? "info",
-  transport:
-    process.stderr.isTTY && process.env.LOG_PRETTY !== "0"
-      ? {
-          target: "pino-pretty",
-          options: {
-            colorize: true,
-            translateTime: "HH:MM:ss.l",
-            destination: 2,
-          },
-        }
-      : undefined,
 });
 
 export type Logger = pino.Logger;

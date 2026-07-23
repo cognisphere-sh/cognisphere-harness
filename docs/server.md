@@ -125,7 +125,13 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 ```
 <app-home>/
 ├── package.json  pnpm-workspace.yaml  .npmrc  .gitignore
+├── CLAUDE.md  AGENT.md           ← engineering guidelines for coding agents
+│                                    (identical copies; from home-template)
 ├── config.example                ← deploy params (cp to `config`)
+├── docs/                         ← project docs: base-harness/ (shipped user
+│                                    reference + CHANGELOG copy, read-only in
+│                                    the home), harness/ + app/ (deployment-
+│                                    owned, kept current by the dev agent)
 ├── scripts/                      ← lifecycle (setup-server, server, build)
 │   └── aws/                         + per-platform provisioning & backup
 │                                    (setup.sh, backup.sh, config.example)
@@ -133,6 +139,9 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 ├── .agents/skills/                   in by `cognisphere init` from the package
 ├── app/                          ← the user-facing app (placeholder until built)
 └── harness/                      ← the harness data dir documented below
+                                     (init pre-creates the telegram-only
+                                     developer agent — `--dev-agent <name>`,
+                                     default `dory`)
 ```
 
 ```
@@ -156,6 +165,8 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         ├── system_prompts/       ← concatenated (lex order) into the main agent's prompt
         │   ├── 0-base_prompt.md  ← shared base context (all agents); also appended to sub-agents
         │   ├── 0.1-main-agent.md ← main-agent-only role (threads, plugins, comms, how to spawn sub-agents); vars baked at create
+        │   ├── 0.2-dev-agent.md  ← developer-agent hand-off fragment; skipped at
+        │   │                       assembly when agent.json devAgentAccess=false
         │   ├── 1-agent.md        ← persona, hand-written
         │   └── plugin-<id>.md    ← plugin seeds (when installed)
         ├── scripts/agent/
@@ -236,11 +247,13 @@ batch and the scheduler plugin's cron timer. Edits land through
 place, and reloads every agent.
 
 Path helpers: `harnessRoot`, `harnessJsonFile`, `agentsRoot`, `agentDir`,
-`userPluginsRoot`. `.env` files in cwd are loaded via `dotenv`.
+`userPluginsRoot`. A `.env` file in cwd is loaded via Node's built-in
+`process.loadEnvFile()` (requires Node ≥20.12).
 
 ### 4.2 Logger — `logger.ts`
 
-`pino` with `pino-pretty` formatting in TTY mode. `rootLogger()` and
+`pino`, always plain JSON (pipe through `npx pino-pretty` for pretty dev
+logs). `rootLogger()` and
 `childLogger(scope)`. Every component logs with structured fields
 (`scope`, `agentId`, `threadId`, …); `level: 50` lines are errors worth
 paging on.
@@ -537,8 +550,8 @@ Load-bearing methods:
   `markBatchFailed`. Crash-mid-batch counts as one attempt. Because
   `pi_entry_id` is persisted live, a swept row that was already delivered
   still retries as continue.
-- `requeueFailed(id) → id | null`, `removeFailed(id)` — operator-facing
-  controls on failed rows. Requeue preserves the row id but **clears
+- `requeueFailed(id) → id | null` — operator-facing revive of a failed
+  row. Requeue preserves the row id but **clears
   `pi_entry_id` and sets `attempts = 1`**, so a revived dead-letter row
   re-dispatches as a **warned resend** (full original text + `Retry: true`),
   not a continue nudge: the automatic continue-retries already failed
@@ -874,16 +887,22 @@ swaps in a fresh runner constructed with the new env snapshot.
 
 #### 4.8.4 System prompt assembly per spawn
 
-`assembleSystemPrompt(agentDir, threadId)`:
+`assembleSystemPrompt(agentDir, threadId, includeDevAgent)`:
 
 1. `readdirSync(<agentDir>/system_prompts).filter(d.endsWith(".md")).sort()`.
+   When `agentJson.devAgentAccess === false`, the base template's
+   `0.2-dev-agent.md` (the developer-agent hand-off fragment) is filtered
+   out, so the agent never learns about the developer agent.
 2. `readFileSync` each, trim trailing whitespace.
 3. Join with `\n\n-----\n\n-----\n\n`.
 4. Append `\n\n-----\n\n-----\n\nThreadId: <id>\nThreadSessions: sessions/<id>/\n`.
 
 Agent-fixed `{{vars}}` (`AgentId`, `AgentName`, `AgentDir`, `Tools`,
 `Timezone`) are baked at agent-create time via `sed` (see
-`v0-deferred.md` §3.1). The only `{{var}}` left literal in the body is
+`v0-deferred.md` §3.1); the CLI's `scaffoldAgent` additionally bakes
+`{{DevAgentId}}`/`{{DevAgentName}}` into `0.2-dev-agent.md` (and
+`1-dev-agent.md` on a `--dev` fork) from the harness's dev agent's id.
+The only `{{var}}` left literal in the body is
 `{{ThreadId}}`; the appended `ThreadId: <id>` block resolves it for the
 model.
 
@@ -985,8 +1004,28 @@ populated, no runner constructed.
        pluginId: pid,
        metadata: { ...payload.metadata, _notification: name },
      }),
+     resetThread: (channelId) => { /* wipe the thread's context */ },
+     allowsMessageFrom: (fromAgentId) => { /* dev-agent access rule */ },
    }
    ```
+
+   `resetThread(channelId)` maps the plugin-side channel to a thread id via
+   `runner.threadIdFor` (the same `threadIdStrategy` mapping `notify` uses),
+   then delegates to `AgentManager.deleteThread` — the shared teardown also
+   behind the HTTP `DELETE /:id/sessions/:threadId` route — which refuses if
+   a batch is in-flight on the thread, deletes the thread's queue rows +
+   `threads` binding (`db.deleteThread`), and removes its
+   `sessions/<threadId>/` dir, so the next message starts a fresh pi
+   session. The telegram plugin uses this to implement the user-facing
+   `/reset` command (intercepted in the plugin; never delivered to the
+   agent).
+
+   `allowsMessageFrom(fromAgentId)` answers whether this agent's inbox
+   accepts agent-messages from `fromAgentId`, from the manager's in-memory
+   registry (plugins don't read other agents' `agent.json` off disk). The
+   only rule today: a `devAgentAccess: false` sender may not message a
+   `devAgent: true` agent. The agent-messaging plugin enforces it with a
+   403 on its `/api/send` inbox.
 6. `await pluginInstance.start(ctx)`. On success, store a running
    `PluginEntry`. On thrown error, the caller in `startAgent` /
    `reloadPlugin` records a failed entry.
@@ -1031,7 +1070,12 @@ The shared type surface every component imports from. Notable shapes:
 
 - `AgentJson` — what `agent.json` deserializes to. `model: { provider,
   id, thinkingLevel? }`, `threadIdStrategy`, `maxConcurrentSlots?`,
-  `maxAttempts?`, `runtime? = "subprocess"`, optional `secretsSchema`
+  `maxAttempts?`, `devAgent?` (this agent IS the
+  developer agent — written by `agent new --dev`; the agent-messaging
+  plugin enforces senders' access against it), `devAgentAccess?`
+  (default true; false ⇒ the `0.2-dev-agent.md` prompt fragment is
+  omitted at assembly and the developer agent's agent-messaging inbox
+  rejects this agent's messages), optional `secretsSchema`
   for agent-level secrets, optional `configSchema` declaring the shape
   of `config` (validated with ajv `useDefaults` at start; per-property
   `type` should be `"string"` since env values are strings), and
@@ -1506,8 +1550,8 @@ bash   ~/.cognisphere/default/agents/$ID/bootstrap/bootstrap.sh
 
 ### 7.5 Logs and observability
 
-- **Process logs**: structured JSON via pino on stdout. Use
-  `pino-pretty` (auto-applied in TTY mode) or pipe to `jq`. Key
+- **Process logs**: structured JSON via pino on stdout. Pipe through
+  `npx pino-pretty` or `jq`. Key
   scopes: `agent-manager`, `agent:<id>` (the runner), `plugin:<id>:<pid>`,
   `plugin-registry`, `webhook`.
 - **Per-agent event lifecycle**: `<agent>/sessions/.events.db` table

@@ -4,16 +4,21 @@
  * (`app/`), and the AWS deploy scripts (`scripts/`). The harness code is
  * installed from the registry, not copied.
  */
-import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join, relative, resolve } from "node:path";
+import { join, relative } from "node:path";
+import { scaffoldAgent } from "./agent.js";
 import {
+  DEFAULT_DEV_AGENT,
+  HOME_SKILL_IDS,
   PKG_ROOT,
+  changelogPath,
   copyDir,
   fail,
   info,
   packageVersion,
   run,
+  shippedSkillsRoot,
   writeJson,
 } from "./util.js";
 
@@ -57,7 +62,7 @@ minimumReleaseAgeExclude:
 `;
 
 export function cmdInit(argv: string[]): void {
-  const { id, timezone, root } = parseArgs(argv);
+  const { id, timezone, root, devAgent } = parseArgs(argv);
   const dir = join(root, id);
 
   if (existsSync(dir) && readdirSync(dir).length > 0) {
@@ -111,6 +116,21 @@ export function cmdInit(argv: string[]): void {
 
   copySkills(dir);
 
+  // AGENT.md mirrors CLAUDE.md (shipped in home-template) so non-Claude
+  // coding agents get the same brief.
+  cpSync(join(dir, "CLAUDE.md"), join(dir, "AGENT.md"));
+
+  // The harness changelog, for the developer agent's reference. The upgrade
+  // skill refreshes this copy after each version bump.
+  const changelog = changelogPath();
+  if (changelog) {
+    cpSync(changelog, join(dir, "docs", "base-harness", "CHANGELOG.md"));
+  }
+
+  // The developer agent shipped with every home (telegram-only; owns the
+  // home's code). Needs a telegram bot token + model provider to start.
+  scaffoldAgent(harnessDir, devAgent, { dev: true });
+
   // The app home is a git repo so upgrades are reviewable diffs (§9).
   run("git", ["init", "--quiet", dir]);
 
@@ -119,7 +139,10 @@ export function cmdInit(argv: string[]): void {
 
   info(`Created app home "${id}" at ${dir}`);
   info("  harness/  the cognisphere harness (agents, plugins, secrets)");
+  info(`            agents/${devAgent} — the developer agent (telegram-only; set`);
+  info("            its bot token + model provider to bring it up)");
   info("  app/      your user-facing app (see app/README.md)");
+  info("  docs/     project docs (base-harness reference + harness/app docs)");
   info("  scripts/  AWS deploy + lifecycle scripts (see config.example)");
   info("");
   info("Next steps:");
@@ -141,12 +164,9 @@ export function cmdInit(argv: string[]): void {
  * from a checkout (same pattern as the upgrade command's CHANGELOG).
  */
 function copySkills(dir: string): void {
-  const shipped = join(PKG_ROOT, "skills");
-  const source = existsSync(shipped)
-    ? shipped
-    : resolve(PKG_ROOT, "..", "..", ".claude", "skills");
-  if (!existsSync(source)) return;
-  for (const id of ["cognisphere-upgrade", "create-plugin"]) {
+  const source = shippedSkillsRoot();
+  if (!source) return;
+  for (const id of HOME_SKILL_IDS) {
     const src = join(source, id);
     if (!existsSync(src)) continue;
     for (const target of [".claude", ".agents"]) {
@@ -159,9 +179,11 @@ function parseArgs(argv: string[]): {
   id: string;
   timezone: string;
   root: string;
+  devAgent: string;
 } {
   let id: string | undefined;
   let timezone = "UTC";
+  let devAgent = DEFAULT_DEV_AGENT;
   // Default to the current directory — the app home lands at ./<name>.
   // `--root` overrides.
   let root = process.cwd();
@@ -171,15 +193,20 @@ function parseArgs(argv: string[]): {
       timezone = argv[++i] ?? fail("--timezone needs a value");
     } else if (a === "--root") {
       root = argv[++i] ?? fail("--root needs a value");
+    } else if (a === "--dev-agent") {
+      devAgent = argv[++i] ?? fail("--dev-agent needs a value");
     } else if (a && !a.startsWith("-")) {
       id = a;
     } else {
       fail(`unknown option: ${a}`);
     }
   }
-  if (!id) fail("usage: cognisphere init <name> [--timezone <IANA>] [--root <dir>]");
+  if (!id) fail("usage: cognisphere init <name> [--timezone <IANA>] [--root <dir>] [--dev-agent <name>]");
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(id)) {
     fail(`invalid app name "${id}" — use letters, digits, ._- (no slashes)`);
   }
-  return { id, timezone, root };
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(devAgent)) {
+    fail(`invalid dev-agent name "${devAgent}" — use letters, digits, ._- (no slashes)`);
+  }
+  return { id, timezone, root, devAgent };
 }

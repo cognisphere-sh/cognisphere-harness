@@ -1,9 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { config as loadEnv } from "dotenv";
 
-loadEnv({ quiet: true });
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env in cwd
+}
 
 export interface ServerConfig {
   rootDir: string;

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import {
   ChevronDown,
   Edit3,
@@ -69,22 +68,18 @@ export function ToolCallCard({ agentId, call, result }: Props) {
           ) : (
             <Badge variant="outline">running</Badge>
           )}
-          <motion.div
-            animate={{ rotate: open ? 180 : 0 }}
-            transition={{ duration: 0.18 }}
-            className="text-muted-foreground"
+          <div
+            className={cn(
+              "text-muted-foreground transition-transform duration-200",
+              open && "rotate-180",
+            )}
           >
             <ChevronDown className="size-4" />
-          </motion.div>
+          </div>
         </div>
       </button>
       {open && (
-        <motion.div
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.15 }}
-          className="space-y-3 border-t px-3 py-3"
-        >
+        <div className="space-y-3 border-t px-3 py-3 animate-in fade-in slide-in-from-top-1 duration-150">
           <div>
             <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Input
@@ -99,7 +94,7 @@ export function ToolCallCard({ agentId, call, result }: Props) {
               <ResultBody agentId={agentId} content={result.content} isError={isError} />
             </div>
           )}
-        </motion.div>
+        </div>
       )}
     </div>
   );

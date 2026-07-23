@@ -12,7 +12,7 @@ import type {
   NotifyPayload,
   ThreadIdStrategy,
 } from "./types.js";
-import { AGENT_TOOLS } from "./types.js";
+import { AGENT_TOOLS, DEV_AGENT_PROMPT_FILE } from "./types.js";
 import type { Logger } from "./logger.js";
 
 const RESERVED_META = new Set([
@@ -369,6 +369,13 @@ export class AgentRunner extends EventEmitter {
    *  the runner writing to the session jsonl. */
   isThreadActive(threadId: string): boolean {
     return this.active.has(threadId);
+  }
+
+  /** The thread id a message from this plugin/channel would route to, per the
+   *  agent's `threadIdStrategy`. Used by plugin-facing ops (e.g. thread reset)
+   *  that address a thread by its plugin-side channel. */
+  threadIdFor(pluginId: string, channelId: string): string {
+    return this.computeThreadId({ pluginId, channelId, text: "" });
   }
 
   // ── internals ─────────────────────────────────────────────
@@ -745,7 +752,11 @@ export class AgentRunner extends EventEmitter {
       this.opts.agentId,
     );
     const tools = AGENT_TOOLS.join(",");
-    const systemPrompt = assembleSystemPrompt(agentDir, threadId);
+    const systemPrompt = assembleSystemPrompt(
+      agentDir,
+      threadId,
+      this.opts.agentJson.devAgentAccess !== false,
+    );
     // We pass `--session <path>` (harness-owned filename = sessionId) so
     // the harness controls the canonical session per thread. Pi tolerates
     // a not-yet-existing file (`loadEntriesFromFile` returns []), creates
@@ -913,11 +924,16 @@ export class AgentRunner extends EventEmitter {
  * are referenced as literal `{{...}}` in the body and resolved by the
  * appended block — the model maps them.
  */
-function assembleSystemPrompt(agentDir: string, threadId: string): string {
+function assembleSystemPrompt(
+  agentDir: string,
+  threadId: string,
+  includeDevAgent: boolean,
+): string {
   const promptsDir = join(agentDir, "system_prompts");
   const files = readdirSync(promptsDir, { withFileTypes: true })
     .filter((d) => d.isFile() && d.name.endsWith(".md"))
     .map((d) => d.name)
+    .filter((n) => includeDevAgent || n !== DEV_AGENT_PROMPT_FILE)
     .sort();
   const parts = files.map((f) =>
     readFileSync(join(promptsDir, f), "utf8").replace(/\s+$/, ""),

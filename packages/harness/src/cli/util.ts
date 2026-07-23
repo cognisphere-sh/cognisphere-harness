@@ -37,12 +37,32 @@ export const BUILTIN_PLUGINS_DIR = join(SRC_ROOT, "plugins");
 /** The single base template every agent forks from. */
 export const BASE_AGENT_DIR = join(SRC_ROOT, "base-agent");
 
+/** Overlay applied on top of the base template for the developer agent
+ *  (`agent new --dev`; `init` creates `dory` from it). */
+export const DEV_AGENT_DIR = join(SRC_ROOT, "dev-agent");
+
 /** The server process entrypoint. */
 export const MAIN_TS = join(SRC_ROOT, "core", "main.ts");
 
 /** Core plugins are bundled and resolved from the package; forking them is a
  *  footgun, so `plugin add` refuses these ids. */
 export const CORE_PLUGINS = new Set<string>(CORE_PLUGIN_IDS);
+
+/** The home-facing cognisphere skills shipped with the package. */
+export const HOME_SKILL_IDS = ["cognisphere-upgrade", "create-plugin"];
+
+/** Default id of the developer agent `init` creates (`--dev-agent` overrides). */
+export const DEFAULT_DEV_AGENT = "dory";
+
+/** Root of the shipped skills — the package's bundled `skills/` (prepack),
+ *  with a monorepo fallback for in-repo dev runs (same pattern as the
+ *  upgrade command's CHANGELOG). Null when neither exists. */
+export function shippedSkillsRoot(): string | null {
+  const shipped = join(PKG_ROOT, "skills");
+  if (existsSync(shipped)) return shipped;
+  const repo = resolve(PKG_ROOT, "..", "..", ".claude", "skills");
+  return existsSync(repo) ? repo : null;
+}
 
 /** Version of the installed harness package (source of truth for `init`). */
 export function packageVersion(): string {

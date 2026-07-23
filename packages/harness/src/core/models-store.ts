@@ -22,8 +22,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ModelOverride, ModelsConfig, ProviderConfig } from "./types.js";
 
-const PLACEHOLDER: ModelsConfig = { providers: {} };
-
 export class ModelsStore {
   constructor(private readonly filePath: string) {}
 
@@ -48,12 +46,6 @@ export class ModelsStore {
       JSON.stringify(normalize(cfg), null, 2) + "\n",
       { mode: 0o600 },
     );
-  }
-
-  /** Initialize empty file with 0600 perms if missing. */
-  ensureExists(): void {
-    if (existsSync(this.filePath)) return;
-    this.save(PLACEHOLDER);
   }
 
   getProvider(providerId: string): ProviderConfig | undefined {

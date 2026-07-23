@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
@@ -205,6 +205,33 @@ export class AgentManager {
       }
       return this.startAgent(inst);
     });
+  }
+
+  /**
+   * Tear down one thread: refuse while a batch is in-flight (it would race
+   * the runner writing the session jsonl), delete the thread's queue rows +
+   * session binding, remove its `sessions/<threadId>/` dir. Shared by the
+   * HTTP DELETE route and the plugin-context `resetThread`.
+   */
+  deleteThread(
+    id: string,
+    threadId: string,
+  ): { events: number; removedDir: boolean } {
+    const inst = this.requireAgent(id);
+    if (inst.runner?.isThreadActive(threadId)) {
+      throw new LifecycleError(
+        "thread is currently in-flight — abort it first",
+        "conflict",
+      );
+    }
+    const events = inst.db?.deleteThread(threadId).events ?? 0;
+    const tDir = join(agentDir(this.cfg, id), "sessions", threadId);
+    let removedDir = false;
+    if (existsSync(tDir)) {
+      rmSync(tDir, { recursive: true, force: true });
+      removedDir = true;
+    }
+    return { events, removedDir };
   }
 
   /**
@@ -646,6 +673,21 @@ export class AgentManager {
           log.error({ err }, "notify failed");
         }
       },
+      resetThread: (channelId) => {
+        const runner = inst.runner;
+        if (!runner) throw new Error("agent not running");
+        const threadId = runner.threadIdFor(pluginId, channelId);
+        this.deleteThread(inst.id, threadId);
+        log.info({ threadId }, "thread reset by plugin");
+      },
+      allowsMessageFrom: (fromAgentId) => {
+        // Only rule today: a devAgentAccess:false agent may not message the
+        // developer agent. Answered from the in-memory registry — plugins
+        // shouldn't know where agent.json lives.
+        if (inst.agentJson?.devAgent !== true) return true;
+        const sender = this.agents.get(fromAgentId);
+        return sender?.agentJson?.devAgentAccess !== false;
+      },
     };
 
     await pluginInstance.start(ctx);
@@ -871,6 +913,26 @@ function partitionPluginsByState(plugins: Map<string, PluginEntry>): {
 }
 
 /**
+ * Compile `schema` and validate `data` against it, backfilling declared
+ * defaults in place via ajv's `useDefaults`. Throws `<label>: <messages>`
+ * on validation failure.
+ */
+function validateWithSchema(
+  schema: JsonSchema,
+  data: Record<string, unknown>,
+  label: string,
+): void {
+  const validate = ajv.compile(schema);
+  if (!validate(data)) {
+    const msgs =
+      validate.errors
+        ?.map((e: ErrorObject) => `${e.instancePath || "/"} ${e.message ?? ""}`.trim())
+        .join("; ") ?? "unknown";
+    throw new Error(`${label}: ${msgs}`);
+  }
+}
+
+/**
  * Validate (and default-fill) a plugin config against its manifest's
  * configSchema. Returns the (possibly mutated) config; throws on validation
  * failure. The input object is mutated in place by ajv's `useDefaults`.
@@ -881,17 +943,11 @@ function validateAndDefault(
   ctx: { agentId: string; pluginId: string },
 ): unknown {
   const data = (config ?? {}) as Record<string, unknown>;
-  const validate = ajv.compile(schema);
-  const ok = validate(data);
-  if (!ok) {
-    const msgs =
-      validate.errors
-        ?.map((e: ErrorObject) => `${e.instancePath || "/"} ${e.message ?? ""}`.trim())
-        .join("; ") ?? "unknown";
-    throw new Error(
-      `config invalid for ${ctx.pluginId} on ${ctx.agentId}: ${msgs}`,
-    );
-  }
+  validateWithSchema(
+    schema,
+    data,
+    `config invalid for ${ctx.pluginId} on ${ctx.agentId}`,
+  );
   return data;
 }
 
@@ -938,17 +994,11 @@ function resolveAgentConfigEnv(
     );
   }
   const data = (agentJson.config ?? {}) as Record<string, unknown>;
-  const validate = ajv.compile(agentJson.configSchema!);
-  const ok = validate(data);
-  if (!ok) {
-    const msgs =
-      validate.errors
-        ?.map((e: ErrorObject) => `${e.instancePath || "/"} ${e.message ?? ""}`.trim())
-        .join("; ") ?? "unknown";
-    throw new Error(
-      `agent ${agentId}: agent.json config invalid: ${msgs}`,
-    );
-  }
+  validateWithSchema(
+    agentJson.configSchema!,
+    data,
+    `agent ${agentId}: agent.json config invalid`,
+  );
   // ajv mutated `data` in place via useDefaults; write the populated
   // values back so the UI sees the same defaulted shape the runtime did.
   agentJson.config = data as Record<string, string>;

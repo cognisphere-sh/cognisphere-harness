@@ -10,7 +10,6 @@ import {
   MoreHorizontal,
   Trash2,
 } from "lucide-react";
-import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { endpoints, type FsEntry } from "@/lib/api";
 import { cn, formatBytes } from "@/lib/utils";
@@ -141,13 +140,14 @@ function DirNode({
             "hover:bg-accent",
           )}
         >
-          <motion.span
-            animate={{ rotate: open ? 90 : 0 }}
-            transition={{ duration: 0.15 }}
-            className="inline-flex"
+          <span
+            className={cn(
+              "inline-flex transition-transform duration-150",
+              open && "rotate-90",
+            )}
           >
             <ChevronRight className="size-3.5 text-muted-foreground" />
-          </motion.span>
+          </span>
           {open ? (
             <FolderOpen className="size-4 text-primary/80" />
           ) : (
