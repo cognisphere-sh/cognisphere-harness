@@ -165,8 +165,9 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         ├── system_prompts/       ← concatenated (lex order) into the main agent's prompt
         │   ├── 0-base_prompt.md  ← shared base context (all agents); also appended to sub-agents
         │   ├── 0.1-main-agent.md ← main-agent-only role (threads, plugins, comms, how to spawn sub-agents); vars baked at create
-        │   ├── 0.2-dev-agent.md  ← developer-agent hand-off fragment; skipped at
-        │   │                       assembly when agent.json devAgentAccess=false
+        │   ├── 0.2-dev-agent.md  ← developer-agent hand-off fragment (all agents)
+        │   ├── 0.3-agent-directory.md ← roster of the OTHER agents (id + description);
+        │   │                       written by the manager if absent, edits survive
         │   ├── 1-agent.md        ← persona, hand-written
         │   └── plugin-<id>.md    ← plugin seeds (when installed)
         ├── scripts/agent/
@@ -887,12 +888,13 @@ swaps in a fresh runner constructed with the new env snapshot.
 
 #### 4.8.4 System prompt assembly per spawn
 
-`assembleSystemPrompt(agentDir, threadId, includeDevAgent)`:
+`assembleSystemPrompt(agentDir, threadId)`:
 
 1. `readdirSync(<agentDir>/system_prompts).filter(d.endsWith(".md")).sort()`.
-   When `agentJson.devAgentAccess === false`, the base template's
-   `0.2-dev-agent.md` (the developer-agent hand-off fragment) is filtered
-   out, so the agent never learns about the developer agent.
+   Every `.md` is included — all agents get `0.2-dev-agent.md` (the
+   developer-agent hand-off fragment) and, when present, the
+   `0.3-agent-directory.md` roster (§4.9: `writeAgentDirectory` seeds it
+   if absent, listing the other agents' ids + descriptions).
 2. `readFileSync` each, trim trailing whitespace.
 3. Join with `\n\n-----\n\n-----\n\n`.
 4. Append `\n\n-----\n\n-----\n\nThreadId: <id>\nThreadSessions: sessions/<id>/\n`.
@@ -1005,7 +1007,6 @@ populated, no runner constructed.
        metadata: { ...payload.metadata, _notification: name },
      }),
      resetThread: (channelId) => { /* wipe the thread's context */ },
-     allowsMessageFrom: (fromAgentId) => { /* dev-agent access rule */ },
    }
    ```
 
@@ -1020,12 +1021,12 @@ populated, no runner constructed.
    `/reset` command (intercepted in the plugin; never delivered to the
    agent).
 
-   `allowsMessageFrom(fromAgentId)` answers whether this agent's inbox
-   accepts agent-messages from `fromAgentId`, from the manager's in-memory
-   registry (plugins don't read other agents' `agent.json` off disk). The
-   only rule today: a `devAgentAccess: false` sender may not message a
-   `devAgent: true` agent. The agent-messaging plugin enforces it with a
-   403 on its `/api/send` inbox.
+   Agent-to-agent access is **not** a ctx method: the `agent-messaging`
+   plugin authorises senders from its own instance config
+   (`allowMessageFrom`, default `["*"]`) plus the shared `X-Webhook-Secret`
+   insider check on its `/api/send` inbox (see `api.md` §10). No cross-agent
+   registry lookup is needed — the receiver's config is local to its own
+   plugin instance.
 6. `await pluginInstance.start(ctx)`. On success, store a running
    `PluginEntry`. On thrown error, the caller in `startAgent` /
    `reloadPlugin` records a failed entry.
@@ -1070,12 +1071,11 @@ The shared type surface every component imports from. Notable shapes:
 
 - `AgentJson` — what `agent.json` deserializes to. `model: { provider,
   id, thinkingLevel? }`, `threadIdStrategy`, `maxConcurrentSlots?`,
-  `maxAttempts?`, `devAgent?` (this agent IS the
-  developer agent — written by `agent new --dev`; the agent-messaging
-  plugin enforces senders' access against it), `devAgentAccess?`
-  (default true; false ⇒ the `0.2-dev-agent.md` prompt fragment is
-  omitted at assembly and the developer agent's agent-messaging inbox
-  rejects this agent's messages), optional `secretsSchema`
+  `maxAttempts?`, `description?` (one-line role blurb; seeds the
+  `0.3-agent-directory.md` roster other agents see), `devAgent?` (this
+  agent IS the developer agent — written by `agent new --dev`; used by
+  the CLI to bake the dev agent's name into forks' prompt fragments),
+  optional `secretsSchema`
   for agent-level secrets, optional `configSchema` declaring the shape
   of `config` (validated with ajv `useDefaults` at start; per-property
   `type` should be `"string"` since env values are strings), and

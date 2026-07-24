@@ -18,6 +18,43 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0]
+
+### Added
+
+- **Agent directory**: each agent now carries an `agent.json.description`
+  (one-line role blurb). On start the harness seeds
+  `system_prompts/0.3-agent-directory.md` — a roster of the *other* agents
+  (id + description, how to message them) — if the file is absent, so operator
+  edits survive. Single-agent harnesses skip it until a second agent exists.
+- **`PI_THREAD_ID`** is exported to the pi child's env (alongside
+  `PI_AGENT_ID`), so seeded scripts know the current thread without being told.
+
+### Changed
+
+- **agent-messaging identity is env-sourced, not caller-supplied.** The seeded
+  `agent-msg/send` CLI now fills `from_agent`/`from_thread_id` from
+  `$PI_AGENT_ID`/`$PI_THREAD_ID` — the `--from-agent`/`--from-thread-id` flags
+  are gone. Agents can no longer typo or spoof their own reply address.
+- **agent-messaging inbox now authenticates.** `POST /webhook/<agent>/agent-messaging/api/send`
+  requires the shared `COGNISPHERE_WEBHOOK_SECRET` (generated at boot unless
+  pinned via env; inherited by every agent's env) as an `X-Webhook-Secret`
+  header (`401` otherwise). Sender authorisation moved to a per-inbox
+  `allowMessageFrom` plugin config (default `["*"]`; a sender not listed gets
+  `403`), replacing the `PluginInstanceContext.allowsMessageFrom` method.
+
+### Breaking changes
+
+- `agent.json.devAgentAccess` removed. It is now ignored; the `0.2-dev-agent.md`
+  hand-off fragment is included for **every** agent, and messaging permission
+  to the developer agent is governed solely by the dev agent's
+  `allowMessageFrom`. Agents previously set to `devAgentAccess: false` will now
+  see the dev-agent fragment and (unless restricted via `allowMessageFrom`) be
+  able to message the developer agent. Remove the dead field; to restrict the
+  dev inbox, set `allowMessageFrom` on its `agent-messaging` config.   [affects: agents/*/agent.json, agents/*/plugins/agent-messaging/config.json]
+- Add a `description` to each `agent.json` so the agent-directory roster reads
+  well (optional but recommended; absent ⇒ the agent is listed id-only).   [affects: agents/*/agent.json]
+
 ## [0.4.4]
 
 ### Added

@@ -369,6 +369,8 @@ export class AgentManager {
 
   private async startAgent(inst: AgentInstance): Promise<AgentInstance> {
     const dir = agentDir(this.cfg, inst.id);
+    // Seed this agent's roster fragment (write-if-absent — operator edits win).
+    writeAgentDirectory(agentsRoot(this.cfg), inst.id, dir);
     // Core plugins (admin, scheduler) are auto-installed on every agent —
     // always started regardless of the agent's plugins dir, then unioned with
     // any user-installed plugins found on disk.
@@ -680,14 +682,6 @@ export class AgentManager {
         this.deleteThread(inst.id, threadId);
         log.info({ threadId }, "thread reset by plugin");
       },
-      allowsMessageFrom: (fromAgentId) => {
-        // Only rule today: a devAgentAccess:false agent may not message the
-        // developer agent. Answered from the in-memory registry — plugins
-        // shouldn't know where agent.json lives.
-        if (inst.agentJson?.devAgent !== true) return true;
-        const sender = this.agents.get(fromAgentId);
-        return sender?.agentJson?.devAgentAccess !== false;
-      },
     };
 
     await pluginInstance.start(ctx);
@@ -949,6 +943,63 @@ function validateAndDefault(
     `config invalid for ${ctx.pluginId} on ${ctx.agentId}`,
   );
   return data;
+}
+
+/**
+ * Seed `<selfDir>/system_prompts/0.3-agent-directory.md` — the roster fragment
+ * that tells this agent who else is in the harness and how to message them.
+ * Built from every agent.json on disk (so it's complete regardless of load
+ * order) and written only when absent, so operator edits survive restarts.
+ *
+ * ponytail: write-if-absent, not regenerated. Adding/renaming an agent leaves
+ *   existing rosters stale until their file is deleted (or hand-edited); the
+ *   new agent still gets a complete one. Fine while agents are added rarely —
+ *   `rm system_prompts/0.3-agent-directory.md` regenerates on next start.
+ */
+function writeAgentDirectory(
+  agentsDir: string,
+  selfId: string,
+  selfDir: string,
+): void {
+  const others = existsSync(agentsDir)
+    ? readdirSync(agentsDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && e.name !== selfId)
+        .map((e) => {
+          try {
+            const spec = JSON.parse(
+              readFileSync(join(agentsDir, e.name, "agent.json"), "utf8"),
+            ) as AgentJson;
+            return { id: e.name, description: spec.description, dev: spec.devAgent };
+          } catch {
+            return null; // unreadable/missing agent.json — skip
+          }
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null)
+        .sort((a, b) => a.id.localeCompare(b.id))
+    : [];
+  // Nothing to say in a single-agent harness — skip so the file appears (with
+  // a full roster) only once a second agent exists.
+  if (others.length === 0) return;
+
+  const dest = join(selfDir, "system_prompts", "0.3-agent-directory.md");
+  if (existsSync(dest)) return;
+
+  const lines = others.map((a) => {
+    const tag = a.dev ? " (developer agent)" : "";
+    const desc = a.description?.trim() ? ` — ${a.description.trim()}` : "";
+    return `- **${a.id}**${tag}${desc}`;
+  });
+  const body = `# Other agents in this harness
+
+The other agents running in this deployment. To hand work to one or reply to
+it, use the agent-messaging plugin (if installed on you):
+\`scripts/agent-msg/send --to-agent <id> --thread-id <theirThread> --message "…"\`.
+
+${lines.join("\n")}
+
+(The harness creates this file only when missing — edit it freely to customise.)
+`;
+  writeFileSync(dest, body);
 }
 
 /**

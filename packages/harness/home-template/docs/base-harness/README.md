@@ -57,10 +57,10 @@ plugin config, secrets, and model providers. Login users live in
 
 `harness/agents/<id>/`:
 
-- `agent.json` — `name`, `model: {provider, id, thinkingLevel?}`,
+- `agent.json` — `name`, `description?` (one-line role blurb shown to other
+  agents in the harness roster), `model: {provider, id, thinkingLevel?}`,
   `threadIdStrategy` (`single` | `plugin` | `plugin_channel`),
-  `maxConcurrentSlots?`, `devAgent?` (marks the developer agent),
-  `devAgentAccess?` (default true — see below), optional
+  `maxConcurrentSlots?`, `devAgent?` (marks the developer agent), optional
   `secretsSchema`/`configSchema`/`config`.
 - `system_prompts/*.md` — concatenated in lexical order into the system
   prompt. `0-*` files come from the base template; write the persona in
@@ -120,10 +120,10 @@ drive harness upgrades and author plugins directly. To bring it up: set its
 telegram bot token and a model provider. Other agents are instructed to pass code-change
 requests to it rather than modify the platform themselves.
 
-Per-agent opt-out: set `"devAgentAccess": false` in an agent's `agent.json`
-to (a) drop the developer-agent section from that agent's system prompt (it
-won't know the developer agent exists) and (b) have its agent-messaging inbox reject
-that agent's messages. Default is true.
+Who may message the developer agent (or any agent) is set per-inbox, not
+per-sender: each agent's `agent-messaging` config has `allowMessageFrom`
+(default `["*"]` — every in-harness agent). Restrict it to a list of sender
+ids to cut everyone else off; a rejected sender gets a `not allowed` error.
 
 ## Upgrading
 

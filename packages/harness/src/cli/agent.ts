@@ -73,6 +73,9 @@ export function scaffoldAgent(
   // "failed" until its model provider is configured (secrets + models.json).
   writeJson(join(target, "agent.json"), {
     name,
+    description: opts.dev
+      ? "Developer agent: owns and modifies this deployment's platform code (agent prompts/scripts, plugins, app, deploy). Reachable on Telegram."
+      : `TODO: one-line description of ${name}'s role (shown to other agents in the harness roster).`,
     model: { provider: "anthropic", id: "claude-sonnet-4-6" },
     threadIdStrategy: { type: "single" },
     ...(opts.dev ? { devAgent: true } : {}),

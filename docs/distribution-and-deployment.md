@@ -174,10 +174,11 @@ to its own package is a contained move.
   template's main-agent prompt tells every *other* agent to pass platform
   code-change requests to it. Telegram's `/reset` command wipes its
   conversation context (thread delete via the plugin-context `resetThread`).
-  The `--dev` scaffold stamps `devAgent: true` into the agent.json; every
-  other agent's `devAgentAccess` flag (default true) controls whether it
-  gets the hand-off prompt fragment (`0.2-dev-agent.md`) and may message the
-  developer agent over agent-messaging (set `false` to cut an agent off).
+  The `--dev` scaffold stamps `devAgent: true` into the agent.json. Every
+  agent gets the hand-off prompt fragment (`0.2-dev-agent.md`); who may
+  *message* the developer agent (or any agent) is governed by that agent's
+  `agent-messaging` `allowMessageFrom` config (default `["*"]` — all
+  in-harness senders), not a per-sender flag.
 
 ## 5. Plugins: core vs. catalog
 

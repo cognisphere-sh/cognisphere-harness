@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +46,17 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = rootLogger();
   log.info({ cfg }, "boot");
+
+  // Shared secret that authenticates in-harness callers of the agent-messaging
+  // webhook. Generated per boot unless the operator pins one; inherited by
+  // every pi child via `{...process.env}` (runner.spawnPi) so seeded scripts
+  // can send it, and read back by the plugin handler from `process.env`.
+  // ponytail: one shared insider secret, not per-agent tokens — the webhook is
+  //   loopback/single-tenant and co-resident agents already share the box.
+  //   Per-agent tokens are the global-isolation trigger, not this.
+  if (!process.env.COGNISPHERE_WEBHOOK_SECRET) {
+    process.env.COGNISPHERE_WEBHOOK_SECRET = randomUUID();
+  }
 
   const registry = new PluginRegistry(
     BUILTIN_PLUGINS_DIR,

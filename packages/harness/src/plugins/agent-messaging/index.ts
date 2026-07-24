@@ -29,13 +29,34 @@ import type {
  * ponytail: routing is just (target agent, target thread) — one event kind,
  *   one CLI, no separate message bus. To go live this contract is unchanged;
  *   only the transport (an internal queue vs. localhost HTTP) would move.
+ *
+ * Auth: the inbox requires the shared `COGNISPHERE_WEBHOOK_SECRET` (seeded at
+ * boot, injected into every agent's env) as `X-Webhook-Secret`, so only
+ * in-harness callers reach it. `allowMessageFrom` (this agent's config; default
+ * `["*"]`) then decides which sender ids the inbox accepts.
  */
+interface AgentMessagingConfig {
+  allowMessageFrom: string[];
+}
+
 export default class AgentMessagingPlugin implements Plugin {
   manifest: PluginManifest = {
     displayName: "Agent Messaging",
     description:
       "Inter-/intra-agent messaging. Receives agent-to-agent notes at /webhook/<agent>/agent-messaging/api/send and wakes the target agent on the target thread.",
-    configSchema: { type: "object", properties: {}, additionalProperties: false },
+    configSchema: {
+      type: "object",
+      properties: {
+        allowMessageFrom: {
+          type: "array",
+          items: { type: "string" },
+          default: ["*"],
+          description:
+            'Sender agent ids this inbox accepts. `["*"]` (default) allows all; otherwise a sender not listed is rejected with 403.',
+        },
+      },
+      additionalProperties: false,
+    },
     secretsSchema: { type: "object", properties: {}, additionalProperties: false },
   };
 
@@ -78,6 +99,14 @@ export default class AgentMessagingPlugin implements Plugin {
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/send") {
+        // Insider auth: only callers that carry the shared boot secret (i.e.
+        // in-harness agents, whose env has it) may reach any inbox. `from` is
+        // still self-reported — a co-resident agent knows the shared secret —
+        // so this authenticates "is an insider", not "is that agent".
+        const expected = process.env.COGNISPHERE_WEBHOOK_SECRET;
+        if (expected && req.headers["x-webhook-secret"] !== expected) {
+          return json(401, { error: "missing or invalid X-Webhook-Secret" });
+        }
         const b = await readBody();
         const thread = String(b.thread_id ?? b.thread ?? "").trim();
         const message = String(b.message ?? "").trim();
@@ -87,14 +116,11 @@ export default class AgentMessagingPlugin implements Plugin {
           return json(400, {
             error: "thread_id, message, from_agent and from_thread_id required",
           });
-        // Refuse devAgentAccess:false senders on the developer agent's
-        // inbox. Advisory, not a security boundary — `from` is self-reported
-        // and any bash-capable agent could POST here directly; the flag's
-        // main effect is that such agents also don't get the dev-agent
-        // prompt fragment.
-        if (!ctx.allowsMessageFrom(from)) {
+        // Per-agent access list (this inbox's own config). `["*"]` allows all.
+        const allow = (ctx.config as AgentMessagingConfig).allowMessageFrom;
+        if (!allow.includes("*") && !allow.includes(from)) {
           return json(403, {
-            error: `agent "${from}" is not allowed to message the developer agent (devAgentAccess: false)`,
+            error: `agent "${from}" is not allowed to message "${ctx.agentId}" (not in allowMessageFrom)`,
           });
         }
         const silent = b.silent === true;

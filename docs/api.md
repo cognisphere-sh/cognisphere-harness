@@ -51,7 +51,7 @@ three surfaces:
 | `/api/auth/*` | Public (login itself can't require auth) |
 | `/api/*` (other) | `requireAuth` middleware — 401 on bad cookie |
 | `/admin/*` | `requireAuth` middleware — 401 on bad cookie |
-| `/webhook/*` | None — external services (Telegram, Gmail push, …) hit this surface with their own signature schemes if at all |
+| `/webhook/*` | Per-plugin — external services (Telegram, Gmail push, …) hit this surface with their own signature schemes; the internal `agent-messaging` inbox requires the shared `X-Webhook-Secret` (see §10) |
 | Static SPA pages | None — the page shell is public; the SPA itself calls `/api/*` and gets 401 → redirected to `/login` |
 
 `requireAuth` reads the `pi_sid` cookie, validates the HMAC-signed
@@ -914,6 +914,18 @@ no Hono wrapping. This is intentional: existing plugin ecosystems
 to re-implement headers/streaming concerns. The plugin owns
 authentication (signature verification, secret-in-URL, allowed IPs,
 …) if the upstream service supplies one.
+
+**agent-messaging auth.** The `agent-messaging` inbox
+(`POST /webhook/<agent>/agent-messaging/api/send`) is internal-only and
+enforces its own two-layer check: (1) the caller must send the shared
+`COGNISPHERE_WEBHOOK_SECRET` as an `X-Webhook-Secret` header (seeded into
+`process.env` at boot, so every in-harness agent has it in env; missing/wrong
+⇒ `401`), and (2) the sender id (`from_agent`, filled by the seeded `send`
+script from `$PI_AGENT_ID`, not caller input) must be permitted by the
+receiving agent's `allowMessageFrom` config — default `["*"]`, otherwise a
+sender not on the list gets `403`. The secret authenticates "in-harness
+caller", not "which agent"; `from_agent` remains advisory (a co-resident
+agent shares the secret).
 
 Responses (the dispatcher's, before the plugin runs):
 

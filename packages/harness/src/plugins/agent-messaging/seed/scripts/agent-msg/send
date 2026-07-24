@@ -2,13 +2,15 @@
 # agent-msg/send — message another agent's thread (inter-agent) or one of your
 # own other threads (intra-agent). Seeded by the `agent-messaging` plugin.
 #
-#   send --to-agent <agent> --thread-id <threadId> --message "…" \
-#        --from-agent <self> --from-thread-id <yourThreadId> [--subject "…"] [--silent]
+#   send --to-agent <agent> --thread-id <threadId> --message "…" [--subject "…"] [--silent]
 #
 # The note lands on <agent>'s thread <threadId> and WAKES that agent there so it
-# acts on it. `--from-agent`/`--from-thread-id` identify YOUR agent id and the
-# thread you're sending from, so the receiver can reply straight back to you.
-# `--silent` logs it for awareness only (no action prompted).
+# acts on it. YOUR identity (from-agent / from-thread) is taken from the trusted
+# env the harness sets — $PI_AGENT_ID and $PI_THREAD_ID — so the receiver can
+# reply straight back to you; you don't pass them. `--silent` logs it for
+# awareness only (no action prompted).
+#
+# Auth: sends $COGNISPHERE_WEBHOOK_SECRET as X-Webhook-Secret (also from env).
 #
 # Routing cheatsheet:
 #   - Yourself, a different thread      → --to-agent <self> --thread-id <otherThread>
@@ -24,19 +26,19 @@ threads (intra-agent). Seeded by the `agent-messaging` plugin.
 
 USAGE
   scripts/agent-msg/send --to-agent <agent> --thread-id <threadId> \
-    --message "…" --from-agent <self> --from-thread-id <yourThreadId> \
-    [--subject "…"] [--silent]
+    --message "…" [--subject "…"] [--silent]
 
 FLAGS
   --to-agent <id>         receiving agent (your own id for intra-agent)
   --thread-id <id>        receiving thread on that agent
   --message <text>        the note text
-  --from-agent <id>       YOUR agent id, so the receiver can reply back
-  --from-thread-id <id>   the thread you're sending from
   --subject <text>        optional subject line
   --silent                deliver for awareness only (receiver not woken)
   --self-check            offline payload self-test, no network
   -h, --help              show this help
+
+Your own id and thread (so the receiver can reply) come from $PI_AGENT_ID and
+$PI_THREAD_ID — set by the harness, not passed as flags.
 
 ROUTING
   Yourself, a different thread   → --to-agent <self> --thread-id <otherThread>
@@ -47,7 +49,9 @@ EOF
 }
 
 base="${HARNESS_BASE_URL:-http://127.0.0.1:7331}"
-to="" thread="" message="" subject="" from="" from_thread="" silent=false selfcheck=false
+to="" thread="" message="" subject="" silent=false selfcheck=false
+# Identity is env-sourced, not flag-sourced (resolved below for the real send).
+from="" from_thread=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)   usage; exit 0 ;;
@@ -55,8 +59,6 @@ while [ $# -gt 0 ]; do
     --thread-id) thread="$2"; shift 2 ;;
     --message)   message="$2"; shift 2 ;;
     --subject)   subject="$2"; shift 2 ;;
-    --from-agent|--from) from="$2"; shift 2 ;;  # --from kept as legacy alias
-    --from-thread-id) from_thread="$2"; shift 2 ;;
     --silent)    silent=true; shift ;;
     --self-check) selfcheck=true; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -74,10 +76,15 @@ if $selfcheck; then
     && { echo "self-check OK"; exit 0; } || { echo "self-check FAILED" >&2; exit 1; }
 fi
 
-[ -n "$to" ] && [ -n "$thread" ] && [ -n "$message" ] && [ -n "$from" ] && [ -n "$from_thread" ] || {
-  echo "usage: send --to-agent A --thread-id T --message M --from-agent SELF --from-thread-id ST [--subject S] [--silent]" >&2; exit 2; }
+[ -n "$to" ] && [ -n "$thread" ] && [ -n "$message" ] || {
+  echo "usage: send --to-agent A --thread-id T --message M [--subject S] [--silent]" >&2; exit 2; }
 
-resp="$(curl -sS -X POST -H 'content-type: application/json' -w $'\n%{http_code}' \
+# Identity from the trusted env the harness sets — not caller-supplied flags.
+from="${PI_AGENT_ID:?PI_AGENT_ID not set — run this from inside an agent}"
+from_thread="${PI_THREAD_ID:?PI_THREAD_ID not set — run this from inside an agent}"
+
+resp="$(curl -sS -X POST -H 'content-type: application/json' \
+  -H "x-webhook-secret: ${COGNISPHERE_WEBHOOK_SECRET:-}" -w $'\n%{http_code}' \
   --data "$(payload)" "$base/webhook/$to/agent-messaging/api/send")" \
   || { echo "send failed — could not reach '$to' inbox at $base (is the harness running?)" >&2; exit 1; }
 code="${resp##*$'\n'}"; body="${resp%$'\n'*}"

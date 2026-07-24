@@ -12,7 +12,7 @@ import type {
   NotifyPayload,
   ThreadIdStrategy,
 } from "./types.js";
-import { AGENT_TOOLS, DEV_AGENT_PROMPT_FILE } from "./types.js";
+import { AGENT_TOOLS } from "./types.js";
 import type { Logger } from "./logger.js";
 
 const RESERVED_META = new Set([
@@ -752,11 +752,7 @@ export class AgentRunner extends EventEmitter {
       this.opts.agentId,
     );
     const tools = AGENT_TOOLS.join(",");
-    const systemPrompt = assembleSystemPrompt(
-      agentDir,
-      threadId,
-      this.opts.agentJson.devAgentAccess !== false,
-    );
+    const systemPrompt = assembleSystemPrompt(agentDir, threadId);
     // We pass `--session <path>` (harness-owned filename = sessionId) so
     // the harness controls the canonical session per thread. Pi tolerates
     // a not-yet-existing file (`loadEntriesFromFile` returns []), creates
@@ -834,6 +830,7 @@ export class AgentRunner extends EventEmitter {
     // Identity + loopback URL so plugin scripts can reach back into in-process
     // plugins via `${PI_WEBHOOK_BASE}/<plugin-id>/<rest>`.
     env.PI_AGENT_ID = this.opts.agentId;
+    env.PI_THREAD_ID = threadId;
     env.PI_WEBHOOK_BASE = `${this.opts.serverBaseUrl}/webhook/${this.opts.agentId}`;
 
     // Plugin secrets, flattened to bare keys (e.g. TELEGRAM_BOT_TOKEN), so
@@ -924,16 +921,11 @@ export class AgentRunner extends EventEmitter {
  * are referenced as literal `{{...}}` in the body and resolved by the
  * appended block — the model maps them.
  */
-function assembleSystemPrompt(
-  agentDir: string,
-  threadId: string,
-  includeDevAgent: boolean,
-): string {
+function assembleSystemPrompt(agentDir: string, threadId: string): string {
   const promptsDir = join(agentDir, "system_prompts");
   const files = readdirSync(promptsDir, { withFileTypes: true })
     .filter((d) => d.isFile() && d.name.endsWith(".md"))
     .map((d) => d.name)
-    .filter((n) => includeDevAgent || n !== DEV_AGENT_PROMPT_FILE)
     .sort();
   const parts = files.map((f) =>
     readFileSync(join(promptsDir, f), "utf8").replace(/\s+$/, ""),
