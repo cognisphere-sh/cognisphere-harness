@@ -13,7 +13,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { DEV_AGENT_PROMPT_FILE } from "../core/types.js";
 import {
   BASE_AGENT_DIR,
   DEFAULT_DEV_AGENT,
@@ -46,11 +45,12 @@ export function scaffoldAgent(
   // Bake the developer agent's name into the prompt fragments (create-time
   // baking, like the other agent-fixed {{vars}} — see server.md §6.8). For a
   // --dev fork that's this agent's own name; otherwise the existing dev
-  // agent's id (falling back to the default when none exists yet).
+  // agent's id (falling back to the default when none exists yet). The
+  // "Platform code changes" hand-off lives in the main-agent prompt.
   const devId = opts.dev
     ? name
     : findDevAgentId(harnessDir) ?? DEFAULT_DEV_AGENT;
-  bakeDevAgentName(join(target, "system_prompts", DEV_AGENT_PROMPT_FILE), devId);
+  bakeDevAgentName(join(target, "system_prompts", "0.1-main-agent.md"), devId);
 
   if (opts.dev) {
     copyDir(DEV_AGENT_DIR, target);

@@ -167,7 +167,7 @@ to its own package is a contained move.
   `init` pre-creates the developer agent this way in every home — named by
   `--dev-agent <name>` (default `dory`). The name is baked at create time
   into the `{{DevAgentId}}`/`{{DevAgentName}}` placeholders of
-  `0.2-dev-agent.md` (every fork reads the existing dev agent's id off
+  `0.1-main-agent.md` (every fork reads the existing dev agent's id off
   `agent.json.devAgent`) and `1-dev-agent.md`. Dory's job is owning and modifying the
   home's code (agents, user plugins, the app — never the installed harness
   library) and keeping `docs/harness/` + `docs/app/` current; the base
@@ -175,7 +175,8 @@ to its own package is a contained move.
   code-change requests to it. Telegram's `/reset` command wipes its
   conversation context (thread delete via the plugin-context `resetThread`).
   The `--dev` scaffold stamps `devAgent: true` into the agent.json. Every
-  agent gets the hand-off prompt fragment (`0.2-dev-agent.md`); who may
+  agent gets the hand-off text (the "Platform code changes" section of
+  `0.1-main-agent.md`); who may
   *message* the developer agent (or any agent) is governed by that agent's
   `agent-messaging` `allowMessageFrom` config (default `["*"]` — all
   in-harness senders), not a per-sender flag.
@@ -284,7 +285,7 @@ platform dir's own `scripts/<platform>/config`:
 | `scripts/aws/setup.sh` | locally (admin AWS creds) | one-time provision: S3 bucket, key pair, IAM role + instance profile, security group, EC2 (latest Ubuntu via SSM), Elastic IP, `~/.ssh/config` entry; then remote-bootstraps `gh` + Claude Code and clones the repo. Re-runnable — resources are found by name and reused. |
 | `scripts/contabo/setup.sh` | locally (`cntb` + `jq`) | one-time provision: object storage + backup bucket, SSH-key secret, Cloud VPS (Ubuntu), `~/.ssh/config` entry; same remote bootstrap as AWS plus `ufw` (Contabo has no security groups). Re-runnable — resources are found by displayName/region and reused; **the first run places a paid monthly order**. Prints the four `BACKUP_*` values to paste into the root `config`. |
 | `scripts/setup-server.sh` | on the box, as root, once | apt deps (nginx, sqlite3, agent runtime libs, certbot), Node + pnpm, the GitHub Packages token into the run user's `~/.npmrc`, secrets, build, per-agent bootstrap, systemd units, nginx + HTTPS, backup cron. Re-runnable. Renaming `APP_NAME` is not handled — retire the previous name's units/nginx site/cron by hand before rerunning. |
-| `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json` + `app/.env.local`; `start`/`restart` are the same command (secrets + build + `systemctl restart`, which also starts stopped units), so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. |
+| `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json` + `app/.env.local`; `start`/`restart` are the same command (secrets + build + `systemctl restart`, which also starts stopped units), so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. `start`/`stop`/`restart` take an optional `app`\|`harness` target to bounce a single unit (`restart app` applies an app-only change without touching the harness); omit it for both. |
 | `scripts/build.sh` | on the box (or locally) | `pnpm install --frozen-lockfile` + the app build (when `app/` exists). |
 | `scripts/aws/backup.sh` | cron (written by setup-server) | zips the whole home to S3 with consistent SQLite snapshots, prunes to `BACKUP_KEEP`. Reads the root `config` (the `BACKUP_*` keys), not `scripts/aws/config`. Provider-neutral despite the path: `BACKUP_S3_ENDPOINT` + keys point it at any S3-compatible store (Contabo). |
 

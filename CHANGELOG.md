@@ -18,6 +18,29 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1]
+
+### Added
+
+- **Per-unit restart.** `scripts/server.sh` `start`/`stop`/`restart` now take an
+  optional `app`|`harness` target to bounce a single systemd unit; omit it for
+  both (the deploy loop is unchanged). `restart app` builds and restarts only
+  the app unit — applying an app-only change without touching the harness.
+- **Developer agent ships app changes itself.** The dev-agent prompt now tells
+  it to apply `app/` changes live via `sudo ./scripts/server.sh restart app`
+  (its own session survives, since the app is a separate unit), and to leave
+  harness restarts to the operator — restarting the harness would kill its own
+  turn mid-run; the interrupted turn is requeued and swept back in on boot.
+
+### Breaking changes
+
+*(No behavior breaks — both entries are on-disk artifacts an existing home must
+sync to adopt the feature; old copies keep working untouched.)*
+
+- `scripts/server.sh` gained the optional `app`|`harness` restart target.   [affects: scripts/server.sh]
+- The developer agent's `1-dev-agent.md` prompt gained the app-restart
+  instructions (operator edits survive — re-seed or merge if customised).   [affects: agents/*/system_prompts/1-dev-agent.md]
+
 ## [0.5.0]
 
 ### Added

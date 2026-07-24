@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Control the deployed services.
-# Usage: sudo ./scripts/server.sh {start|stop|restart|status|logs|build|harness|dev|secrets}
+# Usage: sudo ./scripts/server.sh {start|stop|restart [app|harness]|status|logs|build|harness|dev|secrets}
+# start/stop/restart take an optional target (app|harness) to bounce one unit;
+# omit it to bounce both. `restart app` leaves the harness (and any agent driving
+# this script) running — the safe way to apply an app-only change.
 # The three commands: sudo ./scripts/setup-server.sh (one-time prod prep) ·
 # sudo ./scripts/server.sh build (build only) · sudo ./scripts/server.sh … (run/manage).
 # start/restart run secrets + build themselves — deploy loop:
@@ -66,6 +69,18 @@ do_build() {
   fi
 }
 
+# Resolve an optional {app|harness} target ($2) to the unit(s) to act on;
+# no target = both. Errors if `app` is asked for but app/ doesn't exist yet.
+target_units() {
+  case "${1:-}" in
+    "")      printf '%s\n' "${UNITS[@]}" ;;
+    harness) echo "$NAME-harness.service" ;;
+    app)     $HAS_APP || { echo "no app/ to target" >&2; exit 1; }
+             echo "$NAME-app.service" ;;
+    *) echo "usage: $0 {start|stop|restart} [app|harness]" >&2; exit 1 ;;
+  esac
+}
+
 # start/restart = secrets + build + systemctl, so `git pull && sudo
 # ./scripts/server.sh restart` is the whole deploy. `build` alone is for
 # building without touching the running services.
@@ -73,8 +88,10 @@ case "${1:-}" in
   secrets) gen_secrets ;;
   build)   do_build ;;
   # systemctl restart also starts stopped units, so start == restart.
-  start|restart) gen_secrets; do_build; systemctl restart "${UNITS[@]}" ;;
-  stop)    systemctl stop    "${UNITS[@]}" ;;
+  # ponytail: build is unconditional even for `restart harness` (rebuilds the
+  # app it won't bounce) — split the build if that ever gets slow enough to hurt.
+  start|restart) gen_secrets; do_build; units=$(target_units "${2:-}"); systemctl restart $units ;;
+  stop)    units=$(target_units "${2:-}"); systemctl stop $units ;;
   status)  systemctl status --no-pager "${UNITS[@]}" ;;
   logs)
     JARGS=(-u "$NAME-harness")
@@ -97,5 +114,5 @@ case "${1:-}" in
       cd "$ROOT/harness" && exec pnpm exec cognisphere dev --port "$HARNESS_PORT"
     fi
     ;;
-  *) echo "usage: $0 {start|stop|restart|status|logs|build|harness|dev|secrets}"; exit 1 ;;
+  *) echo "usage: $0 {start|stop|restart [app|harness]|status|logs|build|harness|dev|secrets}"; exit 1 ;;
 esac

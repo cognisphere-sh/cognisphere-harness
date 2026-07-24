@@ -164,8 +164,7 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         ├── .vertex-sa.json       ← written at start when provider=google-vertex
         ├── system_prompts/       ← concatenated (lex order) into the main agent's prompt
         │   ├── 0-base_prompt.md  ← shared base context (all agents); also appended to sub-agents
-        │   ├── 0.1-main-agent.md ← main-agent-only role (threads, plugins, comms, how to spawn sub-agents); vars baked at create
-        │   ├── 0.2-dev-agent.md  ← developer-agent hand-off fragment (all agents)
+        │   ├── 0.1-main-agent.md ← main-agent-only role (threads, plugins, comms, sub-agents, dev-agent hand-off); vars baked at create
         │   ├── 0.3-agent-directory.md ← roster of the OTHER agents (id + description);
         │   │                       written by the manager if absent, edits survive
         │   ├── 1-agent.md        ← persona, hand-written
@@ -891,10 +890,10 @@ swaps in a fresh runner constructed with the new env snapshot.
 `assembleSystemPrompt(agentDir, threadId)`:
 
 1. `readdirSync(<agentDir>/system_prompts).filter(d.endsWith(".md")).sort()`.
-   Every `.md` is included — all agents get `0.2-dev-agent.md` (the
-   developer-agent hand-off fragment) and, when present, the
-   `0.3-agent-directory.md` roster (§4.9: `writeAgentDirectory` seeds it
-   if absent, listing the other agents' ids + descriptions).
+   Every `.md` is included — all agents carry the developer-agent hand-off
+   (a "Platform code changes" section in `0.1-main-agent.md`) and, when
+   present, the `0.3-agent-directory.md` roster (§4.9: `writeAgentDirectory`
+   seeds it if absent, listing the other agents' ids + descriptions).
 2. `readFileSync` each, trim trailing whitespace.
 3. Join with `\n\n-----\n\n-----\n\n`.
 4. Append `\n\n-----\n\n-----\n\nThreadId: <id>\nThreadSessions: sessions/<id>/\n`.
@@ -902,7 +901,7 @@ swaps in a fresh runner constructed with the new env snapshot.
 Agent-fixed `{{vars}}` (`AgentId`, `AgentName`, `AgentDir`, `Tools`,
 `Timezone`) are baked at agent-create time via `sed` (see
 `v0-deferred.md` §3.1); the CLI's `scaffoldAgent` additionally bakes
-`{{DevAgentId}}`/`{{DevAgentName}}` into `0.2-dev-agent.md` (and
+`{{DevAgentId}}`/`{{DevAgentName}}` into `0.1-main-agent.md` (and
 `1-dev-agent.md` on a `--dev` fork) from the harness's dev agent's id.
 The only `{{var}}` left literal in the body is
 `{{ThreadId}}`; the appended `ThreadId: <id>` block resolves it for the

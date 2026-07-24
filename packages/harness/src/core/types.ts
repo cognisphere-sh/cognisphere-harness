@@ -108,11 +108,6 @@ export interface JsonSchema {
   [key: string]: unknown;
 }
 
-/** The base-template fragment describing the developer agent. The CLI bakes
- *  the dev agent's name into it at fork time; it is assembled into every
- *  agent's system prompt (all agents are dev-aware). */
-export const DEV_AGENT_PROMPT_FILE = "0.2-dev-agent.md";
-
 export interface PluginManifest {
   displayName: string;
   description?: string;
