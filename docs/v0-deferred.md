@@ -214,7 +214,7 @@ Stop the server. Remove `<agent>/plugins/<id>/` and the corresponding
 
 Once the `admin` plugin is installed:
 ```bash
-curl -X POST http://127.0.0.1:7331/admin/dr-renu/send \
+curl -X POST http://127.0.0.1:3142/admin/dr-renu/send \
   -H 'content-type: application/json' \
   -d '{"text":"hello"}'
 ```

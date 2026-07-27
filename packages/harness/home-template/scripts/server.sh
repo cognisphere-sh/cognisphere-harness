@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -f "$ROOT/config" ] && . "$ROOT/config"
 NAME="${APP_NAME:-$(basename "$ROOT")}"
-HARNESS_PORT="${HARNESS_PORT:-7331}"
+HARNESS_PORT="${HARNESS_PORT:-3142}"
 APP_PORT="${APP_PORT:-3000}"
 APP_USER="${APP_USER:-operator}"
 # app/ is optional until it has a package.json — the harness runs alone before that.

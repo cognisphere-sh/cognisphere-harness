@@ -231,7 +231,7 @@ Loaded once at boot:
 |---|---|---|
 | `COGNISPHERE_ROOT_DIR` | `~/.cognisphere` | base path; multiple harnesses can share |
 | `COGNISPHERE_ID` | `default` | `<rootDir>/<harnessId>` is the harness home |
-| `PORT` | `7331` | HTTP listen port |
+| `PORT` | `3142` | HTTP listen port |
 | `BIND_HOST` | `127.0.0.1` | bind address |
 | `SERVER_BASE_URL` | `http://${BIND_HOST}:${PORT}` | used to build `PI_WEBHOOK_BASE` |
 | `COGNISPHERE_HEADLESS` | _unset_ | when set (`1`/`true`/`yes`), the server mounts no web UI (API/webhook/admin only); set by `cognisphere serve --headless` |

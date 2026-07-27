@@ -18,6 +18,26 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.1]
+
+### Changed
+
+- **Default HTTP port is now `3142`** (was `7331`) — `PORT` / `cognisphere
+  serve --port` still override it. Updated everywhere the old default was
+  baked in: `config.ts`, the CLI's `DEFAULT_PORT`, the web dev-server proxy
+  target, the scaffold's `HARNESS_PORT` default, the seeded `agent-msg/send`
+  fallback base URL, and the docs.
+
+### Breaking changes
+
+- Existing homes pin `HARNESS_PORT=7331` in their `config`, so they keep
+  serving on 7331 — but the re-seeded `scripts/agent-msg/send` now falls back
+  to `127.0.0.1:3142`, which breaks agent-to-agent messaging. Either set
+  `HARNESS_PORT=3142` in `config` (then re-run `scripts/setup-server.sh` to
+  regenerate the systemd unit + nginx vhost, and restart), or keep 7331 and
+  export `HARNESS_BASE_URL=http://127.0.0.1:7331` into the harness
+  environment.   [affects: config, scripts/setup-server.sh]
+
 ## [0.6.0]
 
 ### Added

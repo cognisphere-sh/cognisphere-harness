@@ -8,7 +8,7 @@
  * - `serve` runs the backend once (no watch). The backend serves the prebuilt
  *   web UI (`dist-web/`) itself, so production needs no separate web process.
  *
- * Flags: `--port` (backend, default 7331 / `$PORT`), `--web-port` (Vite dev,
+ * Flags: `--port` (backend, default 3142 / `$PORT`), `--web-port` (Vite dev,
  * default 7330), `--no-web` (dev: skip the Vite dev server), `--headless`
  * (the backend serves no web UI at all — for backend-only deployments).
  *
@@ -23,7 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAIN_TS, PKG_ROOT, fail, info, requireHarnessDir } from "./util.js";
 
-const DEFAULT_PORT = 7331;
+const DEFAULT_PORT = 3142;
 const DEFAULT_WEB_PORT = 7330;
 
 /** The web package dir (present only in the monorepo, not in an installed harness). */

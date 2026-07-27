@@ -49,7 +49,7 @@ Run from the app home or `harness/` (`pnpm exec cognisphere …`):
 | `cognisphere serve` | run once — the production entrypoint |
 | `cognisphere upgrade` | show/drive the version upgrade (see skills.md) |
 
-The web console (default `http://127.0.0.1:7331`) manages agents, threads,
+The web console (default `http://127.0.0.1:3142`) manages agents, threads,
 plugin config, secrets, and model providers. Login users live in
 `.secrets/users.json`.
 

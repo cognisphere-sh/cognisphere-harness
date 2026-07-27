@@ -193,7 +193,7 @@ pnpm run build:web           # (optional) build the UI; without it → JSON stat
 pnpm run dev                 # tsx watch (hot reload) — or `pnpm start`
 ```
 
-The server listens on `http://127.0.0.1:7331`, running against
+The server listens on `http://127.0.0.1:3142`, running against
 `~/.cognisphere/default` (override with the env vars below). For **full-stack
 dev** — backend *and* the Vite dev server (HMR) together — scaffold an app
 home and run `cognisphere dev` from it: in the monorepo it starts both and points
@@ -208,7 +208,7 @@ Set via environment (a `.env` file in the package cwd is loaded automatically):
 |---|---|---|
 | `COGNISPHERE_ROOT_DIR` | `~/.cognisphere` | Base data path; multiple harnesses can share it. |
 | `COGNISPHERE_ID` | `default` | `<rootDir>/<harnessId>` is the harness home. |
-| `PORT` | `7331` | HTTP listen port. |
+| `PORT` | `3142` | HTTP listen port. |
 | `BIND_HOST` | `127.0.0.1` | Listen interface. |
 | `SERVER_BASE_URL` | `http://<host>:<port>` | Base URL used to build plugin webhook URLs. |
 | `COGNISPHERE_HEADLESS` | _unset_ | When set (`1`/`true`/`yes`), the server mounts no web UI — API/webhook/admin only. Equivalent to `cognisphere serve --headless`. |

@@ -7,7 +7,7 @@ CONSOLE_DOMAIN=console.example.com  # harness operator console (needs its own DN
 EMAIL=you@example.com               # Let's Encrypt registration / renewal notices
 
 APP_PORT=3000        # user-facing app (e.g. next start) — nginx proxies $DOMAIN here
-HARNESS_PORT=7331    # cognisphere backend + operator console — nginx proxies $CONSOLE_DOMAIN here
+HARNESS_PORT=3142    # cognisphere backend + operator console — nginx proxies $CONSOLE_DOMAIN here
 
 NODE_MAJOR=22        # Node LTS to install
 RUN_USER=            # OS user the services run as (blank = invoking sudo user)

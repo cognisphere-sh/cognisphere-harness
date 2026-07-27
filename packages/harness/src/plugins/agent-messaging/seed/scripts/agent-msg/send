@@ -48,7 +48,7 @@ Base URL defaults to the local harness; override with HARNESS_BASE_URL.
 EOF
 }
 
-base="${HARNESS_BASE_URL:-http://127.0.0.1:7331}"
+base="${HARNESS_BASE_URL:-http://127.0.0.1:3142}"
 to="" thread="" message="" subject="" silent=false selfcheck=false
 # Identity is env-sourced, not flag-sourced (resolved below for the real send).
 from="" from_thread=""

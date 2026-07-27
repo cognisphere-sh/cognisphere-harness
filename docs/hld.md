@@ -760,7 +760,7 @@ Implementation notes:
 
 ## 8. Server HTTP API
 
-Single port. Configurable via env (`PORT`, default 7331). Two route families
+Single port. Configurable via env (`PORT`, default 3142). Two route families
 only — there is no operator REST surface for CRUD or files.
 
 ### 8.1 Operator → admin agent (internal)
@@ -957,7 +957,7 @@ The operator's primary interface. `curl` (or any HTTP client) hits
 `POST /admin/admin/send` with `{ text }` to send a message:
 
 ```bash
-curl -X POST http://localhost:7331/admin/admin/send \
+curl -X POST http://localhost:3142/admin/admin/send \
   -H 'content-type: application/json' \
   -d '{"text": "create a new agent named support, claude-sonnet-4-5, plugin_channel"}'
 ```
