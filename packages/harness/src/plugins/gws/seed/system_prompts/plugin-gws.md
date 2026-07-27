@@ -41,6 +41,43 @@ first message of the Gmail thread so a later `Re: …` rewrite still routes
 to the same harness thread. Don't confuse it with `Channel`, the raw Gmail
 thread id.
 
+### Routing rules — override the ThreadId
+
+`scripts/gws/routes` manages rules that re-point matching emails at a
+`ThreadId` you choose, instead of the default `<Subject>[<gmailThreadId>]`.
+Use it when you send mail from one thread and want the reply to land back
+there rather than opening a new one.
+
+```
+routes add --name N --thread-id ID [--from RE] [--subject RE]
+routes list
+routes remove --name N
+```
+
+- `--from` matches the newest message's `From` header; `--subject` matches
+  the thread's subject. Both are case-insensitive, unanchored regexes, so a
+  plain string is a substring match (`--from alice@example.com`,
+  `--subject '^Invoice '`). At least one is required; if you pass both, both
+  must match.
+- The first matching rule wins; `--name` is the rule's key — adding with an
+  existing name replaces it.
+- Rules take effect within one poll interval. They only change where the
+  email is delivered — a message still has to reach you (your address in
+  `To`) to wake you at all.
+
+Typical use — you email someone from the thread you're currently in and
+want their reply back in it:
+
+```
+bash gws gmail +send --to alice@example.com --subject "Q3 quote" --body "..."
+scripts/gws/routes add --name alice-q3 --thread-id "<your current ThreadId>" \
+  --from alice@example.com --subject 'Q3 quote'
+```
+
+Remove the rule (`routes remove --name alice-q3`) once the exchange is
+done, otherwise every later mail from Alice about that subject keeps
+landing in that thread.
+
 ### Body shape of `email_received`
 
 ```

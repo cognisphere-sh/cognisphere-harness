@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# routes — read/write plugins/gws/state/routes.json
+#
+# Subcommands: add, list, remove
+#
+# State writes are atomic (jq | mv). The plugin re-reads the file on every
+# poll, so a new rule takes effect within one poll interval.
+set -euo pipefail
+
+# Help before the state-file init below: it must work from any cwd, and the
+# init would abort (set -e) when plugins/gws/state/ doesn't exist.
+case "${1:-}" in
+  help|-h|--help)
+    cat <<'EOF'
+routes — manage gws thread-routing rules (plugins/gws/state/routes.json).
+
+USAGE
+  routes add --name N --thread-id ID [--from RE] [--subject RE]
+  routes list
+  routes remove --name N
+
+A rule re-points every inbound email it matches at --thread-id, instead of
+the default thread id (`<Subject>[<gmailThreadId>]`). At least one of
+--from / --subject is required; when both are given both must match. The
+first matching rule in the file wins.
+
+--from is matched against the newest message's `From` header, --subject
+against the thread's subject (frozen at the thread's first message). Both
+are case-insensitive, unanchored regexes — a plain string is a substring
+match, e.g. `--from alice@x.com`, `--subject '^Invoice '`.
+
+EXAMPLE
+  # you mailed alice about a quote; keep her reply in this thread
+  routes add --name alice-quote --thread-id "$THREAD_ID" \
+    --from alice@example.com --subject 'Q3 quote'
+
+Run from the agent directory (paths are relative to it).
+EOF
+    exit 0
+    ;;
+esac
+
+state="plugins/gws/state/routes.json"
+[ -f "$state" ] || echo '{"routes":[]}' > "$state"
+
+cmd="${1:-}"; shift || true
+
+write() {
+  local body="$1"
+  local tmp
+  tmp="$(mktemp "${state}.XXXXXX")"
+  printf '%s' "$body" > "$tmp"
+  mv -f "$tmp" "$state"
+}
+
+case "$cmd" in
+  add)
+    name=""; tid=""; from=""; subject=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --thread-id) tid="$2"; shift 2 ;;
+        --from) from="$2"; shift 2 ;;
+        --subject) subject="$2"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$name" ] && [ -n "$tid" ] || {
+      echo "usage: routes add --name N --thread-id ID [--from RE] [--subject RE]" >&2
+      exit 2
+    }
+    [ -n "$from" ] || [ -n "$subject" ] || {
+      echo "at least one of --from / --subject is required (a rule with neither would match every email)" >&2
+      exit 2
+    }
+    new="$(jq -nc --arg n "$name" --arg tid "$tid" --arg f "$from" --arg s "$subject" \
+      '{name:$n,threadId:$tid}
+       + (if $f=="" then {} else {from:$f} end)
+       + (if $s=="" then {} else {subject:$s} end)')"
+    body="$(jq -c --argjson new "$new" \
+      '.routes |= ((map(select(.name != $new.name))) + [$new])' "$state")"
+    write "$body"
+    printf '%s\n' "$new"
+    ;;
+  list)
+    jq . "$state"
+    ;;
+  remove)
+    name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$name" ] || { echo "usage: routes remove --name N" >&2; exit 2; }
+    body="$(jq -c --arg n "$name" '.routes |= map(select(.name != $n))' "$state")"
+    write "$body"
+    echo "{\"removed\":\"$name\"}"
+    ;;
+  *)
+    echo "usage: routes {add|list|remove} ... (see: routes --help)" >&2
+    exit 2
+    ;;
+esac

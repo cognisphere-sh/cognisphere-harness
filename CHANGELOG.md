@@ -18,6 +18,23 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0]
+
+### Added
+
+- **gws thread routing.** The `gws` plugin now reads routing rules from
+  `plugins/gws/state/routes.json` on every poll; the first rule whose
+  `from` / `subject` patterns match an inbound thread replaces the default
+  harness thread id (`<Subject>[<gmailThreadId>]`) with the rule's own
+  `threadId`. Patterns are case-insensitive, unanchored regexes, so a plain
+  string is a substring match. Lets an agent mail someone from a thread and
+  have the reply land back in that same thread instead of opening a new one.
+- **`scripts/gws/routes` CLI** (seeded with the plugin): `add|list|remove`,
+  atomic writes, rules take effect within one poll interval. A rule with
+  neither `--from` nor `--subject` is rejected — it would capture every
+  inbound email. Documented in the plugin's system prompt; existing homes
+  pick both up automatically (the gws seed is re-copied on plugin start).
+
 ## [0.5.1]
 
 ### Added

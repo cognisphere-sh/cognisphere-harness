@@ -19,6 +19,7 @@ import {
 const execFileP = promisify(execFile);
 const UNREAD_LABEL = "UNREAD";
 const LEDGER_FILE = "ingested-threads.jsonl";
+const ROUTES_FILE = "routes.json";
 
 interface GwsConfig {
   pollIntervalSec?: number;
@@ -35,6 +36,23 @@ interface GwsSecrets {
 interface GmailThread {
   id: string;
   messages?: GmailMessage[];
+}
+
+/** A rule in `state/routes.json`, written by `scripts/gws/routes`. `from` and
+ *  `subject` are case-insensitive, unanchored regexes — a plain string is
+ *  therefore a substring match. At least one of the two must be present. */
+interface RouteRule {
+  name?: string;
+  threadId: string;
+  from?: string;
+  subject?: string;
+}
+
+interface CompiledRoute {
+  name: string;
+  threadId: string;
+  from?: RegExp;
+  subject?: RegExp;
 }
 
 /**
@@ -54,8 +72,11 @@ interface GmailThread {
  *
  * Threading: the harness thread id is `<Subject> [<gmailThreadId>]` — taken
  * from the first message of the Gmail thread so a later `Re: …` rewrite
- * still routes to the same queue thread. The agent calls `gws` directly
- * for send / reply-all; no helper CLI is shipped.
+ * still routes to the same queue thread. Routing rules in
+ * `state/routes.json` (managed by `scripts/gws/routes`) override that: the
+ * first rule whose `from`/`subject` patterns match wins, so an agent can
+ * park replies to a mail it sent in a thread of its choosing. The agent
+ * calls `gws` directly for send / reply-all; no helper CLI is shipped.
  */
 export default class GwsPlugin implements Plugin {
   manifest: PluginManifest = {
@@ -117,6 +138,7 @@ export default class GwsPlugin implements Plugin {
   private requireAgentInTo = true;
   private allowedSenderPatterns: RegExp[] = [];
   private agentEmail = "";
+  private routes: CompiledRoute[] = [];
 
   async start(ctx: PluginInstanceContext): Promise<void> {
     this.ctx = ctx;
@@ -244,9 +266,66 @@ export default class GwsPlugin implements Plugin {
     }
   }
 
+  /** Re-read `state/routes.json` (rewritten under us by `scripts/gws/routes`)
+   *  and compile each rule's patterns. Bad rules are dropped with a warning
+   *  rather than failing the poll. */
+  private async loadRoutes(): Promise<void> {
+    const ctx = this.ctx!;
+    let raw: string;
+    try {
+      raw = await readFile(join(ctx.stateDir, ROUTES_FILE), "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        this.routes = [];
+        return;
+      }
+      throw err;
+    }
+    const parsed = JSON.parse(raw) as { routes?: RouteRule[] };
+    const compiled: CompiledRoute[] = [];
+    for (const r of parsed.routes ?? []) {
+      // A rule with neither pattern would capture every inbound thread.
+      if (!r.threadId || (!r.from && !r.subject)) {
+        ctx.log.warn({ rule: r }, "skipping route: needs threadId + from/subject");
+        continue;
+      }
+      try {
+        compiled.push({
+          name: r.name ?? r.threadId,
+          threadId: sanitizeForPath(r.threadId),
+          from: r.from ? new RegExp(r.from, "i") : undefined,
+          subject: r.subject ? new RegExp(r.subject, "i") : undefined,
+        });
+      } catch (err) {
+        ctx.log.warn({ err, rule: r }, "skipping route with invalid regex");
+      }
+    }
+    this.routes = compiled;
+  }
+
+  /** First matching rule wins; all patterns present on a rule must match. */
+  private routeFor(subject: string, from: string): string | null {
+    for (const r of this.routes) {
+      if (r.from && !r.from.test(from)) continue;
+      if (r.subject && !r.subject.test(subject)) continue;
+      this.ctx?.log.info(
+        { route: r.name, threadId: r.threadId, from, subject },
+        "gws route matched",
+      );
+      return r.threadId;
+    }
+    return null;
+  }
+
   private async pollOnce(): Promise<void> {
     const ctx = this.ctx;
     if (!ctx) return;
+
+    try {
+      await this.loadRoutes();
+    } catch (err) {
+      ctx.log.error({ err }, "routes.json unreadable; keeping previous rules");
+    }
 
     // Page through every result of the query — Gmail caps a single list
     // response at maxResults, so a backlog query covering many days will
@@ -366,7 +445,13 @@ export default class GwsPlugin implements Plugin {
     // doesn't fork the harness thread id.
     const firstHeaders = collectHeaders(ordered[0]!.payload);
     const subject = firstHeaders.get("subject") ?? "(no subject)";
-    const threadIdOverride = `${sanitizeForPath(subject)}[${threadId}]`;
+    // A routing rule (state/routes.json) matching the thread's subject or the
+    // latest message's sender re-points the whole thread at its own thread id.
+    const lastFrom =
+      collectHeaders(ordered[ordered.length - 1]!.payload).get("from") ?? "";
+    const threadIdOverride =
+      this.routeFor(subject, lastFrom) ??
+      `${sanitizeForPath(subject)}[${threadId}]`;
 
     // Backlog mode: deliver every message in the thread, most-recent first
     // so the chronologically-first message (the only one that wakes the
@@ -383,13 +468,11 @@ export default class GwsPlugin implements Plugin {
         );
     } else {
       const last = ordered[ordered.length - 1]!;
-      const headers = collectHeaders(last.payload);
-      const to = headers.get("to") ?? "";
-      const from = headers.get("from") ?? "";
+      const to = collectHeaders(last.payload).get("to") ?? "";
       toEmit =
         (!this.requireAgentInTo ||
           extractEmails(to).includes(this.agentEmail)) &&
-        this.senderAllowed(from)
+        this.senderAllowed(lastFrom)
           ? [last]
           : [];
     }
