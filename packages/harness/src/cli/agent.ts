@@ -74,7 +74,7 @@ export function scaffoldAgent(
   writeJson(join(target, "agent.json"), {
     name,
     description: opts.dev
-      ? "Developer agent: owns and modifies this deployment's platform code (agent prompts/scripts, plugins, app, deploy). Reachable on Telegram."
+      ? "Developer agent: owns and modifies this deployment's platform code — agent prompts/scripts, forked plugins, the user-facing frontend app, deploy scripts — and keeps docs/harness + docs/app current. Send code, app and docs change requests here. Reachable on Telegram."
       : `TODO: one-line description of ${name}'s role (shown to other agents in the harness roster).`,
     model: { provider: "anthropic", id: "claude-sonnet-4-6" },
     threadIdStrategy: { type: "single" },

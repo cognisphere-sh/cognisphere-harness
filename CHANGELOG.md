@@ -18,6 +18,37 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.2]
+
+### Changed
+
+- **Base agent knows about the app home.** `0.1-main-agent.md` gained a
+  `# The app home` section pointing every agent at the repo above its agent
+  dir: `../../../app/` (the user-facing frontend users see in a browser),
+  `../../../docs/` (`base-harness/` platform reference, `harness/` this
+  deployment's agents/plugins, `app/` the frontend), plus `harness/` and
+  `scripts/`. The `# Platform code changes` hand-off now covers the app and
+  the docs explicitly — read freely, route every change to the developer
+  agent, report stale docs there.
+- **Developer agent's `agent.json.description`** (what the agent-directory
+  roster shows other agents) now names the frontend app and the docs duty:
+  "…owns and modifies this deployment's platform code — agent
+  prompts/scripts, forked plugins, the user-facing frontend app, deploy
+  scripts — and keeps docs/harness + docs/app current."
+
+### Breaking changes
+
+*(Nothing breaks — both are on-disk artifacts an existing home must sync to
+adopt; old copies keep working untouched.)*
+
+- `system_prompts/0.1-main-agent.md` gained the app-home + docs sections
+  (operator edits survive — merge rather than overwrite; `{{DevAgentId}}` /
+  `{{DevAgentName}}` are baked at fork time, so substitute the dev agent's
+  actual id when hand-merging).   [affects: agents/*/system_prompts/0.1-main-agent.md]
+- The developer agent's `agent.json.description` is only written at
+  `agent new --dev` time; existing homes keep the old one-liner until
+  edited.   [affects: agents/*/agent.json]
+
 ## [0.6.1]
 
 ### Changed
