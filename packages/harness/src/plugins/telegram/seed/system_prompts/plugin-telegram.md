@@ -25,6 +25,27 @@ Read the path directly with `read` (for text/image) or convert with
 `markitdown` / `pdftoppm` / `ffmpeg` (see the harness preamble for
 conversion guidelines).
 
+### Routing rules — override the ThreadId
+
+`scripts/telegram/routes` manages rules that deliver a chat's messages to a
+`ThreadId` you choose, instead of the one this agent's thread strategy picks.
+Use it to park a group chat in its own thread, or to fold several chats into
+one shared thread.
+
+```
+routes add --name N --thread-id ID --chat RE
+routes list
+routes remove --name N
+```
+
+- `--chat` is an anchored, case-insensitive regex matched against the chat
+  id, so a plain id is an exact match. `.*` is a wildcard, `-100.*` matches
+  every supergroup, `123|456` a set.
+- The first matching rule wins; `--name` is the rule's key — adding with an
+  existing name replaces it.
+- Rules take effect on the next inbound message. `/reset` in a routed chat
+  resets the routed thread.
+
 ## Outbound — `scripts/telegram/telegram-cli`
 
 The CLI reads `TELEGRAM_BOT_TOKEN` from env (injected by the harness from

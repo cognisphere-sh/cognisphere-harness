@@ -1005,13 +1005,15 @@ populated, no runner constructed.
        pluginId: pid,
        metadata: { ...payload.metadata, _notification: name },
      }),
-     resetThread: (channelId) => { /* wipe the thread's context */ },
+     resetThread: (channelId, threadIdOverride?) =>
+       { /* wipe the thread's context */ },
    }
    ```
 
    `resetThread(channelId)` maps the plugin-side channel to a thread id via
-   `runner.threadIdFor` (the same `threadIdStrategy` mapping `notify` uses),
-   then delegates to `AgentManager.deleteThread` — the shared teardown also
+   `runner.threadIdFor` (the same `threadIdStrategy` mapping `notify` uses)
+   — or uses `threadIdOverride` when the plugin routed the channel's
+   messages to a thread of its own choosing — then delegates to `AgentManager.deleteThread` — the shared teardown also
    behind the HTTP `DELETE /:id/sessions/:threadId` route — which refuses if
    a batch is in-flight on the thread, deletes the thread's queue rows +
    `threads` binding (`db.deleteThread`), and removes its

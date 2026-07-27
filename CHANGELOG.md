@@ -18,6 +18,38 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0]
+
+### Added
+
+- **Telegram thread-routing rules** — `plugins/telegram/state/routes.json`,
+  managed by the seeded `scripts/telegram/routes` CLI (`add | list |
+  remove`), mirrors the gws routing added in 0.6.0. A rule maps a chat id to
+  a thread id of the agent's choosing, overriding the agent's
+  `threadIdStrategy`: `routes add --name ops --thread-id ops-room --chat
+  '-100.*'`. `--chat` is an **anchored**, case-insensitive regex matched
+  against the chat id — a plain id is an exact match, `.*` is a wildcard,
+  `123|456` a set. First matching rule wins; the plugin re-reads the file on
+  every batch of updates, so a new rule takes effect immediately. `/reset`
+  in a routed chat resets the routed thread.
+
+### Changed
+
+- **`PluginInstanceContext.resetThread` takes an optional second argument**
+  — `resetThread(channelId, threadIdOverride?)`. Plugins that route a
+  channel to a custom thread pass the same override they gave `notify`, so
+  the reset hits the thread the messages actually landed in. Omitted → the
+  previous `threadIdStrategy` mapping, unchanged.
+
+### Breaking changes
+
+*(Nothing breaks — the routing CLI is a new on-disk artifact an existing
+home syncs to adopt; agents without `routes.json` behave exactly as before.)*
+
+- New seeded script `scripts/telegram/routes` and a "Routing rules" section
+  in `system_prompts/plugin-telegram.md` (operator edits survive — merge
+  rather than overwrite).   [affects: agents/*/scripts/telegram/routes, agents/*/system_prompts/plugin-telegram.md]
+
 ## [0.6.2]
 
 ### Changed

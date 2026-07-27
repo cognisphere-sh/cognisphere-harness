@@ -675,10 +675,11 @@ export class AgentManager {
           log.error({ err }, "notify failed");
         }
       },
-      resetThread: (channelId) => {
+      resetThread: (channelId, threadIdOverride) => {
         const runner = inst.runner;
         if (!runner) throw new Error("agent not running");
-        const threadId = runner.threadIdFor(pluginId, channelId);
+        const threadId =
+          threadIdOverride ?? runner.threadIdFor(pluginId, channelId);
         this.deleteThread(inst.id, threadId);
         log.info({ threadId }, "thread reset by plugin");
       },

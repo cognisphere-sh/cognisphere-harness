@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# routes — read/write plugins/telegram/state/routes.json
+#
+# Subcommands: add, list, remove
+#
+# State writes are atomic (jq | mv). The plugin re-reads the file on every
+# batch of updates, so a new rule takes effect immediately.
+set -euo pipefail
+
+# Help before the state-file init below: it must work from any cwd, and the
+# init would abort (set -e) when plugins/telegram/state/ doesn't exist.
+case "${1:-}" in
+  help|-h|--help)
+    cat <<'EOF'
+routes — manage telegram thread-routing rules (plugins/telegram/state/routes.json).
+
+USAGE
+  routes add --name N --thread-id ID --chat RE
+  routes list
+  routes remove --name N
+
+A rule delivers every message from a matching chat to --thread-id instead of
+the thread the agent's threadIdStrategy would pick. The first matching rule
+in the file wins.
+
+--chat is an anchored, case-insensitive regex matched against the chat id,
+so a plain id is an exact match. Use `.*` as a wildcard, `-100.*` for every
+supergroup, `123|456` for a set.
+
+EXAMPLE
+  routes add --name ops-room --thread-id ops --chat '-1001234567890'
+  routes add --name all-dms  --thread-id dms --chat '[0-9]+'
+
+Run from the agent directory (paths are relative to it).
+EOF
+    exit 0
+    ;;
+esac
+
+state="plugins/telegram/state/routes.json"
+[ -f "$state" ] || echo '{"routes":[]}' > "$state"
+
+cmd="${1:-}"; shift || true
+
+write() {
+  local body="$1"
+  local tmp
+  tmp="$(mktemp "${state}.XXXXXX")"
+  printf '%s' "$body" > "$tmp"
+  mv -f "$tmp" "$state"
+}
+
+case "$cmd" in
+  add)
+    name=""; tid=""; chat=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --thread-id) tid="$2"; shift 2 ;;
+        --chat) chat="$2"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$name" ] && [ -n "$tid" ] && [ -n "$chat" ] || {
+      echo "usage: routes add --name N --thread-id ID --chat RE" >&2
+      exit 2
+    }
+    new="$(jq -nc --arg n "$name" --arg tid "$tid" --arg c "$chat" \
+      '{name:$n,threadId:$tid,chat:$c}')"
+    body="$(jq -c --argjson new "$new" \
+      '.routes |= ((map(select(.name != $new.name))) + [$new])' "$state")"
+    write "$body"
+    printf '%s\n' "$new"
+    ;;
+  list)
+    jq . "$state"
+    ;;
+  remove)
+    name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$name" ] || { echo "usage: routes remove --name N" >&2; exit 2; }
+    body="$(jq -c --arg n "$name" '.routes |= map(select(.name != $n))' "$state")"
+    write "$body"
+    echo "{\"removed\":\"$name\"}"
+    ;;
+  *)
+    echo "usage: routes {add|list|remove} ... (see: routes --help)" >&2
+    exit 2
+    ;;
+esac

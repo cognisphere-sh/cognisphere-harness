@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
 import type {
   Plugin,
@@ -16,9 +16,30 @@ import type {
  *   which reads `TELEGRAM_BOT_TOKEN` from env and calls the Bot API directly
  *   — no plugin loopback required.
  *
+ * Threading: a chat lands in the thread its `threadIdStrategy` picks, unless
+ * a rule in `state/routes.json` (managed by `scripts/telegram/routes`) maps
+ * its chat id to a thread id of the agent's choosing.
+ *
  * Webhook mode is intentionally not supported in v0; polling avoids the
  * public-URL / TLS / verification fuss that webhook mode demands.
  */
+
+const ROUTES_FILE = "routes.json";
+
+/** A rule in `state/routes.json`, written by `scripts/telegram/routes`.
+ *  `chat` is an anchored, case-insensitive regex matched against the chat
+ *  id — `.*` for a wildcard, `-100.*` for every supergroup. */
+interface RouteRule {
+  name?: string;
+  threadId: string;
+  chat: string;
+}
+
+interface CompiledRoute {
+  name: string;
+  threadId: string;
+  chat: RegExp;
+}
 
 interface TgUser {
   id: number;
@@ -135,6 +156,7 @@ export default class TelegramPlugin implements Plugin {
   private pollTimeout = 25;
   private allowed: Set<string> | null = null;
   private inFlight: AbortController | null = null;
+  private routes: CompiledRoute[] = [];
 
   async start(ctx: PluginInstanceContext): Promise<void> {
     this.ctx = ctx;
@@ -188,6 +210,15 @@ export default class TelegramPlugin implements Plugin {
           { signal: ac.signal, timeoutMs: (this.pollTimeout + 5) * 1000 },
         );
         this.inFlight = null;
+        // Re-read routes per batch (the file is rewritten under us by
+        // `scripts/telegram/routes`), so a new rule takes effect immediately.
+        if (updates.length > 0) {
+          try {
+            await this.loadRoutes();
+          } catch (err) {
+            log.error({ err }, "routes.json unreadable; keeping previous rules");
+          }
+        }
         for (const u of updates) {
           this.offset = Math.max(this.offset, u.update_id + 1);
           try {
@@ -205,6 +236,53 @@ export default class TelegramPlugin implements Plugin {
     }
   }
 
+  /** Re-read `state/routes.json` and compile each rule's chat pattern. Bad
+   *  rules are dropped with a warning rather than failing the poll. */
+  private async loadRoutes(): Promise<void> {
+    const ctx = this.ctx!;
+    let raw: string;
+    try {
+      raw = await readFile(join(ctx.stateDir, ROUTES_FILE), "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        this.routes = [];
+        return;
+      }
+      throw err;
+    }
+    const parsed = JSON.parse(raw) as { routes?: RouteRule[] };
+    const compiled: CompiledRoute[] = [];
+    for (const r of parsed.routes ?? []) {
+      if (!r.threadId || !r.chat) {
+        ctx.log.warn({ rule: r }, "skipping route: needs threadId + chat");
+        continue;
+      }
+      try {
+        compiled.push({
+          name: r.name ?? r.threadId,
+          threadId: sanitizeForPath(r.threadId),
+          chat: new RegExp(`^(?:${r.chat})$`, "i"),
+        });
+      } catch (err) {
+        ctx.log.warn({ err, rule: r }, "skipping route with invalid regex");
+      }
+    }
+    this.routes = compiled;
+  }
+
+  /** First matching rule wins. */
+  private routeFor(chatId: string): string | undefined {
+    for (const r of this.routes) {
+      if (!r.chat.test(chatId)) continue;
+      this.ctx?.log.info(
+        { route: r.name, threadId: r.threadId, chatId },
+        "telegram route matched",
+      );
+      return r.threadId;
+    }
+    return undefined;
+  }
+
   private async handleUpdate(u: TgUpdate): Promise<void> {
     const msg = u.message ?? u.edited_message;
     if (!msg) return;
@@ -212,13 +290,14 @@ export default class TelegramPlugin implements Plugin {
     const chatId = String(msg.chat.id);
     if (this.allowed && !this.allowed.has(chatId)) return;
     if (!this.ctx) return;
+    const threadIdOverride = this.routeFor(chatId);
 
     // `/reset` is handled by the plugin, never delivered to the agent: wipe
     // the thread's context so the next message starts a fresh session.
     if (!isEdit && /^\/reset(@\w+)?$/.test((msg.text ?? "").trim())) {
       let reply: string;
       try {
-        this.ctx.resetThread(chatId);
+        this.ctx.resetThread(chatId, threadIdOverride);
         reply = "Context reset — starting fresh.";
       } catch (err) {
         reply = `Reset failed: ${(err as Error).message}`;
@@ -239,6 +318,7 @@ export default class TelegramPlugin implements Plugin {
     this.ctx.notify(isEdit ? "edited" : "message_received", {
       text,
       channelId: chatId,
+      threadIdOverride,
       metadata: {
         SenderId: msg.from?.id,
         SenderName: senderName(msg.from),
@@ -329,6 +409,12 @@ function senderName(u?: TgUser): string {
   if (!u) return "unknown";
   const parts = [u.first_name, u.last_name].filter(Boolean);
   return parts.length > 0 ? parts.join(" ") : `user ${u.id}`;
+}
+
+/** Strip characters that would break a directory name; the thread id becomes
+ *  a `sessions/<threadId>/` dir. */
+function sanitizeForPath(s: string): string {
+  return s.replace(/[/\\\0]+/g, "_").slice(0, 120).trim() || "default";
 }
 
 function sleep(ms: number): Promise<void> {
