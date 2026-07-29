@@ -18,6 +18,28 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.1]
+
+### Added
+
+- **gws routing on the Gmail thread id** — `scripts/gws/routes add` takes a
+  new `--gmail-thread-id RE` (rule field `gmailThreadId`), matched as an
+  **anchored**, case-insensitive regex against the raw Gmail thread id — a
+  plain id is an exact match, `a|b` a set. This is the precise way to park
+  replies: a reply always stays in the Gmail thread of the message it
+  answers, so routing on that id captures the follow-ups to one mail and
+  nothing else, where `--from`/`--subject` also catch unrelated mail. A rule
+  still needs at least one of `--from` / `--subject` / `--gmail-thread-id`,
+  and when several are given all must match; first matching rule wins.
+
+### Breaking changes
+
+*(Nothing breaks — rules without `gmailThreadId` behave exactly as before.)*
+
+- `scripts/gws/routes` gained the `--gmail-thread-id` flag, and
+  `system_prompts/plugin-gws.md`'s "Routing rules" section documents it
+  (operator edits survive — merge rather than overwrite).   [affects: agents/*/scripts/gws/routes, agents/*/system_prompts/plugin-gws.md]
+
 ## [0.7.0]
 
 ### Added

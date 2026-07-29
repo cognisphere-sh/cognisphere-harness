@@ -15,22 +15,32 @@ case "${1:-}" in
 routes — manage gws thread-routing rules (plugins/gws/state/routes.json).
 
 USAGE
-  routes add --name N --thread-id ID [--from RE] [--subject RE]
+  routes add --name N --thread-id ID [--from RE] [--subject RE] [--gmail-thread-id RE]
   routes list
   routes remove --name N
 
 A rule re-points every inbound email it matches at --thread-id, instead of
 the default thread id (`<Subject>[<gmailThreadId>]`). At least one of
---from / --subject is required; when both are given both must match. The
-first matching rule in the file wins.
+--from / --subject / --gmail-thread-id is required; when several are given
+all must match. The first matching rule in the file wins.
 
 --from is matched against the newest message's `From` header, --subject
 against the thread's subject (frozen at the thread's first message). Both
 are case-insensitive, unanchored regexes — a plain string is a substring
 match, e.g. `--from alice@x.com`, `--subject '^Invoice '`.
 
-EXAMPLE
-  # you mailed alice about a quote; keep her reply in this thread
+--gmail-thread-id is matched against the raw Gmail thread id (the `Channel`
+of an email notification, and the `threadId` of a message you sent) as an
+anchored, case-insensitive regex — a plain id is an exact match. This is
+the precise way to capture replies: a reply stays in the Gmail thread of
+the message it answers.
+
+EXAMPLES
+  # you mailed alice; keep every reply in that Gmail thread in this thread
+  routes add --name alice-quote --thread-id "$THREAD_ID" \
+    --gmail-thread-id 19abc4def5678901
+
+  # looser: anything from alice about the quote
   routes add --name alice-quote --thread-id "$THREAD_ID" \
     --from alice@example.com --subject 'Q3 quote'
 
@@ -55,28 +65,30 @@ write() {
 
 case "$cmd" in
   add)
-    name=""; tid=""; from=""; subject=""
+    name=""; tid=""; from=""; subject=""; gtid=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
         --thread-id) tid="$2"; shift 2 ;;
         --from) from="$2"; shift 2 ;;
         --subject) subject="$2"; shift 2 ;;
+        --gmail-thread-id) gtid="$2"; shift 2 ;;
         *) echo "unknown flag: $1" >&2; exit 2 ;;
       esac
     done
     [ -n "$name" ] && [ -n "$tid" ] || {
-      echo "usage: routes add --name N --thread-id ID [--from RE] [--subject RE]" >&2
+      echo "usage: routes add --name N --thread-id ID [--from RE] [--subject RE] [--gmail-thread-id RE]" >&2
       exit 2
     }
-    [ -n "$from" ] || [ -n "$subject" ] || {
-      echo "at least one of --from / --subject is required (a rule with neither would match every email)" >&2
+    [ -n "$from" ] || [ -n "$subject" ] || [ -n "$gtid" ] || {
+      echo "at least one of --from / --subject / --gmail-thread-id is required (a rule with none would match every email)" >&2
       exit 2
     }
-    new="$(jq -nc --arg n "$name" --arg tid "$tid" --arg f "$from" --arg s "$subject" \
+    new="$(jq -nc --arg n "$name" --arg tid "$tid" --arg f "$from" --arg s "$subject" --arg g "$gtid" \
       '{name:$n,threadId:$tid}
        + (if $f=="" then {} else {from:$f} end)
-       + (if $s=="" then {} else {subject:$s} end)')"
+       + (if $s=="" then {} else {subject:$s} end)
+       + (if $g=="" then {} else {gmailThreadId:$g} end)')"
     body="$(jq -c --argjson new "$new" \
       '.routes |= ((map(select(.name != $new.name))) + [$new])' "$state")"
     write "$body"

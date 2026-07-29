@@ -40,12 +40,15 @@ interface GmailThread {
 
 /** A rule in `state/routes.json`, written by `scripts/gws/routes`. `from` and
  *  `subject` are case-insensitive, unanchored regexes — a plain string is
- *  therefore a substring match. At least one of the two must be present. */
+ *  therefore a substring match. `gmailThreadId` is an anchored,
+ *  case-insensitive regex against the raw Gmail thread id, so a plain id is
+ *  an exact match. At least one of the three must be present. */
 interface RouteRule {
   name?: string;
   threadId: string;
   from?: string;
   subject?: string;
+  gmailThreadId?: string;
 }
 
 interface CompiledRoute {
@@ -53,6 +56,7 @@ interface CompiledRoute {
   threadId: string;
   from?: RegExp;
   subject?: RegExp;
+  gmailThreadId?: RegExp;
 }
 
 /**
@@ -74,8 +78,10 @@ interface CompiledRoute {
  * from the first message of the Gmail thread so a later `Re: …` rewrite
  * still routes to the same queue thread. Routing rules in
  * `state/routes.json` (managed by `scripts/gws/routes`) override that: the
- * first rule whose `from`/`subject` patterns match wins, so an agent can
- * park replies to a mail it sent in a thread of its choosing. The agent
+ * first rule whose `from`/`subject`/`gmailThreadId` patterns match wins, so
+ * an agent can park replies to a mail it sent in a thread of its choosing —
+ * matching on the Gmail thread id is the exact form, since a reply stays in
+ * the same Gmail thread as the message that provoked it. The agent
  * calls `gws` directly for send / reply-all; no helper CLI is shipped.
  */
 export default class GwsPlugin implements Plugin {
@@ -284,9 +290,12 @@ export default class GwsPlugin implements Plugin {
     const parsed = JSON.parse(raw) as { routes?: RouteRule[] };
     const compiled: CompiledRoute[] = [];
     for (const r of parsed.routes ?? []) {
-      // A rule with neither pattern would capture every inbound thread.
-      if (!r.threadId || (!r.from && !r.subject)) {
-        ctx.log.warn({ rule: r }, "skipping route: needs threadId + from/subject");
+      // A rule with no pattern at all would capture every inbound thread.
+      if (!r.threadId || (!r.from && !r.subject && !r.gmailThreadId)) {
+        ctx.log.warn(
+          { rule: r },
+          "skipping route: needs threadId + from/subject/gmailThreadId",
+        );
         continue;
       }
       try {
@@ -295,6 +304,9 @@ export default class GwsPlugin implements Plugin {
           threadId: sanitizeForPath(r.threadId),
           from: r.from ? new RegExp(r.from, "i") : undefined,
           subject: r.subject ? new RegExp(r.subject, "i") : undefined,
+          gmailThreadId: r.gmailThreadId
+            ? new RegExp(`^(?:${r.gmailThreadId})$`, "i")
+            : undefined,
         });
       } catch (err) {
         ctx.log.warn({ err, rule: r }, "skipping route with invalid regex");
@@ -304,12 +316,17 @@ export default class GwsPlugin implements Plugin {
   }
 
   /** First matching rule wins; all patterns present on a rule must match. */
-  private routeFor(subject: string, from: string): string | null {
+  private routeFor(
+    subject: string,
+    from: string,
+    gmailThreadId: string,
+  ): string | null {
     for (const r of this.routes) {
       if (r.from && !r.from.test(from)) continue;
       if (r.subject && !r.subject.test(subject)) continue;
+      if (r.gmailThreadId && !r.gmailThreadId.test(gmailThreadId)) continue;
       this.ctx?.log.info(
-        { route: r.name, threadId: r.threadId, from, subject },
+        { route: r.name, threadId: r.threadId, from, subject, gmailThreadId },
         "gws route matched",
       );
       return r.threadId;
@@ -445,12 +462,13 @@ export default class GwsPlugin implements Plugin {
     // doesn't fork the harness thread id.
     const firstHeaders = collectHeaders(ordered[0]!.payload);
     const subject = firstHeaders.get("subject") ?? "(no subject)";
-    // A routing rule (state/routes.json) matching the thread's subject or the
-    // latest message's sender re-points the whole thread at its own thread id.
+    // A routing rule (state/routes.json) matching the thread's subject, the
+    // latest message's sender, or the Gmail thread id re-points the whole
+    // thread at its own thread id.
     const lastFrom =
       collectHeaders(ordered[ordered.length - 1]!.payload).get("from") ?? "";
     const threadIdOverride =
-      this.routeFor(subject, lastFrom) ??
+      this.routeFor(subject, lastFrom, threadId) ??
       `${sanitizeForPath(subject)}[${threadId}]`;
 
     // Backlog mode: deliver every message in the thread, most-recent first

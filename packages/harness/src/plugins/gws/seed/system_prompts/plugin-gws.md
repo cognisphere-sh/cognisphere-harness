@@ -49,16 +49,23 @@ Use it when you send mail from one thread and want the reply to land back
 there rather than opening a new one.
 
 ```
-routes add --name N --thread-id ID [--from RE] [--subject RE]
+routes add --name N --thread-id ID [--from RE] [--subject RE] [--gmail-thread-id RE]
 routes list
 routes remove --name N
 ```
 
+- `--gmail-thread-id` matches the raw Gmail thread id (the `Channel` of an
+  inbound notification, and the `threadId` in the JSON `gws gmail +send` /
+  `+reply` prints). Anchored, case-insensitive regex — a plain id is an
+  exact match. **Prefer this**: a reply always stays in the Gmail thread of
+  the message it answers, so it captures exactly the follow-ups to one mail
+  and nothing else.
 - `--from` matches the newest message's `From` header; `--subject` matches
   the thread's subject. Both are case-insensitive, unanchored regexes, so a
   plain string is a substring match (`--from alice@example.com`,
-  `--subject '^Invoice '`). At least one is required; if you pass both, both
-  must match.
+  `--subject '^Invoice '`).
+- At least one of the three is required; if you pass several, all must
+  match.
 - The first matching rule wins; `--name` is the rule's key — adding with an
   existing name replaces it.
 - Rules take effect within one poll interval. They only change where the
@@ -66,17 +73,27 @@ routes remove --name N
   `To`) to wake you at all.
 
 Typical use — you email someone from the thread you're currently in and
-want their reply back in it:
+want their reply back in it. Capture the sent message's `threadId` and
+route on it:
 
 ```
-bash gws gmail +send --to alice@example.com --subject "Q3 quote" --body "..."
+tid="$(gws gmail +send --to alice@example.com --subject "Q3 quote" --body "..." | jq -r .threadId)"
+# if that yields nothing, look the sent message up instead:
+#   gws gmail users messages list --params '{"userId":"me","q":"in:sent newer_than:1h"}'
+scripts/gws/routes add --name alice-q3 --thread-id "<your current ThreadId>" \
+  --gmail-thread-id "$tid"
+```
+
+Use `--from` / `--subject` instead when you want a broader net (any mail
+from Alice about that subject, not just replies to this one):
+
+```
 scripts/gws/routes add --name alice-q3 --thread-id "<your current ThreadId>" \
   --from alice@example.com --subject 'Q3 quote'
 ```
 
 Remove the rule (`routes remove --name alice-q3`) once the exchange is
-done, otherwise every later mail from Alice about that subject keeps
-landing in that thread.
+done, otherwise later mail matching it keeps landing in that thread.
 
 ### Body shape of `email_received`
 
