@@ -127,8 +127,8 @@ export function cmdInit(argv: string[]): void {
     cpSync(changelog, join(dir, "docs", "base-harness", "CHANGELOG.md"));
   }
 
-  // The developer agent shipped with every home (telegram-only; owns the
-  // home's code). Needs a telegram bot token + model provider to start.
+  // The developer agent shipped with every home (telegram + agent-messaging;
+  // owns the home's code). Needs a telegram bot token + model provider to start.
   scaffoldAgent(harnessDir, devAgent, { dev: true });
 
   // The app home is a git repo so upgrades are reviewable diffs (§9).
@@ -139,7 +139,7 @@ export function cmdInit(argv: string[]): void {
 
   info(`Created app home "${id}" at ${dir}`);
   info("  harness/  the cognisphere harness (agents, plugins, secrets)");
-  info(`            agents/${devAgent} — the developer agent (telegram-only; set`);
+  info(`            agents/${devAgent} — the developer agent (telegram + agent-messaging; set`);
   info("            its bot token + model provider to bring it up)");
   info("  app/      your user-facing app (see app/README.md)");
   info("  docs/     project docs (base-harness reference + harness/app docs)");

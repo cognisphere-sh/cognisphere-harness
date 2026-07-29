@@ -67,7 +67,8 @@ plugin config, secrets, and model providers. Login users live in
   `1-<something>.md`.
 - `workspace/` — the agent's durable notes; `knowledge/` for cross-thread
   reference docs.
-- `sessions/<threadId>/` — conversation history (JSONL) + `.events.db`
+- `sessions/<threadId>/` — conversation history (JSONL), the assembled
+  `.system-prompt.md` handed to pi on each spawn, + `.events.db`
   (message queue / event log — inspect with `sqlite3`).
 - `plugins/<id>/` — an empty dir installs that plugin for this agent;
   `config.json` inside it holds the plugin's per-agent config.
@@ -112,8 +113,11 @@ Hand edits need an agent restart; console edits hot-reload.
 
 Every home ships with a developer agent (default id `dory`; chosen at
 `cognisphere init` via `--dev-agent <name>`) whose job is to own and modify
-this home's code (agents, user-space plugins, the app). It is reachable
-exclusively via Telegram and keeps `docs/harness/` and `docs/app/` up to
+this home's code (agents, user-space plugins, the app). It ships with two
+plugins enabled: **telegram** (its only human-facing channel) and
+**agent-messaging** (so the harness's other agents can hand it code and doc
+requests directly, rather than only a human relaying them). It keeps
+`docs/harness/` and `docs/app/` up to
 date after every change. The cognisphere skills (`cognisphere-upgrade`,
 `create-plugin`) are installed in its own `skills/agent/` dir, so it can
 drive harness upgrades and author plugins directly. To bring it up: set its

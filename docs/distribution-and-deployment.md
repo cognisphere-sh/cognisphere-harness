@@ -163,7 +163,9 @@ to its own package is a contained move.
   overlay on top (the persona, `system_prompts/1-dev-agent.md`), installs the
   shipped cognisphere skills into the agent's own `skills/agent/` (pi only
   loads `<agentDir>/skills`, so the home-root `.claude/skills/` copies aren't
-  visible to agents), and enables the telegram plugin (its only channel).
+  visible to agents), and enables two plugins: telegram (its only human
+  channel) and agent-messaging (so the harness's other agents can hand it
+  code/doc requests directly).
   `init` pre-creates the developer agent this way in every home — named by
   `--dev-agent <name>` (default `dory`). The name is baked at create time
   into the `{{DevAgentId}}`/`{{DevAgentName}}` placeholders of

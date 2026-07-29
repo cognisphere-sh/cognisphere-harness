@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { AgentDb } from "./queue.js";
 import { PiRpcClient } from "./rpc.js";
@@ -752,7 +759,15 @@ export class AgentRunner extends EventEmitter {
       this.opts.agentId,
     );
     const tools = AGENT_TOOLS.join(",");
+    // The assembled prompt goes to pi as a FILE PATH, not as argv text: Linux
+    // caps any single argv/env string at MAX_ARG_STRLEN = 128 KiB (a per-string
+    // limit, independent of the ~2 MB ARG_MAX total), and a grown
+    // system_prompts/ tree crossed it → every spawn died with E2BIG. pi's
+    // `--system-prompt` resolves an existing path to its contents
+    // (`resolvePromptInput`), so a path removes the ceiling entirely.
     const systemPrompt = assembleSystemPrompt(agentDir, threadId);
+    const promptFile = join(sessionDir, ".system-prompt.md");
+    writeFileSync(promptFile, systemPrompt, "utf8");
     // We pass `--session <path>` (harness-owned filename = sessionId) so
     // the harness controls the canonical session per thread. Pi tolerates
     // a not-yet-existing file (`loadEntriesFromFile` returns []), creates
@@ -775,7 +790,7 @@ export class AgentRunner extends EventEmitter {
       "--model", modelId,
       "--thinking", thinking,
       "--tools", tools,
-      "--system-prompt", systemPrompt,
+      "--system-prompt", promptFile,
       "--no-extensions",
       "--no-skills",
       "--no-prompt-templates",

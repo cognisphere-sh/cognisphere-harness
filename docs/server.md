@@ -139,9 +139,9 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 ├── .agents/skills/                   in by `cognisphere init` from the package
 ├── app/                          ← the user-facing app (placeholder until built)
 └── harness/                      ← the harness data dir documented below
-                                     (init pre-creates the telegram-only
-                                     developer agent — `--dev-agent <name>`,
-                                     default `dory`)
+                                     (init pre-creates the developer agent —
+                                     telegram + agent-messaging;
+                                     `--dev-agent <name>`, default `dory`)
 ```
 
 ```
@@ -179,7 +179,9 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         │   └── <ThreadId>/...
         ├── sessions/
         │   ├── .events.db        ← SQLite WAL: single `events` lifecycle table
-        │   └── <ThreadId>/<sid>.jsonl
+        │   └── <ThreadId>/
+        │       ├── <sid>.jsonl
+        │       └── .system-prompt.md  ← rewritten per spawn; pi reads it (§4.8.4)
         ├── plugins/<plugin-id>/
         │   ├── config.json       ← validated against manifest.configSchema
         │   ├── state/            ← plugin-private
@@ -197,7 +199,8 @@ Conventions worth knowing:
 - `<scope>` under `skills/`, `extensions/`, `scripts/` is either `agent/`
   (operator/agent-authored) or `<plugin-id>/` (seeded by a plugin install).
 - `system_prompts/*.md` is concatenated lex-sorted to form the system
-  prompt sent to pi.
+  prompt sent to pi — written to `sessions/<ThreadId>/.system-prompt.md`
+  and handed to pi as a path, not as argv text (§4.8.4).
 - `sessions/<ThreadId>/` contains exactly one canonical `<sessionId>.jsonl`
   per thread. The harness owns the filename — `sessionId` is a UUID
   generated on the thread's first batch and persisted in `.events.db`'s
@@ -740,7 +743,7 @@ pi --mode rpc
    --model    <thread override modelId   ?? agentJson.model.id>
    --thinking <thread override thinking ?? agentJson.model.thinkingLevel ?? "medium">
    --tools read,bash,edit,write,grep,find,ls
-   --system-prompt "<assembled system prompt>"
+   --system-prompt <agentDir>/sessions/<threadId>/.system-prompt.md  ← a PATH, not text
    --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files
    --skill <agentDir>/skills            ← single dir; pi recurses for SKILL.md
    --extension <agentDir>/extensions/<X> ← per first-level entry, only
@@ -795,12 +798,15 @@ Env handed to pi:
   agent default, that provider's credentials are also injected (so the
   sub-agent can authenticate); the agent default provider's key is already
   present via `envSecrets`. On every spawn the wrapper sets the sub-agent's
-  system prompt by concatenating two files into a single `--system-prompt`
-  value (the flag is not repeatable): `system_prompts/0-base_prompt.md` (the
-  shared base context the main agent also gets) and
-  `scripts/agent/sub-agent-prompt.md` (the sub-agent-only role —
-  "stdout is your return value", stay scoped). `--system-prompt` (not
-  `--append-system-prompt`) so the prompt is exactly these two files and pi's
+  system prompt from two files, passed as **paths**:
+  `--system-prompt system_prompts/0-base_prompt.md` (the shared base context
+  the main agent also gets) and
+  `--append-system-prompt scripts/agent/sub-agent-prompt.md` (the
+  sub-agent-only role — "stdout is your return value", stay scoped). pi reads
+  either flag's value as a file when it names one and composes
+  `<system-prompt>\n\n<append>`, so this is byte-identical to the shell-side
+  concatenation it replaces while keeping the prompt out of argv (§4.8.4:
+  `MAX_ARG_STRLEN`). `--system-prompt` still anchors the prompt, so pi's
   default SYSTEM.md/built-in doesn't leak in. The main agent passes the
   task-specific brief in the **message** (positional arg), not via
   `--system-prompt` — so the brief lives in the session history and survives
@@ -897,6 +903,18 @@ swaps in a fresh runner constructed with the new env snapshot.
 2. `readFileSync` each, trim trailing whitespace.
 3. Join with `\n\n-----\n\n-----\n\n`.
 4. Append `\n\n-----\n\n-----\n\nThreadId: <id>\nThreadSessions: sessions/<id>/\n`.
+
+The result is written to `<agentDir>/sessions/<threadId>/.system-prompt.md`
+(rewritten on every spawn) and pi gets **that path** as its `--system-prompt`
+value, not the text. pi's `resolvePromptInput` reads the value as a file when
+it names an existing path, so this needs no pi-side flag. It is not a
+cosmetic choice: Linux caps a **single** argv/env string at
+`MAX_ARG_STRLEN` = 131 072 bytes — a per-string limit, independent of the
+~2 MB `ARG_MAX` total — so once a harness's `system_prompts/` tree crossed
+128 KiB, `spawn("pi", …)` failed with `E2BIG` on **every** thread (the
+assembly is thread-independent, so one oversized tree took the whole agent
+down). Passing a path removes the ceiling; an env var would not (same
+per-string cap).
 
 Agent-fixed `{{vars}}` (`AgentId`, `AgentName`, `AgentDir`, `Tools`,
 `Timezone`) are baked at agent-create time via `sed` (see

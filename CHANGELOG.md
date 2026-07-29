@@ -18,6 +18,53 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.2]
+
+### Fixed
+
+- **`spawn E2BIG` on every batch once `system_prompts/` crossed 128 KiB.** The
+  runner passed the whole assembled system prompt as a single `--system-prompt`
+  argv value. Linux caps **one** argv/env string at `MAX_ARG_STRLEN` = 131 072
+  bytes — a per-string limit, independent of the ~2 MB `ARG_MAX` total — so a
+  prompt tree that grew past 128 KiB killed `spawn("pi", …)` outright. Because
+  `assembleSystemPrompt` hands every thread the same files, this took *all* of
+  an agent's threads down at once, with `E2BIG` and no partial failure to
+  narrow it down.
+
+  The runner now writes the assembled prompt to
+  `sessions/<threadId>/.system-prompt.md` (rewritten on every spawn) and passes
+  **that path** to `--system-prompt`. pi's `resolvePromptInput` already reads a
+  flag value as a file when it names an existing path, so this needs no pi-side
+  change, and files have no length ceiling. An env var would not have worked —
+  same per-string cap.
+
+  `scripts/agent/subagent` had the identical exposure (it concatenated
+  `0-base_prompt.md` + `sub-agent-prompt.md` into one `--system-prompt` string,
+  so sub-agents were on course to fail the same way at the same threshold). It
+  now passes the two files as paths — `--system-prompt <base>
+  --append-system-prompt <role>` — which pi composes as
+  `<system-prompt>\n\n<append>`, byte-identical to the concatenation it
+  replaces.
+
+### Changed
+
+- **The developer agent now gets the `agent-messaging` plugin by default**, on
+  top of telegram. It owns the home's platform code and every other agent's
+  prompt tells it to route code and doc changes there — but until now nothing
+  gave those agents a way to actually send it one; the request had to go
+  through a human on Telegram. `cognisphere init` and
+  `cognisphere agent new <name> --dev` both enable it. The inbox default is
+  unchanged (`allowMessageFrom: ["*"]`, i.e. any in-harness agent).
+
+### Breaking changes
+
+- Existing developer agents don't have the `agent-messaging` plugin enabled;
+  create the (empty) plugin dir to install the bundled copy with its default
+  config.   [affects: agents/*/plugins/agent-messaging/]
+- `scripts/agent/subagent` passes the sub-agent system prompt as two file
+  paths instead of one concatenated string (operator edits survive — merge
+  rather than overwrite).   [affects: agents/*/scripts/agent/subagent]
+
 ## [0.7.1]
 
 ### Added

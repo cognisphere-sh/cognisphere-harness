@@ -3,7 +3,7 @@
  * harness's `agents/<name>/` and write a starter `agent.json`. The fork is
  * owned by the harness: git-tracked and edited freely (§4). `--dev` overlays
  * the developer-agent persona, installs the cognisphere skills, and enables
- * the telegram plugin (the dev agent's only channel).
+ * the telegram (human channel) and agent-messaging (other agents) plugins.
  */
 import {
   existsSync,
@@ -55,8 +55,11 @@ export function scaffoldAgent(
   if (opts.dev) {
     copyDir(DEV_AGENT_DIR, target);
     bakeDevAgentName(join(target, "system_prompts", "1-dev-agent.md"), devId);
-    // The dev agent is telegram-only; an empty plugin dir installs it.
+    // Telegram is the dev agent's only human-facing channel; agent-messaging
+    // lets the other agents in the harness hand it code/doc requests directly.
+    // An empty plugin dir installs the bundled copy with its default config.
     mkdirSync(join(target, "plugins", "telegram"), { recursive: true });
+    mkdirSync(join(target, "plugins", "agent-messaging"), { recursive: true });
     // Install the cognisphere skills into the agent's own skills dir — pi
     // only loads `<agentDir>/skills`, so the home-root `.claude/skills/`
     // copies aren't visible to the agent.
