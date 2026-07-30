@@ -18,6 +18,39 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.6]
+
+### Added
+
+- **New seeded pi extension `extensions/context-meta.ts`: context-window
+  telemetry for the agent.** Two signals:
+  - `CheckpointTokens: +<n>` — persistent per-step stamps. After each
+    assistant response, the first following user message / tool result is
+    stamped with the exact context growth of the completed step, computed
+    from consecutive provider-reported usage totals (no estimation).
+    Deltas are per-step, never cumulative, so the trail stays truthful
+    across compaction; a compaction stamps `CheckpointTokens: reset`.
+    Summing a span of stamps tells the agent what pruning that span would
+    free. Seeded from the session JSONL on spawn, so deltas stay exact
+    across batch boundaries.
+  - `Model:` + `ContextUsage: <tokens>/<context window>` — ephemeral,
+    injected into each LLM call's last outgoing message via the `context`
+    hook; never persisted, so exactly one fresh copy exists per call.
+
+### Changed
+
+- Base system prompt: `<harness-metadata>` docs gain the `CheckpointTokens`
+  field and a note on the latest-message `Model`/`ContextUsage` telemetry,
+  with guidance to delegate/wrap up under context pressure.
+
+### Breaking changes
+
+- New seeded file `extensions/context-meta.ts`. Copy it from the new seed
+  into existing agents.   [affects: agents/*/extensions/*]
+- Message-metadata section of the seeded base system prompt changed
+  (`CheckpointTokens` field, `Model`/`ContextUsage` telemetry note). Graft
+  into existing agents' prompts.   [affects: agents/*/system_prompts/0-base_prompt.md]
+
 ## [0.8.5]
 
 ### Changed
