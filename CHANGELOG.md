@@ -18,6 +18,40 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.1]
+
+### Fixed
+
+- **Base prompt no longer tells agents to pass `-o json` to ddgs.** That flag
+  doesn't print to stdout — it writes the results to a file in the cwd (e.g.
+  `text_<query>_<timestamp>.json`), so piping to `jq` got empty input and
+  agent dirs silently accumulated result files. The prompt now says to read
+  the default stdout table directly and warns against `-o json`/`-o csv`.
+- **Plugin requests route to `nova`, not the operator.** The communication
+  model section still said to ask the operator (via the admin plugin) to
+  install or write missing plugins, contradicting 0.8.0's ownership model
+  (§Platform code changes). It now forwards those requests to the developer
+  agent via agent-messaging, keeping the operator for what genuinely needs
+  them (secrets, harness restarts).
+- **`session-reader --help` documented a session layout 0.8.0 deleted.** The
+  `sessions/<ThreadId>/subagents/<subAgentId>/` path example is now
+  `sessions/<ThreadId>-<task-slug>/` — task-thread sessions are ordinary
+  threads.
+- **Wrapper headers (`agent-browser`, `ddgs`, `markitdown`) no longer cite the
+  removed `pi -p` sub-agent CLI** as their reason to exist. The wrappers stay
+  (the PATH/venv rationale holds); the header comments and `--help` text now
+  state it without referencing sub-agents.
+
+### Breaking changes
+
+- Base prompt corrections (ddgs output flags, plugin-request routing) —
+  replace the fork's copy with the new seed, re-applying any local
+  edits.   [affects: agents/*/system_prompts/0-base_prompt.md]
+- session-reader help updated for the task-thread session layout —
+  re-seed.   [affects: agents/*/scripts/agent/session-reader]
+- Wrapper rationale comments dropped the `pi -p` reference — re-seed (no
+  behavior change).   [affects: agents/*/scripts/agent/agent-browser, agents/*/scripts/agent/ddgs, agents/*/scripts/agent/markitdown]
+
 ## [0.8.0]
 
 ### Changed

@@ -3,8 +3,8 @@
 # bootstrap.sh into the agent's .venv via `pip install markitdown[all]`).
 #
 # Why this exists: the runner auto-activates <agentDir>/.venv at spawn time, so
-# markitdown is usually on PATH — but sub-agent subprocesses don't always carry
-# that activation, so a bare `markitdown ...` can 127. This wrapper prefers the
+# markitdown is usually on PATH — but not every subprocess carries that
+# activation, so a bare `markitdown ...` can 127. This wrapper prefers the
 # agent's own .venv copy and falls back to PATH, giving one stable invocation
 # path. See bootstrap/bootstrap.sh.
 #
@@ -19,9 +19,8 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   help_requested=1
   cat <<'EOF'
 markitdown (wrapper) — convert files/URLs to markdown via the `markitdown`
-CLI, resolved from the agent's .venv (then PATH), since sub-agent
-subprocesses don't always carry the venv activation. All args are forwarded
-verbatim.
+CLI, resolved from the agent's .venv (then PATH), since PATH doesn't always
+carry the venv activation. All args are forwarded verbatim.
 
 EXAMPLES
   scripts/agent/markitdown path/to/file.pdf

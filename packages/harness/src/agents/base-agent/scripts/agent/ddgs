@@ -3,9 +3,9 @@
 # bootstrap.sh into the agent's .venv via `pip install ddgs`).
 #
 # Why this exists: the runner auto-activates <agentDir>/.venv at spawn time, so
-# ddgs is usually on PATH — but sub-agent subprocesses don't always carry that
-# activation, so a bare `ddgs ...` can 127. This wrapper prefers the agent's own
-# .venv copy and falls back to PATH, giving one stable invocation path. See
+# ddgs is usually on PATH — but not every subprocess carries that activation,
+# so a bare `ddgs ...` can 127. This wrapper prefers the agent's own .venv copy
+# and falls back to PATH, giving one stable invocation path. See
 # bootstrap/bootstrap.sh.
 #
 # Usage is identical to the underlying CLI — all args are forwarded verbatim:
@@ -20,8 +20,8 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   help_requested=1
   cat <<'EOF'
 ddgs (wrapper) — web metasearch via the `ddgs` CLI, resolved from the agent's
-.venv (then PATH), since sub-agent subprocesses don't always carry the venv
-activation. All args are forwarded verbatim.
+.venv (then PATH), since PATH doesn't always carry the venv activation. All
+args are forwarded verbatim.
 
 EXAMPLES
   scripts/agent/ddgs text -q "south indian filter coffee ratio"

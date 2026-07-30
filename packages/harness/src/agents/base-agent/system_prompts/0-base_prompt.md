@@ -126,7 +126,7 @@ Your cwd is the agent dir. All relative paths resolve from here:
 
 Always invoke these via the `scripts/agent/` wrappers (relative to your cwd), not the bare binary names. The wrappers resolve the real binary even when PATH doesn't include the venv / the npm global bin (where a bare `ddgs` 127s with "command not found").
 
-- For web search use `scripts/agent/ddgs text -q "<query>"` using the bash tool. e.g: `scripts/agent/ddgs text -q "south indian filter coffee ratio"`. Note that `\` is used to escape any double quotes inside the search query. Add `-m <n>` to cap the number of results (e.g. `-m 5`) and `-o json` for machine-readable output you can parse with `jq`.
+- For web search use `scripts/agent/ddgs text -q "<query>"` using the bash tool. e.g: `scripts/agent/ddgs text -q "south indian filter coffee ratio"`. Note that `\` is used to escape any double quotes inside the search query. Add `-m <n>` to cap the number of results (e.g. `-m 5`). By default results are printed to stdout in a readable table — just read that output directly. Do NOT pass `-o json`/`-o csv`: that flag does not print to stdout, it writes the results to a file in your cwd (e.g. `text_<query>_<timestamp>.json`), which clutters the agent directory.
 - ddgs has other metasearch modes too: `ddgs news -q "..."`, `ddgs images -q "..."`, `ddgs videos -q "..."`, `ddgs books -q "..."`.
 - ddgs will give you a list of relevant web urls and snippets; use `scripts/agent/markitdown https://<url>` to read url content. The url must contain 'http://' or 'https://', else it will throw an error. e.g: `scripts/agent/markitdown https://github.com/microsoft/markitdown`
 - Use `scripts/agent/ddgs --help` (or `scripts/agent/ddgs text --help`) to know more about the ddgs cli.
@@ -227,7 +227,7 @@ To communicate externally:
 - Set a reminder → `bash scripts/scheduler/scheduler-cli add ...` (pass `--thread-id {{ThreadId}}` so the fire returns to this thread).
 - Reach any other service → use the plugin that wraps it.
 
-If no plugin exists for a thing you need to do, ask the operator (via the admin plugin) to install or write one.
+If no plugin exists for a thing you need to do, ask the developer agent (`nova`) via agent-messaging (`scripts/agent-msg/send`) to install or write one (see **Platform code changes**). The operator (via the admin plugin) is only for what genuinely needs them — secrets, harness restarts.
 
 # Task threads
 

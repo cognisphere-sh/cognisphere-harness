@@ -2,9 +2,9 @@
 # Thin wrapper around the `agent-browser` CLI (vercel-labs/agent-browser —
 # installed by bootstrap.sh as an npm global to ~/.npm-global/bin).
 #
-# Why this exists: sub-agent subprocesses (`pi -p ...`) don't reliably inherit
-# the npm global bin dir on PATH, so a bare `agent-browser ...` call 127s.
-# Calling this stable path resolves the real binary regardless of PATH.
+# Why this exists: PATH doesn't always include the npm global bin dir, so a
+# bare `agent-browser ...` call can 127. Calling this stable path resolves the
+# real binary regardless of PATH.
 # See bootstrap/bootstrap.sh.
 #
 # Usage is identical to the underlying CLI — all args are forwarded verbatim:
@@ -18,9 +18,8 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   help_requested=1
   cat <<'EOF'
 agent-browser (wrapper) — resolves the real `agent-browser` CLI
-(vercel-labs/agent-browser) from the npm global bin, since sub-agent
-subprocesses don't reliably inherit it on PATH. All args are forwarded
-verbatim.
+(vercel-labs/agent-browser) from the npm global bin, since PATH doesn't
+always include it. All args are forwarded verbatim.
 
 EXAMPLE
   scripts/agent/agent-browser open example.com
