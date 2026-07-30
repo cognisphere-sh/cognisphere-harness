@@ -18,6 +18,31 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.5]
+
+### Changed
+
+- **Task-thread ids are now `<ThreadId>-§-[TASK]-§-<task-slug>`** (parent
+  thread id, literal `[TASK]` marker, kebab-case task slug, joined by
+  `-§-`) instead of the ambiguous `<ThreadId>-<task-slug>`. Prompts and
+  the session-reader help teach the new form; thread ids remain opaque to
+  the queue/runner, so no data migration — existing old-format task
+  threads keep working, they just render as ordinary threads in the UI.
+- **The admin web UI groups task threads under their parent thread.** The
+  thread list no longer shows task threads as top-level rows; each parent
+  gets a `tasks (N)` dropdown listing them by task slug (select/delete),
+  the mobile picker indents them under the parent, and search matches a
+  parent by its task threads. Task threads with a missing parent fall
+  back to the top-level list.
+
+### Breaking changes
+
+- Task-thread delegation section rewritten for the new
+  `<ThreadId>-§-[TASK]-§-<task-slug>` id format.   [affects: agents/*/system_prompts/0-base_prompt.md]
+- Task-thread spawn note updated to the new id format.   [affects: agents/*/system_prompts/plugin-agent-messaging.md]
+- `--help` text: task-thread session dir example updated to the new id
+  format.   [affects: agents/*/scripts/agent/session-reader]
+
 ## [0.8.4]
 
 ### Changed
