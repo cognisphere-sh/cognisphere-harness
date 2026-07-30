@@ -33,6 +33,35 @@ const changelog = readFileSync(resolve(root, "CHANGELOG.md"), "utf8");
 if (changelog.includes(`## [${version}]`)) ok(`CHANGELOG.md has a [${version}] section`);
 else fail(`CHANGELOG.md has no "## [${version}]" section — add release notes first`);
 
+// 1b. Shipped-artifact changes since the last release must be reflected in
+// this version's CHANGELOG section: files forked into agent dirs (agents/
+// template + plugin seeds) need a "### Breaking changes" block so the upgrade
+// skill grafts them into existing forks; home-template/.claude-skills files
+// are refreshed wholesale on upgrade, so they only get an informational note.
+let prevTag = "";
+try {
+  prevTag = execFileSync("git", ["describe", "--tags", "--abbrev=0"], { cwd: root, encoding: "utf8" }).trim();
+} catch { /* first release — nothing to diff against */ }
+if (prevTag) {
+  const changed = execFileSync("git", ["diff", "--name-only", prevTag], { cwd: root, encoding: "utf8" })
+    .split("\n").filter(Boolean);
+  const seeded = changed.filter((f) =>
+    f.startsWith("packages/harness/src/agents/") ||
+    /^packages\/harness\/src\/plugins\/[^/]+\/seed\//.test(f));
+  const scaffold = changed.filter((f) =>
+    f.startsWith("packages/harness/home-template/") || f.startsWith(".claude/skills/"));
+  // ponytail: block presence only — matching [affects:] globs to paths is not worth it
+  const section = changelog.split(`## [${version}]`)[1]?.split(/\n## \[/)[0] ?? "";
+  if (seeded.length) {
+    if (section.includes("### Breaking changes"))
+      ok(`seeded-file changes since ${prevTag} have a Breaking changes block`);
+    else
+      fail(`seeded files changed since ${prevTag} but [${version}] has no "### Breaking changes" block (the upgrade skill needs [affects:] entries to reach existing forks):\n    ${seeded.join("\n    ")}`);
+  }
+  if (scaffold.length)
+    console.log(`ℹ scaffold/skill files changed since ${prevTag} (auto-refreshed on upgrade — worth a "### Changed" note):\n    ${scaffold.join("\n    ")}`);
+}
+
 // 2. Tag must not already exist (existing tag ⇒ already released).
 const tags = execFileSync("git", ["tag"], { cwd: root, encoding: "utf8" }).split("\n");
 if (tags.includes(tag)) fail(`git tag ${tag} already exists — bump the version before releasing`);

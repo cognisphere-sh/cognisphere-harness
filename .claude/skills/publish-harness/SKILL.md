@@ -49,6 +49,20 @@ root). If the release changes a harness's on-disk artifacts, include a
 `### Breaking changes` block — the **upgrade skill** parses it
 (`- <what changed>   [affects: <path glob>]`). See the file's own header.
 
+**Shipped-artifact rule** — diff since the last release
+(`git diff --name-only $(git describe --tags --abbrev=0)`) and reflect every
+hit in the section:
+
+- `packages/harness/src/agents/**` or `packages/harness/src/plugins/*/seed/**`
+  (files forked into agent dirs at create time) → each change needs a
+  `### Breaking changes` entry with an `[affects:]` glob — that's the only way
+  the upgrade skill reaches existing forks. **Preflight fails without the
+  block.**
+- `packages/harness/home-template/**` or `.claude/skills/**` → note under
+  `### Changed`; the upgrade skill refreshes these wholesale from the
+  installed package, so the note is for the operator reviewing the upgrade
+  diff, not machine-parsed.
+
 ### 3. Preflight
 
 ```bash

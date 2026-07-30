@@ -337,7 +337,12 @@ a fixed machine-readable **Breaking changes** block the skill keys on:
 1. Reads `harness.json.version` (current) and the installed package version
    (target).
 2. Collects every `CHANGELOG.md` section in `(current, target]`.
-3. Proposes a concrete diff against the harness dir.
+3. Proposes a concrete diff against the harness dir, plus a wholesale refresh
+   of the harness-owned scaffold files from the installed package —
+   `scripts/`, `config.example`, `docs/base-harness/`, `.claude/skills/` —
+   so scaffold fixes reach existing homes even without a breaking-change
+   entry (user-owned files — `app/`, `docs/harness/`, `docs/app/`,
+   `CLAUDE.md`, `config` — are never touched).
 4. **Waits for user approval**, then applies it and bumps
    `harness.json.version`.
 

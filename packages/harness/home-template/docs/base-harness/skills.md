@@ -12,8 +12,10 @@ Migrates this harness data dir after a version bump of
 code; the skill reads the breaking-change window from the package
 `CHANGELOG.md`, proposes a diff against `harness/` (agents, plugins, config),
 applies it after approval, and stamps `harness.json.version`. It also
-refreshes `docs/base-harness/CHANGELOG.md`. Invoke when asked to "upgrade the
-harness".
+refreshes the harness-owned scaffold files from the installed package —
+`scripts/`, `config.example`, `docs/base-harness/`, `.claude/skills/` —
+leaving user-owned files (`app/`, `docs/harness/`, `docs/app/`, `CLAUDE.md`,
+`config`) alone. Invoke when asked to "upgrade the harness".
 
 ## `create-plugin`
 

@@ -76,7 +76,28 @@ determine the exact edits. Common shapes:
 
 Keep edits **surgical** — only what each entry requires (CLAUDE.md §3).
 
-### 4. Show the diff and get approval
+### 4. Refresh the harness-owned scaffold files
+
+Independent of the breaking-change entries, re-copy every **harness-owned**
+scaffold file from the installed package, so the home tracks the shipped
+versions (fixes that never got a breaking-change entry still land):
+
+```bash
+PKG=harness/node_modules/@cognisphere-sh/cognisphere-harness   # or node_modules/… when cwd is the harness dir
+cp -R "$PKG/home-template/scripts/." scripts/
+cp "$PKG/home-template/config.example" config.example
+cp -R "$PKG/home-template/docs/base-harness/." docs/base-harness/
+cp "$PKG/CHANGELOG.md" docs/base-harness/CHANGELOG.md
+cp -R "$PKG/skills/." .claude/skills/
+```
+
+Local edits to these files show up as **reverted lines in the step-5 diff** —
+call them out and re-apply the deliberate ones on top. **User-owned files are
+never refreshed:** `app/`, `docs/harness/`, `docs/app/`, `CLAUDE.md`, `config`,
+and everything under the harness data dir (that's what the breaking-change
+entries scope).
+
+### 5. Show the diff and get approval
 
 ```bash
 git -C . add -A && git -C . --no-pager diff --staged
@@ -85,7 +106,7 @@ git -C . add -A && git -C . --no-pager diff --staged
 Summarize the plan and the diff. **Wait for explicit user approval.** Do not
 proceed on your own.
 
-### 5. Finalize
+### 6. Finalize
 
 After the user approves the applied edits, stamp the data version so it matches
 the code:
@@ -94,22 +115,14 @@ the code:
 cognisphere upgrade --set-version <code-version>
 ```
 
-If the home has `docs/base-harness/` (newer scaffolds), refresh the shipped
-reference docs and changelog from the installed package so the developer agent
-sees the new version's docs:
-
-```bash
-cp -R harness/node_modules/@cognisphere-sh/cognisphere-harness/home-template/docs/base-harness/. docs/base-harness/
-cp harness/node_modules/@cognisphere-sh/cognisphere-harness/CHANGELOG.md docs/base-harness/CHANGELOG.md
-```
-
 Then suggest the operator review and commit the change, and restart the
 server (`cognisphere dev`/`serve` locally, or `sudo ./scripts/server.sh restart`
 on a deployed host) so the running runners pick up the migrated config.
 
 ## Guardrails
 
-- Never widen scope beyond the `[affects:]` globs.
+- Inside the harness data dir, never widen scope beyond the `[affects:]`
+  globs; outside it, touch only the step-4 scaffold list.
 - Never edit or print `.secrets/` values; only describe required operator edits.
 - If a breaking change is ambiguous against this harness's actual files, stop and
   ask rather than guessing.
