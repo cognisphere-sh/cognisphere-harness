@@ -18,6 +18,24 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.3]
+
+### Changed
+
+- **The upgrade skill now refreshes every harness-owned scaffold file on
+  upgrade** — `scripts/`, `config.example`, `docs/base-harness/`, and
+  `.claude/skills/` are re-copied wholesale from the installed package as
+  part of the reviewed migration diff, so scaffold fixes reach existing
+  homes even when a release didn't list them as breaking changes. User-owned
+  files (`app/`, `docs/harness/`, `docs/app/`, `CLAUDE.md`, `config`, and
+  the harness data dir) are never touched by the refresh.
+- **The publish preflight gates shipped-artifact changes.** Changes since the
+  last release to files forked into agent dirs (`src/agents/**`,
+  `src/plugins/*/seed/**`) fail preflight unless the version's CHANGELOG
+  section carries a `### Breaking changes` block; changed scaffold/skill
+  files are listed as a reminder to note them under `### Changed`.
+- Shipped docs updated to match (`docs/base-harness/skills.md`).
+
 ## [0.8.2]
 
 ### Fixed
