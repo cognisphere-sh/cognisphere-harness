@@ -18,6 +18,19 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.4]
+
+### Changed
+
+- **The upgrade skill's scaffold refresh now audits local edits first and
+  guarantees they survive.** Step 4 is audit → copy → re-apply: diff every
+  scaffold area against the installed package before copying, use the home's
+  git history to separate local edits from upstream changes, list every
+  local edit in the summary, then re-apply them on top of the fresh copies —
+  so the approval diff shows upstream changes plus intact local edits. A
+  local edit is dropped only with explicit operator approval; when a
+  difference can't be classified, the skill stops and asks.
+
 ## [0.8.3]
 
 ### Changed
