@@ -78,12 +78,33 @@ Keep edits **surgical** — only what each entry requires (CLAUDE.md §3).
 
 ### 4. Refresh the harness-owned scaffold files
 
-Independent of the breaking-change entries, re-copy every **harness-owned**
-scaffold file from the installed package, so the home tracks the shipped
-versions (fixes that never got a breaking-change entry still land):
+Independent of the breaking-change entries, the home's **harness-owned**
+scaffold files are brought up to the shipped versions (fixes that never got a
+breaking-change entry still land). The refresh must **never lose a local
+edit** — audit first, copy second, re-apply third:
+
+**4a. Audit local changes before copying.** Diff every scaffold area against
+the installed package and record what differs:
 
 ```bash
 PKG=harness/node_modules/@cognisphere-sh/cognisphere-harness   # or node_modules/… when cwd is the harness dir
+diff -ru scripts/ "$PKG/home-template/scripts/"
+diff -u  config.example "$PKG/home-template/config.example"
+diff -ru docs/base-harness/ "$PKG/home-template/docs/base-harness/"
+diff -ru .claude/skills/ "$PKG/skills/"
+```
+
+Separate the differences into **upstream changes** (the refresh should bring
+them in) and **local edits** (the home deliberately diverged). The home's git
+history is the arbiter — `git log --oneline -- scripts/ config.example
+.claude/skills/` — commits after the scaffold/last upgrade are local edits.
+**List every local edit in your summary** (file, what it changes, which
+commit). If you can't tell whether a difference is local or upstream, stop
+and ask — never guess an edit away.
+
+**4b. Copy** the shipped versions over:
+
+```bash
 cp -R "$PKG/home-template/scripts/." scripts/
 cp "$PKG/home-template/config.example" config.example
 cp -R "$PKG/home-template/docs/base-harness/." docs/base-harness/
@@ -91,11 +112,13 @@ cp "$PKG/CHANGELOG.md" docs/base-harness/CHANGELOG.md
 cp -R "$PKG/skills/." .claude/skills/
 ```
 
-Local edits to these files show up as **reverted lines in the step-5 diff** —
-call them out and re-apply the deliberate ones on top. **User-owned files are
-never refreshed:** `app/`, `docs/harness/`, `docs/app/`, `CLAUDE.md`, `config`,
-and everything under the harness data dir (that's what the breaking-change
-entries scope).
+**4c. Re-apply every local edit from 4a on top** of the fresh copies, so the
+step-5 diff shows only genuine upstream changes plus intact local edits. A
+local edit is dropped only when the operator explicitly approves dropping it.
+
+**User-owned files are never refreshed:** `app/`, `docs/harness/`,
+`docs/app/`, `CLAUDE.md`, `config`, and everything under the harness data dir
+(that's what the breaking-change entries scope).
 
 ### 5. Show the diff and get approval
 
