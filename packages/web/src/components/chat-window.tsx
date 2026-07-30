@@ -64,11 +64,13 @@ export function ChatWindow({ agentId }: Props) {
     sessionId: string;
   } | null>(null);
 
-  // Deep-link target from the events tab: `?thread=<>&session=<>&entry=<>`.
-  // We pre-select the thread/session, then scroll the matching entry into
-  // view once the session JSONL loads. Each unique link triggers exactly
-  // one consume (keyed on the param values) so clicking a *different*
-  // event link re-fires; clicking the same one twice doesn't.
+  // Deep-link target: `?thread=<>&session=<>&entry=<>` from the events tab,
+  // or thread-only `?thread=<>` from agent-message links (session resolved
+  // from the threads list once it loads). We pre-select the thread/session,
+  // then scroll the matching entry into view once the session JSONL loads.
+  // Each unique link triggers exactly one consume (keyed on the param
+  // values) so clicking a *different* event link re-fires; clicking the
+  // same one twice doesn't.
   const [searchParams, setSearchParams] = useSearchParams();
   const linkThread = searchParams.get("thread");
   const linkSession = searchParams.get("session");
@@ -76,11 +78,18 @@ export function ChatWindow({ agentId }: Props) {
   const [highlightEntryId, setHighlightEntryId] = useState<string | null>(null);
   const lastConsumedKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!linkThread || !linkSession) return;
-    const key = `${linkThread}::${linkSession}::${linkEntry ?? ""}`;
+    if (!linkThread) return;
+    let session = linkSession;
+    if (!session) {
+      if (!threadsData) return; // wait for the threads list, then resolve
+      const t = threads.find((x) => x.threadId === linkThread);
+      // Unknown thread → sessionId "" (the pending-new-thread sentinel).
+      session = (t && pickThreadSession(t)) || "";
+    }
+    const key = `${linkThread}::${session}::${linkEntry ?? ""}`;
     if (lastConsumedKeyRef.current === key) return;
     lastConsumedKeyRef.current = key;
-    setSelected({ threadId: linkThread, sessionId: linkSession });
+    setSelected({ threadId: linkThread, sessionId: session });
     if (linkEntry) setHighlightEntryId(linkEntry);
     // Strip the params so a subsequent thread switch isn't fought.
     const next = new URLSearchParams(searchParams);
@@ -88,7 +97,7 @@ export function ChatWindow({ agentId }: Props) {
     next.delete("session");
     next.delete("entry");
     setSearchParams(next, { replace: true });
-  }, [linkThread, linkSession, linkEntry, searchParams, setSearchParams]);
+  }, [linkThread, linkSession, linkEntry, threads, threadsData, searchParams, setSearchParams]);
 
   // Default selection: first thread, its active (canonical) session.
   // Falls back to the most-recent on-disk session for legacy threads
@@ -645,28 +654,16 @@ function UsagePanel({
     );
   }
   if (!data) return null;
-  const empty =
-    data.main.models.length === 0 &&
-    data.subagents.every((s) => s.models.length === 0);
-  if (empty) {
+  if (data.main.models.length === 0) {
     return (
       <div className="grid h-full place-items-center p-6 text-sm text-muted-foreground">
         No usage recorded yet for this thread.
       </div>
     );
   }
-  const allAgents: UsageAgent[] = [data.main, ...data.subagents];
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <OverallTable agents={allAgents} />
-      <UsageAgentSection title="Main agent" agent={data.main} />
-      {data.subagents.map((s) => (
-        <UsageAgentSection
-          key={s.agent}
-          title={`Sub-agent: ${s.agent}`}
-          agent={s}
-        />
-      ))}
+      <UsageAgentSection title="This thread" agent={data.main} />
     </div>
   );
 }
@@ -845,97 +842,6 @@ function UsageTable({ agent }: { agent: UsageAgent }) {
         </tfoot>
       </table>
     </div>
-  );
-}
-
-/** Summary table at the top of the Usage panel: one row per agent
- *  (main + each sub-agent), no per-model breakdown, plus a grand-total
- *  footer row. */
-function OverallTable({ agents }: { agents: UsageAgent[] }) {
-  const perAgent = agents.map((a) => ({ agent: a, sum: sumAgent(a) }));
-  const grand = perAgent.reduce(
-    (acc, { sum }) => ({
-      input: acc.input + sum.input,
-      output: acc.output + sum.output,
-      cacheRead: acc.cacheRead + sum.cacheRead,
-      cacheWrite: acc.cacheWrite + sum.cacheWrite,
-      totalCost: acc.totalCost + sum.totalCost,
-      costInput: acc.costInput + sum.costInput,
-      costOutput: acc.costOutput + sum.costOutput,
-      costCacheRead: acc.costCacheRead + sum.costCacheRead,
-      costCacheWrite: acc.costCacheWrite + sum.costCacheWrite,
-    }),
-    {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalCost: 0,
-      costInput: 0,
-      costOutput: 0,
-      costCacheRead: 0,
-      costCacheWrite: 0,
-    },
-  );
-  return (
-    <section>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Overall
-      </h3>
-      <div className="overflow-x-auto rounded-md border">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/40 text-muted-foreground">
-            <tr className="text-left">
-              <th className="px-3 py-2 font-medium">Agent</th>
-              <th className="px-3 py-2 text-right font-medium">Input</th>
-              <th className="px-3 py-2 text-right font-medium">Output</th>
-              <th className="px-3 py-2 text-right font-medium">Cache Write</th>
-              <th className="px-3 py-2 text-right font-medium">Cache Read</th>
-              <th className="px-3 py-2 text-right font-medium">Total Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {perAgent.map(({ agent, sum }) => (
-              <tr key={agent.agent} className="border-t align-top">
-                <td className="px-3 py-2 font-mono">{agent.agent}</td>
-                <TokensCostCell tokens={sum.input} cost={sum.costInput} />
-                <TokensCostCell tokens={sum.output} cost={sum.costOutput} />
-                <TokensCostCell
-                  tokens={sum.cacheWrite}
-                  cost={sum.costCacheWrite}
-                />
-                <TokensCostCell
-                  tokens={sum.cacheRead}
-                  cost={sum.costCacheRead}
-                />
-                <CostCell cost={sum.totalCost} />
-              </tr>
-            ))}
-          </tbody>
-          {perAgent.length > 1 && (
-            <tfoot>
-              <tr className="border-t bg-muted/20 font-medium">
-                <td className="px-3 py-2">Total</td>
-                <TokensCostCell tokens={grand.input} cost={grand.costInput} />
-                <TokensCostCell
-                  tokens={grand.output}
-                  cost={grand.costOutput}
-                />
-                <TokensCostCell
-                  tokens={grand.cacheWrite}
-                  cost={grand.costCacheWrite}
-                />
-                <TokensCostCell
-                  tokens={grand.cacheRead}
-                  cost={grand.costCacheRead}
-                />
-                <CostCell cost={grand.totalCost} />
-              </tr>
-            </tfoot>
-          )}
-        </table>
-      </div>
-    </section>
   );
 }
 
@@ -1385,7 +1291,7 @@ function ThreadRow({
   label: string;
   sublabel: string | null;
   lastContext: LastContextInfo | null;
-  /** Sum of cost.total across main + every sub-agent jsonl, `0` when
+  /** Sum of cost.total across every session jsonl in the thread, `0` when
    *  nothing has spent yet, `null` while the server cache is warming. */
   totalCost: number | null;
   selected: boolean;
@@ -1431,7 +1337,7 @@ function ThreadRow({
             {totalCost != null && totalCost > 0 && (
               <span
                 className="font-mono text-[10px] tabular-nums text-muted-foreground"
-                title="Total spend across main agent + all sub-agents"
+                title="Total spend for this thread"
               >
                 {formatCost(totalCost)}
               </span>

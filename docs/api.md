@@ -247,7 +247,7 @@ compatibility with future settings that *would* need a full restart.
 |---|---|---|
 | GET | `/api/agents/:id/sessions` | List threads under `<agent>/sessions/` and their `.jsonl` files, newest-first. |
 | GET | `/api/agents/:id/sessions/:threadId/:sessionId` | Read the JSONL file as an array of parsed entries. |
-| GET | `/api/agents/:id/sessions/:threadId/usage` | Per-(agent, model) token + cost totals for the thread. Aggregates every assistant message in every `*.jsonl` under `<agent>/sessions/<threadId>/` (main agent) and `<agent>/sessions/<threadId>/subagents/*/` (one entry per sub-agent dir). |
+| GET | `/api/agents/:id/sessions/:threadId/usage` | Per-model token + cost totals for the thread. Aggregates every assistant message in every `*.jsonl` under `<agent>/sessions/<threadId>/`. |
 | PUT | `/api/agents/:id/sessions/:threadId/model` | Set or clear the thread's model override. Takes effect on the next batch (no agent reload). |
 | DELETE | `/api/agents/:id/sessions/:threadId` | Permanently remove a thread — drops every `events` row for the thread, its `threads` row, and the on-disk `<agent>/sessions/<threadId>/` directory (all sessions). Returns `409` if a batch is in-flight; abort it first. |
 
@@ -288,8 +288,7 @@ assistant message exists yet (or it's older than the tail window);
 [§7](#7-models--apimodels)).
 
 `totalCost` is the sum of `usage.cost.total` across every assistant
-message in every session file in the thread (main agent + every
-sub-agent dir under `subagents/`). Per-file totals are cached by
+message in every session file in the thread. Per-file totals are cached by
 `(path, mtimeMs)` so unchanged jsonls aren't re-parsed on each 5s
 poll. `0` when no assistant messages have landed yet.
 
@@ -362,21 +361,16 @@ Usage response:
       "contextWindow": 200000,
       "model": "anthropic/claude-sonnet-4-6"
     }
-  },
-  "subagents": [
-    { "agent": "<subAgentId>", "models": [ ... ], "lastContext": { ... } }
-  ]
+  }
 }
 ```
 
 One row per distinct `<provider>/<model>` — a `model_change` mid-session
-yields multiple rows. Sub-agents are discovered by scanning
-`<agent>/sessions/<threadId>/subagents/*/`; the directory name is used
-as the `agent` label. Tokens and costs come from the `usage` block
+yields multiple rows. Tokens and costs come from the `usage` block
 `pi-ai` writes onto each assistant message; messages without a `usage`
 block (e.g. errored before the API returned) are skipped silently.
 `lastContext` tracks the highest-timestamp non-aborted assistant
-message seen across that agent's session files (same shape as the
+message seen across the thread's session files (same shape as the
 threads-list field).
 
 ### Events stream

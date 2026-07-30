@@ -8,7 +8,7 @@
  *
  * `PKG_ROOT` is the package root (holds `package.json` and the bundled
  * `dist-web/` + `CHANGELOG.md`); `SRC_ROOT` is `src/` inside it (the engine,
- * `plugins/`, and `base-agent/`).
+ * `plugins/`, and `agents/`).
  */
 import {
   cpSync,
@@ -35,11 +35,11 @@ const SRC_ROOT = resolve(HERE, "..");
 export const BUILTIN_PLUGINS_DIR = join(SRC_ROOT, "plugins");
 
 /** The single base template every agent forks from. */
-export const BASE_AGENT_DIR = join(SRC_ROOT, "base-agent");
+export const BASE_AGENT_DIR = join(SRC_ROOT, "agents", "base-agent");
 
 /** Overlay applied on top of the base template for the developer agent
- *  (`agent new --dev`; `init` creates `dory` from it). */
-export const DEV_AGENT_DIR = join(SRC_ROOT, "dev-agent");
+ *  (`agent new nova --dev`; `init` creates it). */
+export const DEV_AGENT_DIR = join(SRC_ROOT, "agents", "nova");
 
 /** The server process entrypoint. */
 export const MAIN_TS = join(SRC_ROOT, "core", "main.ts");
@@ -51,8 +51,9 @@ export const CORE_PLUGINS = new Set<string>(CORE_PLUGIN_IDS);
 /** The home-facing cognisphere skills shipped with the package. */
 export const HOME_SKILL_IDS = ["cognisphere-upgrade", "create-plugin"];
 
-/** Default id of the developer agent `init` creates (`--dev-agent` overrides). */
-export const DEFAULT_DEV_AGENT = "dory";
+/** The developer agent's fixed id. Every home's dev agent is named this;
+ *  the name is reserved — no other agent may use it. */
+export const DEV_AGENT_ID = "nova";
 
 /** Root of the shipped skills — the package's bundled `skills/` (prepack),
  *  with a monorepo fallback for in-repo dev runs (same pattern as the

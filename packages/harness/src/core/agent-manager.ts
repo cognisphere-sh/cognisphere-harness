@@ -371,7 +371,7 @@ export class AgentManager {
     const dir = agentDir(this.cfg, inst.id);
     // Seed this agent's roster fragment (write-if-absent — operator edits win).
     writeAgentDirectory(agentsRoot(this.cfg), inst.id, dir);
-    // Core plugins (admin, scheduler) are auto-installed on every agent —
+    // Core plugins (admin, scheduler, agent-messaging) are auto-installed on every agent —
     // always started regardless of the agent's plugins dir, then unioned with
     // any user-installed plugins found on disk.
     const installedPluginIds = [
@@ -947,7 +947,7 @@ function validateAndDefault(
 }
 
 /**
- * Seed `<selfDir>/system_prompts/0.3-agent-directory.md` — the roster fragment
+ * Seed `<selfDir>/system_prompts/0.1-agent-directory.md` — the roster fragment
  * that tells this agent who else is in the harness and how to message them.
  * Built from every agent.json on disk (so it's complete regardless of load
  * order) and written only when absent, so operator edits survive restarts.
@@ -955,7 +955,7 @@ function validateAndDefault(
  * ponytail: write-if-absent, not regenerated. Adding/renaming an agent leaves
  *   existing rosters stale until their file is deleted (or hand-edited); the
  *   new agent still gets a complete one. Fine while agents are added rarely —
- *   `rm system_prompts/0.3-agent-directory.md` regenerates on next start.
+ *   `rm system_prompts/0.1-agent-directory.md` regenerates on next start.
  */
 function writeAgentDirectory(
   agentsDir: string,
@@ -982,7 +982,7 @@ function writeAgentDirectory(
   // a full roster) only once a second agent exists.
   if (others.length === 0) return;
 
-  const dest = join(selfDir, "system_prompts", "0.3-agent-directory.md");
+  const dest = join(selfDir, "system_prompts", "0.1-agent-directory.md");
   if (existsSync(dest)) return;
 
   const lines = others.map((a) => {
@@ -993,7 +993,7 @@ function writeAgentDirectory(
   const body = `# Other agents in this harness
 
 The other agents running in this deployment. To hand work to one or reply to
-it, use the agent-messaging plugin (if installed on you):
+it, use the agent-messaging plugin:
 \`scripts/agent-msg/send --to-agent <id> --thread-id <theirThread> --message "…"\`.
 
 ${lines.join("\n")}

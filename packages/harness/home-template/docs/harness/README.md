@@ -12,9 +12,9 @@ plugin (`plugin-<id>.md` — what it integrates, config, seeded scripts).
 
 ## Agents
 
-- the developer agent (default id `dory`, shipped with the home). Telegram-only; owns
-  and modifies this home's code and keeps these docs current. Send `/reset`
-  on Telegram to clear its context.
+- the developer agent (`nova`, shipped with the home). Owns and modifies this
+  home's code and keeps these docs current; reachable from other agents via
+  agent-messaging (human channels are opt-in plugins).
 
 ## Plugins
 

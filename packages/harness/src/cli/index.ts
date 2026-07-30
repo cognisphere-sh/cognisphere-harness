@@ -15,10 +15,11 @@ const USAGE = `cognisphere — multi-agent harness CLI (v${packageVersion()})
 Usage: cognisphere <command> [args]
 
 Scaffold
-  init <name> [--timezone <tz>] [--root <dir>] [--dev-agent <name>]
+  init <name> [--timezone <tz>] [--root <dir>]
                                                create an app home (harness/ + app/ + scripts/;
-                                               --dev-agent names the developer agent, default "dory")
-  agent new <name> [--dev]                     fork the base template (--dev: developer-agent overlay)
+                                               includes the developer agent "nova")
+  agent new <name> [--dev]                     fork the base template (--dev: developer-agent overlay;
+                                               the dev agent is always named "nova", and that name is reserved)
   plugin add <id>                              fork a catalog plugin
 
 Run (deployment is scripts/setup-server.sh + scripts/server.sh in the app home)

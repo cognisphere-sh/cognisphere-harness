@@ -78,8 +78,8 @@ init <name>` scaffolds it:
     ├── harness.json            → { "version": "0.3.0", "timezone": "UTC" }
     ├── .secrets/               → gitignored (secrets.json, models.json, users.json, session-key)
     ├── agents/                 → forked from base-agent, edited freely, git-tracked
-    │   └── dory/                 the developer agent, pre-created by init
-    │                             (default name; `--dev-agent` renames — §4)
+    │   └── nova/                 the developer agent, pre-created by init
+    │                             (fixed, reserved name — §4)
     └── plugins/                → forked from the catalog, git-tracked
 ```
 
@@ -122,9 +122,10 @@ packages/
 │       │   └── main.ts       ← process entrypoint + HTTP route wiring
 │       ├── api/              ← HTTP route handlers (/api, /admin, /webhook)
 │       ├── cli/              ← the `cognisphere` CLI (init, agent, plugin, dev, serve, upgrade)
-│       ├── plugins/          ← admin, scheduler (core) + telegram, gws (catalog)
-│       ├── base-agent/       ← the single base template every agent forks from
-│       └── dev-agent/        ← overlay for the developer agent (§4)
+│       ├── plugins/          ← admin, scheduler, agent-messaging (core) + telegram, gws (catalog)
+│       └── agents/
+│           ├── base-agent/   ← the single base template every agent forks from
+│           └── nova/         ← overlay for the developer agent (§4)
 └── web/                      ← cognisphere-web (Vite/React UI → builds to dist)
 pnpm-workspace.yaml
 ```
@@ -148,7 +149,7 @@ to its own package is a contained move.
 ## 4. Agents & the base template
 
 - Every agent forks from **one** base template, shipped at
-  `packages/harness/src/base-agent/`. `cognisphere agent new <name>` copies it into the
+  `packages/harness/src/agents/base-agent/`. `cognisphere agent new <name>` copies it into the
   harness's `agents/<id>/`.
 - The forked copy is **owned by the harness** — git-tracked and edited freely
   (prompts, workspace, plugins).
@@ -158,27 +159,25 @@ to its own package is a contained move.
   agent descends from. The upgrade skill (§9) applies base-template breaking
   changes uniformly on top of the user's edits, with the git diff as the safety
   net.
-- **The developer agent.** `packages/harness/src/dev-agent/` is an overlay on
+- **The developer agent.** `packages/harness/src/agents/nova/` is an overlay on
   the base template: `agent new <name> --dev` forks the base, copies the
   overlay on top (the persona, `system_prompts/1-dev-agent.md`), installs the
   shipped cognisphere skills into the agent's own `skills/agent/` (pi only
   loads `<agentDir>/skills`, so the home-root `.claude/skills/` copies aren't
-  visible to agents), and enables two plugins: telegram (its only human
-  channel) and agent-messaging (so the harness's other agents can hand it
-  code/doc requests directly).
-  `init` pre-creates the developer agent this way in every home — named by
-  `--dev-agent <name>` (default `dory`). The name is baked at create time
-  into the `{{DevAgentId}}`/`{{DevAgentName}}` placeholders of
-  `0.1-main-agent.md` (every fork reads the existing dev agent's id off
-  `agent.json.devAgent`) and `1-dev-agent.md`. Dory's job is owning and modifying the
+  visible to agents). No plugin is pre-enabled: agent-messaging is a core
+  plugin on every agent, so the harness's other agents can hand it code/doc
+  requests directly; human channels (e.g. telegram) are opt-in.
+  `init` pre-creates the developer agent this way in every home — always
+  named `nova` (the id is frozen; `agent new` refuses the name for any other
+  agent, and the prompt templates reference `nova` literally — no
+  name baking). Nova's job is owning and modifying the
   home's code (agents, user plugins, the app — never the installed harness
   library) and keeping `docs/harness/` + `docs/app/` current; the base
-  template's main-agent prompt tells every *other* agent to pass platform
-  code-change requests to it. Telegram's `/reset` command wipes its
-  conversation context (thread delete via the plugin-context `resetThread`).
+  template's prompt tells every *other* agent to pass platform
+  code-change and software-install requests to it.
   The `--dev` scaffold stamps `devAgent: true` into the agent.json. Every
   agent gets the hand-off text (the "Platform code changes" section of
-  `0.1-main-agent.md`); who may
+  `0-base_prompt.md`); who may
   *message* the developer agent (or any agent) is governed by that agent's
   `agent-messaging` `allowMessageFrom` config (default `["*"]` — all
   in-harness senders), not a per-sender flag.
@@ -189,7 +188,7 @@ Two kinds of plugins, distinguished by whether the user is meant to fork them:
 
 | Kind | Plugins | Distribution | Editable |
 |---|---|---|---|
-| **Core** | `admin`, `scheduler` | bundled in the package, resolved from `node_modules` | no — forking is a footgun |
+| **Core** | `admin`, `scheduler`, `agent-messaging` | bundled in the package, resolved from `node_modules` | no — forking is a footgun |
 | **Catalog** | `telegram`, `gws`, future adapters | **forkable copies** | yes — copied into the harness |
 
 - The **catalog** lives at `packages/harness/src/plugins/` in the monorepo. `cognisphere
@@ -353,8 +352,8 @@ upgrade:
 
 | Command | Purpose |
 |---|---|
-| `cognisphere init <name>` | scaffold an **app home** at `./<name>` (cwd-relative; `--root <dir>` to override) — workspace root (`package.json`, `pnpm-workspace.yaml`, scope-only `.npmrc`, `.gitignore`), `CLAUDE.md`+`AGENT.md`, `docs/` (with the package CHANGELOG copied into `docs/base-harness/`), `scripts/` + `config.example` (§8), the `app/` placeholder, the `harness/` data dir (`harness.json`, `.secrets/` with a generated session-key, `package.json`, the developer agent (`--dev-agent <name>`, default `dory`), empty `plugins/`), the agent skills into `.claude/skills/`+`.agents/skills/`, git repo |
-| `cognisphere agent new <name> [--dev]` | fork `base-agent` into `agents/<name>/` + write a starter `agent.json`; `--dev` overlays the developer-agent persona and enables telegram (§4) |
+| `cognisphere init <name>` | scaffold an **app home** at `./<name>` (cwd-relative; `--root <dir>` to override) — workspace root (`package.json`, `pnpm-workspace.yaml`, scope-only `.npmrc`, `.gitignore`), `CLAUDE.md`+`AGENT.md`, `docs/` (with the package CHANGELOG copied into `docs/base-harness/`), `scripts/` + `config.example` (§8), the `app/` placeholder, the `harness/` data dir (`harness.json`, `.secrets/` with a generated session-key, `package.json`, the developer agent `nova`, empty `plugins/`), the agent skills into `.claude/skills/`+`.agents/skills/`, git repo |
+| `cognisphere agent new <name> [--dev]` | fork `base-agent` into `agents/<name>/` + write a starter `agent.json`; `--dev` overlays the developer-agent persona (§4) |
 | `cognisphere plugin add <id>` | fork a catalog plugin into `plugins/<id>/` (refuses core plugins) |
 | `cognisphere dev` | backend under `tsx --watch` **plus** the Vite dev server (HMR) when the web package is present (the monorepo); flags `--port <n>` (backend), `--web-port <n>` (Vite), `--no-web` (backend only). Vite proxies `/api`/`/admin`/`/webhook` to the backend. |
 | `cognisphere serve` | run the backend once (no watch) — the production entry the `<name>-harness` systemd unit execs; `--port <n>`, `--headless` (mount no web UI — API/webhook/admin only, for backend-only hosts). The backend otherwise serves the bundled UI (`dist-web/`), so production needs no separate web process. |

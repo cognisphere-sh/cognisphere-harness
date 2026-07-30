@@ -1,7 +1,7 @@
 /**
  * `cognisphere plugin add <id>` — fork a catalog plugin from the package into
  * the harness's `plugins/<id>/`, where it shadows the bundled copy and can be
- * edited (§5). Core plugins (admin, scheduler) are bundled-only and refused.
+ * edited (§5). Core plugins (admin, scheduler, agent-messaging) are bundled-only and refused.
  */
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";

@@ -6,7 +6,7 @@ import type { Plugin, PluginManifest } from "./types.js";
 
 /** Built-in plugins auto-installed on every agent (always started, regardless
  *  of the agent's plugins dir). `plugin add` refuses these ids. */
-export const CORE_PLUGIN_IDS = ["admin", "scheduler"] as const;
+export const CORE_PLUGIN_IDS = ["admin", "scheduler", "agent-messaging"] as const;
 
 export interface RegistryEntry {
   id: string;

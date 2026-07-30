@@ -216,9 +216,9 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
         ? readLastAssistantUsage(models, join(tDir, `${lastSessionId}.jsonl`))
         : null;
       // Sum cost.total across every assistant message in every session
-      // file (main + each sub-agent) so the sidebar can show running
-      // spend per thread. Per-file totals are cached by (path, mtime),
-      // so only new/changed jsonls are re-parsed on each poll.
+      // file so the sidebar can show running spend per thread. Per-file
+      // totals are cached by (path, mtime), so only new/changed jsonls
+      // are re-parsed on each poll.
       const totalCost = sumThreadTotalCost(tDir);
       threads.push({
         threadId: ent.name,
@@ -318,41 +318,20 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       return c.json({
         threadId,
         main: { agent: "main", models: [], lastContext: null },
-        subagents: [],
       });
     }
 
-    // Main agent: aggregate every *.jsonl directly under the thread dir.
-    // (Compaction creates new sessions in the same dir; we sum them all.)
+    // Aggregate every *.jsonl directly under the thread dir. (Compaction
+    // creates new sessions in the same dir; we sum them all.)
     const mainState = newAgentState();
     for (const f of readdirSync(tDir, { withFileTypes: true })) {
       if (!f.isFile() || !f.name.endsWith(".jsonl")) continue;
       aggregateAgentFile(join(tDir, f.name), mainState);
     }
 
-    // Sub-agents: one entry per `subagents/<subAgentId>/` directory, summing
-    // every *.jsonl inside it (sub-agents can be continued with `-c`, which
-    // appends to the same file or creates new sessions in the same dir).
-    const subagents: AgentUsage[] = [];
-    const subRoot = join(tDir, "subagents");
-    if (existsSync(subRoot)) {
-      for (const ent of readdirSync(subRoot, { withFileTypes: true })) {
-        if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
-        const subDir = join(subRoot, ent.name);
-        const subState = newAgentState();
-        for (const f of readdirSync(subDir, { withFileTypes: true })) {
-          if (!f.isFile() || !f.name.endsWith(".jsonl")) continue;
-          aggregateAgentFile(join(subDir, f.name), subState);
-        }
-        subagents.push(stateToAgentUsage(models, ent.name, subState));
-      }
-      subagents.sort((a, b) => a.agent.localeCompare(b.agent));
-    }
-
     return c.json({
       threadId,
       main: stateToAgentUsage(models, "main", mainState),
-      subagents,
     });
   });
 
@@ -758,29 +737,13 @@ function numField(obj: Record<string, unknown>, key: string): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-// Every jsonl under a thread directory: the main agent's session files
-// plus each sub-agent dir under `subagents/`.
-function* threadJsonlFiles(threadDir: string): Generator<string> {
-  for (const f of readdirSync(threadDir, { withFileTypes: true })) {
-    if (f.isFile() && f.name.endsWith(".jsonl")) yield join(threadDir, f.name);
-  }
-  const subRoot = join(threadDir, "subagents");
-  if (!existsSync(subRoot)) return;
-  for (const sub of readdirSync(subRoot, { withFileTypes: true })) {
-    if (!sub.isDirectory() || sub.name.startsWith(".")) continue;
-    const subDir = join(subRoot, sub.name);
-    for (const f of readdirSync(subDir, { withFileTypes: true })) {
-      if (f.isFile() && f.name.endsWith(".jsonl")) yield join(subDir, f.name);
-    }
-  }
-}
-
 /** Sum `cost.total` across every assistant message in every jsonl
- *  under the thread directory (main agent + every sub-agent dir). */
+ *  directly under the thread directory. */
 function sumThreadTotalCost(threadDir: string): number {
   let total = 0;
-  for (const filePath of threadJsonlFiles(threadDir)) {
-    total += sumFileTotalCostCached(filePath);
+  for (const f of readdirSync(threadDir, { withFileTypes: true })) {
+    if (!f.isFile() || !f.name.endsWith(".jsonl")) continue;
+    total += sumFileTotalCostCached(join(threadDir, f.name));
   }
   return total;
 }

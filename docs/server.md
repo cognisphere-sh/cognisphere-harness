@@ -139,9 +139,8 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 ├── .agents/skills/                   in by `cognisphere init` from the package
 ├── app/                          ← the user-facing app (placeholder until built)
 └── harness/                      ← the harness data dir documented below
-                                     (init pre-creates the developer agent —
-                                     telegram + agent-messaging;
-                                     `--dev-agent <name>`, default `dory`)
+                                     (init pre-creates the developer
+                                     agent — always named `nova`)
 ```
 
 ```
@@ -162,16 +161,13 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         │   └── requirements.txt
         ├── .venv/                ← created by bootstrap.sh; auto-activated
         ├── .vertex-sa.json       ← written at start when provider=google-vertex
-        ├── system_prompts/       ← concatenated (lex order) into the main agent's prompt
-        │   ├── 0-base_prompt.md  ← shared base context (all agents); also appended to sub-agents
-        │   ├── 0.1-main-agent.md ← main-agent-only role (threads, plugins, comms, sub-agents, dev-agent hand-off); vars baked at create
-        │   ├── 0.3-agent-directory.md ← roster of the OTHER agents (id + description);
+        ├── system_prompts/       ← concatenated (lex order) into the agent's prompt
+        │   ├── 0-base_prompt.md  ← the agent prompt (tools, workspace, threads, plugins, comms, task threads, dev-agent hand-off); vars baked at create
+        │   ├── 0.1-agent-directory.md ← roster of the OTHER agents (id + description);
         │   │                       written by the manager if absent, edits survive
         │   ├── 1-agent.md        ← persona, hand-written
         │   └── plugin-<id>.md    ← plugin seeds (when installed)
-        ├── scripts/agent/
-        │   ├── subagent          ← wrapper around `pi -p`; appends base + sub-agent prompt
-        │   └── sub-agent-prompt.md ← sub-agent-only role (NOT in system_prompts, so it never leaks into the main prompt)
+        ├── scripts/agent/        ← ddgs / markitdown / agent-browser / session-reader wrappers
         ├── workspace/            ← agent's scratch space
         │   ├── index.md
         │   ├── knowledge/
@@ -755,7 +751,7 @@ over the RPC stream — see §4.7) is **not** special-cased here: it ships as an
 ordinary seeded agent extension at `<agentDir>/extensions/harness-bridge.ts`
 and is picked up by the same `<agentDir>/extensions/` loop as any other
 agent extension. The canonical copy lives at
-`packages/harness/src/base-agent/extensions/harness-bridge.ts` and is copied
+`packages/harness/src/agents/base-agent/extensions/harness-bridge.ts` and is copied
 into each agent's `extensions/` dir at create time (like `0-base_prompt.md`);
 an agent missing it simply loses real-time entry capture (the runner falls
 back to its own `message_start` delivery count — §4.8). `--no-extensions` only
@@ -789,32 +785,6 @@ Env handed to pi:
   `VIRTUAL_ENV=<agentDir>/.venv`, delete `PYTHONHOME`.
 - `PI_AGENT_ID = agentId`.
 - `PI_WEBHOOK_BASE = ${serverBaseUrl}/webhook/${agentId}`.
-- `PI_SUBAGENT_PROVIDER` / `PI_SUBAGENT_MODEL` / `PI_SUBAGENT_THINKING` —
-  the agent's sub-agent model (`agentJson.subagentModel ?? agentJson.model`).
-  The `scripts/agent/subagent` wrapper turns these into
-  `--provider`/`--model`/`--thinking` on the `pi -p` children the agent
-  spawns, so sub-agents run on the configured model instead of pi's global
-  `settings.json` default. If `subagentModel` names a provider other than the
-  agent default, that provider's credentials are also injected (so the
-  sub-agent can authenticate); the agent default provider's key is already
-  present via `envSecrets`. On every spawn the wrapper sets the sub-agent's
-  system prompt from two files, passed as **paths**:
-  `--system-prompt system_prompts/0-base_prompt.md` (the shared base context
-  the main agent also gets) and
-  `--append-system-prompt scripts/agent/sub-agent-prompt.md` (the
-  sub-agent-only role — "stdout is your return value", stay scoped). pi reads
-  either flag's value as a file when it names one and composes
-  `<system-prompt>\n\n<append>`, so this is byte-identical to the shell-side
-  concatenation it replaces while keeping the prompt out of argv (§4.8.4:
-  `MAX_ARG_STRLEN`). `--system-prompt` still anchors the prompt, so pi's
-  default SYSTEM.md/built-in doesn't leak in. The main agent passes the
-  task-specific brief in the **message** (positional arg), not via
-  `--system-prompt` — so the brief lives in the session history and survives
-  re-invocation. The wrapper re-sets the system prompt on every call including
-  `-c`/`--continue`: pi does not persist the system prompt to the session
-  JSONL, so on resume it must be re-injected (same as the main agent's prompt
-  is re-passed on every `spawnPi`). The sub-agent role file lives outside
-  `system_prompts/` so it never leaks into the main agent's concatenated prompt.
 - All `envSecrets` (provider env from `models.json` ⨁ every secret
   under this agent flattened to bare keys, with collisions caught at
   AgentManager construction time — see §4.9).
@@ -897,8 +867,8 @@ swaps in a fresh runner constructed with the new env snapshot.
 
 1. `readdirSync(<agentDir>/system_prompts).filter(d.endsWith(".md")).sort()`.
    Every `.md` is included — all agents carry the developer-agent hand-off
-   (a "Platform code changes" section in `0.1-main-agent.md`) and, when
-   present, the `0.3-agent-directory.md` roster (§4.9: `writeAgentDirectory`
+   (a "Platform code changes" section in `0-base_prompt.md`) and, when
+   present, the `0.1-agent-directory.md` roster (§4.9: `writeAgentDirectory`
    seeds it if absent, listing the other agents' ids + descriptions).
 2. `readFileSync` each, trim trailing whitespace.
 3. Join with `\n\n-----\n\n-----\n\n`.
@@ -918,12 +888,10 @@ per-string cap).
 
 Agent-fixed `{{vars}}` (`AgentId`, `AgentName`, `AgentDir`, `Tools`,
 `Timezone`) are baked at agent-create time via `sed` (see
-`v0-deferred.md` §3.1); the CLI's `scaffoldAgent` additionally bakes
-`{{DevAgentId}}`/`{{DevAgentName}}` into `0.1-main-agent.md` (and
-`1-dev-agent.md` on a `--dev` fork) from the harness's dev agent's id.
-The only `{{var}}` left literal in the body is
-`{{ThreadId}}`; the appended `ThreadId: <id>` block resolves it for the
-model.
+`v0-deferred.md` §3.1). The developer agent's id is the literal `nova` in the
+prompt templates (frozen — no baking). The only `{{var}}` left literal in the
+body is `{{ThreadId}}`; the appended `ThreadId: <id>` block resolves it for
+the model.
 
 ### 4.9 AgentManager — `agent-manager.ts`
 
@@ -1091,9 +1059,8 @@ The shared type surface every component imports from. Notable shapes:
 - `AgentJson` — what `agent.json` deserializes to. `model: { provider,
   id, thinkingLevel? }`, `threadIdStrategy`, `maxConcurrentSlots?`,
   `maxAttempts?`, `description?` (one-line role blurb; seeds the
-  `0.3-agent-directory.md` roster other agents see), `devAgent?` (this
-  agent IS the developer agent — written by `agent new --dev`; used by
-  the CLI to bake the dev agent's name into forks' prompt fragments),
+  `0.1-agent-directory.md` roster other agents see), `devAgent?` (this
+  agent IS the developer agent — written by `agent new nova --dev`),
   optional `secretsSchema`
   for agent-level secrets, optional `configSchema` declaring the shape
   of `config` (validated with ajv `useDefaults` at start; per-property
@@ -1360,7 +1327,7 @@ without `manualStop` + fix + `manualStart`.
 ### 6.8 System prompt mostly baked at create-time
 
 **Decision**: the one remaining agent-fixed `{{var}}` (`Timezone`) is
-baked into `system_prompts/0.1-main-agent.md` via `sed` at agent
+baked into `system_prompts/0-base_prompt.md` via `sed` at agent
 creation. Identity (`AgentId`, `AgentName`) lives in the hand-written
 `1-agent.md` persona, not the prompt template. The runner only reads +
 concatenates files and appends `ThreadId` / `ThreadSessions` at the
@@ -1515,7 +1482,7 @@ See `v0-deferred.md` §3.1 for the manual recipe. Short version:
 ROOT=~/.cognisphere/default        # or wherever COGNISPHERE_ROOT_DIR points
 ID=dr-renu   NAME="Dr Renu"
 mkdir -p "$ROOT/agents/$ID"/{system_prompts,workspace,sessions,plugins}
-# write agent.json, sed-bake 0.1-main-agent.md, write 1-agent.md, copy
+# write agent.json, write 1-agent.md, copy
 # workspace/index.md and bootstrap/, run bootstrap.sh.
 # Restart server (or call the agents API to load the new dir).
 ```
@@ -1616,7 +1583,6 @@ bash   ~/.cognisphere/default/agents/$ID/bootstrap/bootstrap.sh
 Tracked in `v0-deferred.md` with re-introduction plans:
 
 - Admin agent + privileged `platform` plugin (CRUD over loopback).
-- Sub-agents (`pi -p` delegation; HLD §6.2, §7).
 - Prompt-template loading from `prompts/<plugin-or-agent>/`.
 - In-memory secret overrides (`SecretsStore.setOverride`).
 - Encryption of secrets at rest.
@@ -1667,7 +1633,7 @@ Agent-runner subsystem (HTTP API surface omitted — see
 | **subtotal (agent-runner)** | **~3 200** | |
 
 Built-in plugins live in `packages/harness/src/plugins/<id>/`: `admin`,
-`scheduler`, `telegram`, `gws`, `agent-messaging`. `admin` and `scheduler` are
-**core** (`CORE_PLUGIN_IDS`) — auto-installed on every agent and refused by
-`cognisphere plugin add`; the rest are opt-in per agent via a `plugins/<id>/`
-dir.
+`scheduler`, `telegram`, `gws`, `agent-messaging`. `admin`, `scheduler` and
+`agent-messaging` are **core** (`CORE_PLUGIN_IDS`) — auto-installed on every
+agent and refused by `cognisphere plugin add`; the rest are opt-in per agent
+via a `plugins/<id>/` dir.

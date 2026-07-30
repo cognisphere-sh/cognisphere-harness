@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ArrowUpRight,
   ChevronDown,
   Edit3,
   FileText,
@@ -10,6 +11,7 @@ import {
   TerminalSquare,
   Wrench,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { LinkifiedText } from "@/components/linkified-text";
@@ -19,7 +21,7 @@ import type {
   ToolCall,
   ToolResultMessage,
 } from "@/lib/session";
-import { rawFileUrl } from "@/lib/api";
+import { rawFileUrl, threadChatUrl } from "@/lib/api";
 
 const TOOL_META: Record<string, { icon: React.FC<{ className?: string }>; label: string }> = {
   read: { icon: FileText, label: "Read" },
@@ -43,6 +45,7 @@ export function ToolCallCard({ agentId, call, result }: Props) {
   const Icon = meta.icon;
   const isError = result?.isError === true;
   const summary = oneLineSummary(call);
+  const msgTarget = agentMsgTarget(agentId, call);
 
   return (
     <div
@@ -78,6 +81,18 @@ export function ToolCallCard({ agentId, call, result }: Props) {
           </div>
         </div>
       </button>
+      {msgTarget && (
+        <div className="border-t px-3 py-1.5 text-[11px]">
+          <Link
+            to={threadChatUrl(msgTarget.agent, msgTarget.thread)}
+            className="inline-flex items-center gap-0.5 font-mono text-primary underline-offset-2 hover:underline"
+            title="Open the destination thread"
+          >
+            to {msgTarget.agent} · {msgTarget.thread}
+            <ArrowUpRight className="size-3" />
+          </Link>
+        </div>
+      )}
       {open && (
         <div className="space-y-3 border-t px-3 py-3 animate-in fade-in slide-in-from-top-1 duration-150">
           <div>
@@ -181,6 +196,28 @@ function ResultBody({
       })}
     </div>
   );
+}
+
+/** Destination thread of a `scripts/agent-msg/send` bash call, parsed from
+ *  the command's `--to-agent`/`--thread-id` flags. `$PI_AGENT_ID` (self-send,
+ *  e.g. task threads) resolves to the current agent. */
+function agentMsgTarget(
+  agentId: string,
+  call: ToolCall,
+): { agent: string; thread: string } | null {
+  if (call.name !== "bash") return null;
+  const cmd = call.arguments.command;
+  if (typeof cmd !== "string" || !cmd.includes("agent-msg/send")) return null;
+  const flag = (name: string) => {
+    const m = cmd.match(new RegExp(`${name}\\s+(?:"([^"]*)"|'([^']*)'|(\\S+))`));
+    return m?.[1] ?? m?.[2] ?? m?.[3] ?? null;
+  };
+  const rawAgent = flag("--to-agent");
+  const thread = flag("--thread-id");
+  if (!rawAgent || !thread) return null;
+  const agent =
+    rawAgent === "$PI_AGENT_ID" || rawAgent === "${PI_AGENT_ID}" ? agentId : rawAgent;
+  return { agent, thread };
 }
 
 function oneLineSummary(call: ToolCall): string {

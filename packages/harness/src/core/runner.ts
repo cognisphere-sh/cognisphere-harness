@@ -867,23 +867,6 @@ export class AgentRunner extends EventEmitter {
       }
     }
 
-    // Sub-agent model: surfaced so the `scripts/agent/subagent` wrapper can
-    // pass --provider/--model/--thinking to the `pi -p` children the agent
-    // spawns (without these, sub-agents fall back to pi's global default
-    // model). Inherits this agent's model when `subagentModel` is unset; if
-    // it names a different provider than the agent default, inject that
-    // provider's credentials too so the sub-agent can authenticate.
-    const sub = this.opts.agentJson.subagentModel ?? this.opts.agentJson.model;
-    env.PI_SUBAGENT_PROVIDER = sub.provider;
-    env.PI_SUBAGENT_MODEL = sub.id;
-    env.PI_SUBAGENT_THINKING = sub.thinkingLevel ?? "medium";
-    if (sub.provider !== this.opts.agentJson.model.provider) {
-      const subEnv = this.opts.resolveProviderEnv?.(sub.provider) ?? {};
-      for (const [k, v] of Object.entries(subEnv)) {
-        env[k] = v;
-      }
-    }
-
     log.debug(
       {
         argv: args.length,

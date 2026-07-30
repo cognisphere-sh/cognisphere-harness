@@ -1,9 +1,22 @@
-import { Bot, Brain, User as UserIcon } from "lucide-react";
+import { ArrowUpRight, Bot, Brain, User as UserIcon } from "lucide-react";
+import { Link } from "react-router-dom";
 import type { AssistantBubble, UserBubble } from "@/lib/session";
 import { splitHarnessMeta } from "@/lib/session";
 import { cn, formatTime } from "@/lib/utils";
 import { MarkdownText } from "@/components/markdown-text";
 import { ToolCallCard } from "@/components/tool-call-card";
+import { threadChatUrl } from "@/lib/api";
+
+/** For an incoming agent-messaging note, the sender's reply address parsed
+ *  from the harness metadata (`Plugin: agent-messaging` + `From`/`FromThread`). */
+function agentMsgSource(meta: string | null): { agent: string; thread: string } | null {
+  if (!meta) return null;
+  const field = (k: string) => meta.match(new RegExp(`^${k}: (.+)$`, "m"))?.[1]?.trim();
+  if (field("Plugin") !== "agent-messaging") return null;
+  const agent = field("From");
+  const thread = field("FromThread");
+  return agent && thread ? { agent, thread } : null;
+}
 
 interface UserProps {
   agentId: string;
@@ -12,6 +25,7 @@ interface UserProps {
 
 export function UserMessageBubble({ agentId, bubble }: UserProps) {
   const { meta, body } = splitHarnessMeta(bubble.text);
+  const source = agentMsgSource(meta);
   return (
     <div className="flex justify-end animate-in fade-in slide-in-from-bottom-1.5 duration-150">
       <div className="flex max-w-[88%] gap-2 sm:max-w-[78%]">
@@ -21,6 +35,18 @@ export function UserMessageBubble({ agentId, bubble }: UserProps) {
               <summary className="cursor-pointer select-none">harness metadata</summary>
               <pre className="mt-1 whitespace-pre-wrap font-mono [overflow-wrap:anywhere]">{meta}</pre>
             </details>
+          )}
+          {source && (
+            <div className="text-right text-[11px]">
+              <Link
+                to={threadChatUrl(source.agent, source.thread)}
+                className="inline-flex items-center gap-0.5 font-mono text-primary underline-offset-2 hover:underline"
+                title="Open the sender's thread"
+              >
+                from {source.agent} · {source.thread}
+                <ArrowUpRight className="size-3" />
+              </Link>
+            </div>
           )}
           <div className="overflow-hidden rounded-2xl rounded-tr-sm border bg-card px-3 py-2 text-sm shadow-card [overflow-wrap:anywhere]">
             <MarkdownText agentId={agentId} text={body} />

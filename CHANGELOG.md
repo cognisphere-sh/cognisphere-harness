@@ -18,6 +18,78 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0]
+
+### Changed
+
+- **Sub-agents are now task threads.** The `pi -p` sub-agent CLI is gone;
+  delegation runs through the core agent-messaging plugin instead. An agent
+  spawns a task by messaging **itself** on a new thread id
+  `<parentThreadId>-<task-slug>`; the task thread runs with the full agent
+  prompt in its own context window and **must report back** to the parent
+  thread (named explicitly in the brief) via `scripts/agent-msg/send` when
+  done. Delegation is asynchronous — the parent ends its turn and is woken by
+  the report; follow-ups and status checks are messages to the same task
+  thread. Task-thread status is declared **in the brief**, never inferred from
+  the sender (self-messages also arrive for other reasons).
+- **One agent prompt.** `0-base_prompt.md` and `0.1-main-agent.md` merged into
+  a single `0-base_prompt.md` covering identity, tools, workspace, threads,
+  plugins, communication, task threads, app home, and the dev-agent hand-off.
+  Ownership is now explicit: each agent owns its own agent dir (scripts,
+  skills, workspace, knowledge); platform code **and software installs** go to
+  the developer agent.
+- **agent-messaging is a core plugin** (`CORE_PLUGIN_IDS`) — auto-installed
+  and seeded on every agent alongside admin and scheduler; `cognisphere
+  plugin add agent-messaging` is refused. Messaging a thread id that doesn't
+  exist yet starts a fresh thread (that's how task threads spawn).
+- **The developer agent is always `nova`.** `cognisphere init` creates it
+  under that fixed id (`--dev-agent` flag removed), `agent new` refuses the
+  name for any other agent, and the prompt templates reference `nova`
+  literally — the `{{DevAgentId}}`/`{{DevAgentName}}` baking (and the
+  `bakeDevAgentName`/`findDevAgentId` CLI machinery) is gone. Telegram is no
+  longer auto-enabled on it; human channels are opt-in (other agents reach it
+  via agent-messaging).
+- **Web console:** agent messages are hyperlinked — an incoming
+  `agent_message` links to the sender's thread (`From`/`FromThread`), and an
+  `agent-msg/send` tool call links to the destination agent thread
+  (`$PI_AGENT_ID` resolves to the current agent). Thread-only deep links
+  (`?thread=`) now work without a session id.
+- Base template and dev overlay moved to `src/agents/base-agent/` and
+  `src/agents/nova/` inside the package (was `src/base-agent/`,
+  `src/dev-agent/`). No harness-side effect; `files` already ships `src/`.
+
+### Removed
+
+- `subagentModel` from `agent.json` and the `PI_SUBAGENT_PROVIDER` /
+  `PI_SUBAGENT_MODEL` / `PI_SUBAGENT_THINKING` env vars — task threads run on
+  the agent's own model (per-thread overrides still apply).
+- The `subagents` array from `GET /api/agents/:id/sessions/:threadId/usage`
+  (and the legacy `sessions/<threadId>/subagents/*/` scanning behind it). The
+  response is now `{ threadId, main }`; task-thread usage shows up as
+  ordinary threads.
+
+### Breaking changes
+
+- Sub-agent CLI removed — delete the seeded wrapper and role prompt from every
+  agent fork.   [affects: agents/*/scripts/agent/subagent]
+- Sub-agent role prompt removed with it.   [affects: agents/*/scripts/agent/sub-agent-prompt.md]
+- `0.1-main-agent.md` merged into `0-base_prompt.md` — replace the fork's
+  `0-base_prompt.md` with the new seed (re-apply any local edits) and delete
+  `0.1-main-agent.md`.   [affects: agents/*/system_prompts/]
+- Agent-directory roster renamed — rename the file to
+  `0.1-agent-directory.md` (contents unchanged; the manager only regenerates
+  the new name when absent, so an un-renamed copy would duplicate the
+  roster).   [affects: agents/*/system_prompts/0.3-agent-directory.md]
+- `subagentModel` no longer read — remove the key where present.   [affects: agents/*/agent.json]
+- agent-messaging became a core plugin — the per-agent enable dir is
+  redundant (remove), and a forked copy now shadows the bundled core plugin
+  (remove unless the fork is intentional).   [affects: agents/*/plugins/agent-messaging, plugins/agent-messaging]
+- Developer agent id frozen to `nova` — rename the existing dev agent's dir
+  (the one whose `agent.json` has `devAgent: true`, e.g. `dory`) to `nova`,
+  and update any references to the old id (other agents' roster fragments,
+  `allowMessageFrom` lists, workspace notes). New prompt seeds address the
+  dev agent as `nova` literally.   [affects: agents/*]
+
 ## [0.7.2]
 
 ### Fixed

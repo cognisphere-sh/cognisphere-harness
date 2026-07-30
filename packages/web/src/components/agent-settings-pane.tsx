@@ -391,13 +391,6 @@ function AgentConfigBlock({
   const setModel = (next: AgentModel) =>
     setDraft((d) => ({ ...d, model: { ...(d.model as object), ...next } }));
 
-  const subModel = (draft.subagentModel ?? {}) as AgentModel;
-  const setSubModel = (next: AgentModel) =>
-    setDraft((d) => ({
-      ...d,
-      subagentModel: { ...(d.subagentModel as object), ...next },
-    }));
-
   // Compose the rest schema per-render: static fields minus `model`
   // (rendered separately by ModelPicker), plus `config` whose shape is
   // declared by `agentJson.configSchema`. Same pattern plugins use —
@@ -443,7 +436,7 @@ function AgentConfigBlock({
           <Button
             size="sm"
             disabled={!dirty || saving}
-            onClick={() => onSave(stripEmptyModel(draft, "subagentModel"))}
+            onClick={() => onSave(draft)}
           >
             {saving ? (
               <Loader2 className="size-4 animate-spin" />
@@ -456,13 +449,6 @@ function AgentConfigBlock({
       </div>
       <div className="grid gap-4">
         <ModelPicker models={models} value={model} onChange={setModel} />
-        <ModelPicker
-          models={models}
-          value={subModel}
-          onChange={setSubModel}
-          title="Sub-agent model"
-          hint="used by pi -p sub-agents · leave unset to inherit the model above"
-        />
         <SchemaForm
           schema={restSchema}
           value={draft}
@@ -914,16 +900,3 @@ function deepClone<T>(v: T): T {
   return structuredClone(v);
 }
 
-/** Drop an optional model field (e.g. `subagentModel`) from the agent.json
- *  payload when it has no provider or id — an empty/partial picker means
- *  "inherit", which we represent by omitting the key entirely. */
-function stripEmptyModel(
-  draft: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const m = draft[key] as AgentModel | undefined;
-  if (m && m.provider && m.id) return draft;
-  const rest = { ...draft };
-  delete rest[key];
-  return rest;
-}

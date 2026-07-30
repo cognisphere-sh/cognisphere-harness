@@ -124,7 +124,6 @@ export interface AgentDetail {
   agentJson: {
     name: string;
     model: { provider: string; id: string; thinkingLevel?: string };
-    subagentModel?: { provider: string; id: string; thinkingLevel?: string };
     threadIdStrategy: { type: string };
     maxConcurrentSlots?: number;
     maxAttempts?: number;
@@ -199,9 +198,8 @@ export interface ThreadRow {
    *  yet (or it's older than the tail window). */
   lastContext: LastContextInfo | null;
   /** Sum of `cost.total` across every assistant message in every
-   *  session file in this thread — main agent and every sub-agent.
-   *  `null` while the per-file cost cache is warming for this thread
-   *  (large agents take a few polls to fill). */
+   *  session file in this thread. `null` while the per-file cost cache
+   *  is warming for this thread (large agents take a few polls to fill). */
   totalCost: number | null;
   /** Per-thread model override (set via the thread header dropdown), or
    *  `null` when the thread inherits the agent's agent.json model. */
@@ -228,7 +226,7 @@ export interface UsageModelRow {
   };
 }
 export interface UsageAgent {
-  /** "main" for the thread's top-level agent; sub-agent id otherwise. */
+  /** Always "main" — the thread's usage aggregate. */
   agent: string;
   models: UsageModelRow[];
   lastContext: LastContextInfo | null;
@@ -236,7 +234,6 @@ export interface UsageAgent {
 export interface ThreadUsage {
   threadId: string;
   main: UsageAgent;
-  subagents: UsageAgent[];
 }
 
 export type EventStatus =
@@ -522,4 +519,9 @@ export function rawFileUrl(agentId: string, path: string, opts?: { download?: bo
   const usp = new URLSearchParams({ path });
   if (opts?.download) usp.set("download", "1");
   return `/api/agents/${agentId}/fs/raw?${usp.toString()}`;
+}
+
+/** Chat deep-link to a thread on an agent (same shape the events tab uses). */
+export function threadChatUrl(agentId: string, threadId: string): string {
+  return `/agents/${encodeURIComponent(agentId)}/chat?thread=${encodeURIComponent(threadId)}`;
 }
