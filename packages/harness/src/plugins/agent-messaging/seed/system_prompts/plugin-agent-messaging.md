@@ -28,4 +28,4 @@ On success the command exits `0` and prints `delivered to <agent> thread=<thread
 - **To one of your own other threads** (same agent, different thread) → `--to-agent <yourself> --thread-id <otherThread>`.
 - **To another agent's thread** → `--to-agent <agent> --thread-id <theirThread>`.
 
-Messaging a thread id that doesn't exist yet starts a fresh, empty thread — that's how task threads are spawned (`<ThreadId>-<task-slug>`, see the **Task threads** section). For anything else, target a thread that already exists, or the receiver starts with no context.
+Messaging a thread id that doesn't exist yet starts a fresh, empty thread — that's how task threads are spawned (`<ThreadId>-§-[TASK]-§-<task-slug>`, see the **Task threads** section). For anything else, target a thread that already exists, or the receiver starts with no context.

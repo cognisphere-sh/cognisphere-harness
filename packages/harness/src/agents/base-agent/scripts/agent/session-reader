@@ -86,7 +86,7 @@ PATH
   i.e. the latest session for that thread. Pass a specific <uuid>.jsonl to
   read an older session. Examples:
     sessions/<ThreadId>/                  (reads the latest session file)
-    sessions/<ThreadId>-<task-slug>/      (a task thread's sessions)
+    sessions/<ThreadId>-§-[TASK]-§-<task-slug>/   (a task thread's sessions)
     sessions/<ThreadId>/<uuid>.jsonl      (reads that exact session)
 
 WHAT IT EMITS

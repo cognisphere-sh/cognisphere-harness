@@ -241,11 +241,11 @@ To run a focused task in a fresh context window, delegate it to a **task thread*
 
 ## Delegating
 
-Send a message to yourself on the thread id `<ThreadId>-<task-slug>` (this thread's id plus a short kebab-case slug naming the task):
+Send a message to yourself on the thread id `<ThreadId>-§-[TASK]-§-<task-slug>` — this thread's id, the literal `[TASK]` marker, and a short kebab-case slug naming the task, joined by `-§-`:
 
 ```bash
 bash scripts/agent-msg/send --to-agent "$PI_AGENT_ID" \
-  --thread-id "<ThreadId>-<task-slug>" \
+  --thread-id "<ThreadId>-§-[TASK]-§-<task-slug>" \
   --message "<task brief>"
 ```
 
