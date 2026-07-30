@@ -847,6 +847,10 @@ export class AgentRunner extends EventEmitter {
     env.PI_AGENT_ID = this.opts.agentId;
     env.PI_THREAD_ID = threadId;
     env.PI_WEBHOOK_BASE = `${this.opts.serverBaseUrl}/webhook/${this.opts.agentId}`;
+    // Server origin for scripts that hit the HTTP API directly (e.g. the
+    // seeded agent-msg/send) — without it their hardcoded fallback breaks on
+    // any non-default port.
+    env.HARNESS_BASE_URL = this.opts.serverBaseUrl;
 
     // Plugin secrets, flattened to bare keys (e.g. TELEGRAM_BOT_TOKEN), so
     // the agent's bash invocations and plugin CLI scripts can read them

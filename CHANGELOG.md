@@ -18,6 +18,19 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.2]
+
+### Fixed
+
+- **The runner now exports `HARNESS_BASE_URL` (= `serverBaseUrl`) to every
+  agent process.** The seeded `agent-msg/send` reads
+  `${HARNESS_BASE_URL:-http://127.0.0.1:3142}`, but nothing ever set the
+  variable — the runner didn't export it and the deploy scripts only define
+  `HARNESS_PORT`, which the script never reads. So on any non-default port
+  (`PORT` / `cognisphere serve --port`), agent-messaging silently posted to
+  the wrong origin. The fallback in the seed is unchanged and now only
+  covers running the script outside a runner-spawned process.
+
 ## [0.8.1]
 
 ### Fixed

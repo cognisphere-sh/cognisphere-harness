@@ -785,6 +785,9 @@ Env handed to pi:
   `VIRTUAL_ENV=<agentDir>/.venv`, delete `PYTHONHOME`.
 - `PI_AGENT_ID = agentId`.
 - `PI_WEBHOOK_BASE = ${serverBaseUrl}/webhook/${agentId}`.
+- `HARNESS_BASE_URL = serverBaseUrl` — server origin for scripts that hit
+  the HTTP API directly (e.g. the seeded `agent-msg/send`), so they track
+  the real port instead of their hardcoded default fallback.
 - All `envSecrets` (provider env from `models.json` ⨁ every secret
   under this agent flattened to bare keys, with collisions caught at
   AgentManager construction time — see §4.9).
