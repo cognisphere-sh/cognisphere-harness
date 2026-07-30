@@ -63,8 +63,9 @@ plugin config, secrets, and model providers. Login users live in
   `maxConcurrentSlots?`, `devAgent?` (marks the developer agent), optional
   `secretsSchema`/`configSchema`/`config`.
 - `system_prompts/*.md` — concatenated in lexical order into the system
-  prompt. `0-*` files come from the base template; write the persona in
-  `1-<something>.md`.
+  prompt. `0-*` files are harness-owned and kept in sync with the installed
+  harness version on upgrade (replaced by the new seed — don't edit them).
+  All agent- or app-specific instructions go in `1-agent.md`.
 - `workspace/` — the agent's durable notes; `knowledge/` for cross-thread
   reference docs.
 - `sessions/<threadId>/` — conversation history (JSONL), the assembled

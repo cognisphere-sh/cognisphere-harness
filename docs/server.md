@@ -162,10 +162,10 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         ├── .venv/                ← created by bootstrap.sh; auto-activated
         ├── .vertex-sa.json       ← written at start when provider=google-vertex
         ├── system_prompts/       ← concatenated (lex order) into the agent's prompt
-        │   ├── 0-base_prompt.md  ← the agent prompt (tools, workspace, threads, plugins, comms, task threads, dev-agent hand-off); vars baked at create
+        │   ├── 0-base_prompt.md  ← the agent prompt (tools, workspace, threads, plugins, comms, task threads, dev-agent hand-off); vars baked at create; harness-owned — kept in sync with the installed version on upgrade
         │   ├── 0.1-agent-directory.md ← roster of the OTHER agents (id + description);
         │   │                       written by the manager if absent, edits survive
-        │   ├── 1-agent.md        ← persona, hand-written
+        │   ├── 1-agent.md        ← persona + all agent/app-specific instructions, hand-written
         │   └── plugin-<id>.md    ← plugin seeds (when installed)
         ├── scripts/agent/        ← ddgs / markitdown / agent-browser / session-reader wrappers
         ├── workspace/            ← agent's scratch space

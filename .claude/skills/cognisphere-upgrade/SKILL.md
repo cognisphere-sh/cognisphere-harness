@@ -59,7 +59,14 @@ determine the exact edits. Common shapes:
 
 - **`agent.json` field rename/move** → edit every matched `agent.json`,
   preserving user values.
-- **Base-template prompt/script change** → apply the documented edit on top of
+- **Base prompt change** (`agents/*/system_prompts/0-base_prompt.md`) →
+  **replace the fork's copy with the new seed** (re-baking the create-time
+  template vars from the fork's current values). `0-*` prompts are
+  harness-owned and stay in sync with the installed version; all agent- or
+  app-specific instructions belong in `1-agent.md`. If a fork carries local
+  edits in a `0-*` file, move them into `1-agent.md` as part of the upgrade
+  instead of grafting them back.
+- **Other seeded prompt/script change** → apply the documented edit on top of
   the user's forked copy under `agents/*/` (the user's edits are the baseline;
   graft the change, don't overwrite).
 - **Plugin contract change** → update each forked plugin under `plugins/*` that
