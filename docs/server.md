@@ -185,6 +185,7 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         ├── skills/<scope>/<skill>/SKILL.md
         ├── extensions/harness-bridge.ts   ← seeded; reports entry ids (§4.7)
         ├── extensions/bash-guard.ts       ← seeded; runs agent bash under `set -u`
+        ├── extensions/context-meta.ts     ← seeded; per-step CheckpointTokens stamps + live Model/ContextUsage per LLM call
         ├── extensions/<scope>/{index.ts,package.json,...}
         ├── scripts/<plugin>/<cli>
         └── assets/               ← agent-authored static assets

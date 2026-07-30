@@ -189,6 +189,7 @@ ThreadId: telegram-12345
 [Retry: true]
 [Continuation: true]
 <plugin-contributed PascalCase fields>
+[CheckpointTokens: +2450]
 </harness-metadata>
 ```
 
@@ -216,6 +217,23 @@ ThreadId: telegram-12345
   **Do not restart from scratch and do not ask anyone to resend.** Pick up where
   you left off, finish the remaining work, then end your turn.
 - **Plugin-contributed fields** — PascalCase keys (e.g. `SenderId`, `MessageId`, `Attachments`).
+- **CheckpointTokens: +<n>** — appears on the first message after each of
+  your responses (a tool result carries it as a small appended
+  `<harness-metadata>` block of its own): the exact context growth of the
+  step that just completed — the input messages / tool results since the
+  previous checkpoint stamp, plus your most recent response. (The stamped
+  message itself is not in its own number; it counts toward the next
+  checkpoint — so spans sum cleanly.) These stamps stay in history, so
+  summing a span tells you what that span consumed — e.g. a failed
+  20K-token debugging detour shows up as a run of large checkpoints.
+  `CheckpointTokens: reset` marks a compaction boundary (the delta across
+  it is unknowable).
+
+The harness also gives you live context-window telemetry: the newest message
+you see always ends with `Model:` (the model currently serving this thread)
+and `ContextUsage: <tokens used>/<context window>` (the fill right now;
+omitted right after compaction, until the next model response). Only the
+latest message carries these — earlier copies are not kept.
 
 # Communication model
 
