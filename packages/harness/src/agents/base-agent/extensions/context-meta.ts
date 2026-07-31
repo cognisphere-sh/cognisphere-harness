@@ -7,7 +7,6 @@
  *    custom message (customType "context-meta.checkpoint") is injected:
  *
  *      CheckpointTokens: +<n>
- *      Covers: through the assistant response at <ISO timestamp>
  *
  *    <n> is the exact context growth of the completed step, computed from
  *    consecutive provider-reported usage totals (input + output + cache) —
@@ -22,13 +21,17 @@
  *    between a tool-use response and its tool results), before the next
  *    LLM call. So a checkpoint covers everything up through the nearest
  *    assistant response ABOVE it; tool results between that response and
- *    the checkpoint belong to the NEXT checkpoint. The `Covers:` line
- *    makes each message self-describing if it is ever displaced.
+ *    the checkpoint belong to the NEXT checkpoint.
  *
- *    A batch whose final response ends the turn may exit before the queued
- *    checkpoint is delivered; seeding replays the session on spawn and
- *    emits the missing checkpoint as catch-up, so the trail stays gapless
- *    across batch boundaries. (Note for the future pruner: tool calls and
+ *    Emission timing is load-bearing: a pending message keeps pi's agent
+ *    loop alive, so a checkpoint sent right after a turn-ending response
+ *    would provoke an endless run of empty LLM calls. Checkpoints are
+ *    therefore sent immediately only when the response has tool calls
+ *    (the loop continues anyway); for a turn-ending response the emit is
+ *    deferred to the next inbound message, and if the process exits
+ *    first, seeding replays the session on spawn and emits the missing
+ *    checkpoint as catch-up — the trail stays gapless across batch
+ *    boundaries either way. (Note for the future pruner: tool calls and
  *    their tool results must be removed together — never orphan either —
  *    and checkpoint messages should be selected by customType/entry id,
  *    not by position.)
@@ -68,12 +71,12 @@ export default function contextMeta(pi: ExtensionAPI): void {
   let prevC = 0;
   let seeded = false;
 
-  const emitCheckpoint = (delta: number, responseTimestamp: number): void => {
+  const emitCheckpoint = (delta: number): void => {
     const line = delta < 0 ? "CheckpointTokens: reset" : `CheckpointTokens: +${delta}`;
     pi.sendMessage(
       {
         customType: CHECKPOINT_TYPE,
-        content: `<harness-metadata>\n${line}\nCovers: through the assistant response at ${new Date(responseTimestamp).toISOString()}\n</harness-metadata>`,
+        content: `<harness-metadata>\n${line}\n</harness-metadata>`,
         display: true,
       },
       { deliverAs: "steer", triggerTurn: false },
@@ -89,32 +92,51 @@ export default function contextMeta(pi: ExtensionAPI): void {
     if (seeded) return;
     seeded = true;
     let lastC: number | null = null;
-    let lastTs = 0;
     for (const e of ctx.sessionManager.getEntries()) {
       if (e.type === "message" && e.message.role === "assistant") {
         const c = contextTokens(e.message);
-        if (c !== null) {
-          lastC = c;
-          lastTs = e.message.timestamp;
-        }
+        if (c !== null) lastC = c;
       } else if (e.type === "custom_message" && e.customType === CHECKPOINT_TYPE) {
         if (lastC !== null) prevC = lastC;
       }
     }
     if (lastC !== null && lastC !== prevC) {
-      emitCheckpoint(lastC - prevC, lastTs);
+      emitCheckpoint(lastC - prevC);
       prevC = lastC;
     }
   };
 
+  // Checkpoint for a turn-ending response, held until it is safe to send.
+  // sendMessage lands in pi's pending-message queue, and the agent loop
+  // keeps running while ANY pending message exists — so emitting right
+  // after a response with no tool calls would keep provoking empty LLM
+  // calls forever (observed in production). Safe moments to emit: while
+  // the loop is continuing anyway (response has tool calls), or when the
+  // next inbound message is being processed (its LLM call happens
+  // regardless). If the process exits first, seed-time catch-up covers it.
+  let deferred: number | null = null;
+
   pi.on("message_end", (event, ctx) => {
     ensureSeeded(ctx);
     const msg = event.message;
+
+    if (msg.role === "user" || msg.role === "toolResult") {
+      if (deferred !== null) {
+        emitCheckpoint(deferred);
+        deferred = null;
+      }
+      return;
+    }
     if (msg.role !== "assistant") return;
     const c = contextTokens(msg);
     if (c === null) return;
-    emitCheckpoint(c - prevC, msg.timestamp);
+    const delta = c - prevC;
     prevC = c;
+    if (msg.stopReason === "toolUse") {
+      emitCheckpoint(delta);
+    } else {
+      deferred = delta;
+    }
   });
 
   pi.on("context", (event, ctx) => {
