@@ -3,43 +3,51 @@
  * child (see `runner.ts:spawnPi`). Gives the agent context-window
  * awareness through two complementary mechanisms:
  *
- * 1. PERSISTENT per-step checkpoints (`message_end`): after each assistant
- *    response, the first following user/toolResult message is stamped with
+ * 1. CHECKPOINT MESSAGES: after each assistant response, a standalone
+ *    custom message (customType "context-meta.checkpoint") is injected:
  *
  *      CheckpointTokens: +<n>
+ *      Covers: through the assistant response at <ISO timestamp>
  *
- *    = the exact context growth of the step that just completed (the
- *    response's output + the input messages appended before it), computed
- *    from consecutive provider-reported usage totals — no estimation.
- *    Deltas are self-contained per step (never cumulative), so the trail
- *    stays truthful when compaction rewrites history; a compaction shows
- *    up as `CheckpointTokens: reset`. Summing a span of stamps tells the
- *    agent what pruning that span would free.
+ *    <n> is the exact context growth of the completed step, computed from
+ *    consecutive provider-reported usage totals (input + output + cache) —
+ *    no estimation. Standalone messages (rather than stamps fused into
+ *    neighboring messages) keep the trail prune-safe: a future context
+ *    cleaner can add/remove checkpoints by identity, independent of the
+ *    content messages they describe. `CheckpointTokens: reset` marks a
+ *    shrink (compaction) where the delta is unknowable.
  *
- *    The stamp goes on the message AFTER the response, never on the
- *    assistant message itself: injecting text into the model's own past
- *    turns invites the model to imitate it, and providers validate
- *    replayed assistant content (e.g. thinking-block signatures).
- *    `message_end` fires before the session append, so the stamped
- *    version is what pi persists to the JSONL and replays in context.
+ *    Placement: `deliverAs: "steer"` appends at the first provider-legal
+ *    seam — after the response's tool calls finish (nothing may sit
+ *    between a tool-use response and its tool results), before the next
+ *    LLM call. So a checkpoint covers everything up through the nearest
+ *    assistant response ABOVE it; tool results between that response and
+ *    the checkpoint belong to the NEXT checkpoint. The `Covers:` line
+ *    makes each message self-describing if it is ever displaced.
+ *
+ *    A batch whose final response ends the turn may exit before the queued
+ *    checkpoint is delivered; seeding replays the session on spawn and
+ *    emits the missing checkpoint as catch-up, so the trail stays gapless
+ *    across batch boundaries. (Note for the future pruner: tool calls and
+ *    their tool results must be removed together — never orphan either —
+ *    and checkpoint messages should be selected by customType/entry id,
+ *    not by position.)
  *
  * 2. EPHEMERAL per-call fill (`context` hook): every LLM call gets
  *
  *      Model: <model id>
  *      ContextUsage: <tokens>/<context window>
  *
- *    appended to the outgoing context's last message. The `context` hook
- *    receives a deep copy, so nothing persists — exactly one fresh block
- *    exists per call, correct even right after compaction, and absolute
- *    fill never freezes into history where it could drift.
- *
- * `ContextUsage` = last valid assistant usage plus a chars/4 estimate of
- * trailing messages (pi's `estimateContextTokens`); omitted while unknown
- * (right after compaction, until the next response re-anchors it).
+ *    appended to the outgoing context's last message. The hook receives a
+ *    deep copy, so nothing persists — exactly one fresh block exists per
+ *    call, correct even right after compaction, and absolute fill never
+ *    freezes into history where it could drift. `ContextUsage` = last
+ *    valid assistant usage plus a chars/4 estimate of trailing messages
+ *    (pi's `estimateContextTokens`); omitted while unknown.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const CLOSE_TAG = "</harness-metadata>";
+const CHECKPOINT_TYPE = "context-meta.checkpoint";
 
 interface AssistantLike {
   stopReason: string;
@@ -54,82 +62,59 @@ const contextTokens = (m: AssistantLike): number | null => {
   return total > 0 ? total : null;
 };
 
-const wrapBlock = (lines: string[]): string =>
-  `<harness-metadata>\n${lines.join("\n")}\n${CLOSE_TAG}`;
-
 export default function contextMeta(pi: ExtensionAPI): void {
-  // Context size at the last stamped checkpoint. Seeded from the session so
-  // the first stamp of a respawned child (one pi process per batch) covers
-  // the gap since the previous batch's last response instead of resyncing.
+  // Context size covered by the last checkpoint emitted (or found in the
+  // session at seed time). The next checkpoint's delta is measured from it.
   let prevC = 0;
-  // Context size after the latest response, not yet written to a stamp.
-  let pendingC: number | null = null;
   let seeded = false;
 
-  // Replay the stamping state machine over the persisted history, so this
-  // process resumes exactly where the previous batch's left off. A batch
-  // that ends on a response dies with its checkpoint still pending; the
-  // replay re-derives it, and the first message of THIS batch carries it
-  // (the previous batch's final step). Only a thread's very first message
-  // has no prior response and thus no stamp.
+  const emitCheckpoint = (delta: number, responseTimestamp: number): void => {
+    const line = delta < 0 ? "CheckpointTokens: reset" : `CheckpointTokens: +${delta}`;
+    pi.sendMessage(
+      {
+        customType: CHECKPOINT_TYPE,
+        content: `<harness-metadata>\n${line}\nCovers: through the assistant response at ${new Date(responseTimestamp).toISOString()}\n</harness-metadata>`,
+        display: true,
+      },
+      { deliverAs: "steer", triggerTurn: false },
+    );
+  };
+
+  // Replay the session to recover where the previous batch left off: each
+  // checkpoint entry consumes the nearest assistant total above it. If the
+  // last response has no checkpoint after it (the previous process exited
+  // with the message still queued), emit it now as catch-up — it lands
+  // before this batch's first LLM call.
   const ensureSeeded = (ctx: ExtensionContext): void => {
     if (seeded) return;
     seeded = true;
+    let lastC: number | null = null;
+    let lastTs = 0;
     for (const e of ctx.sessionManager.getEntries()) {
-      if (e.type !== "message") continue;
-      const m = e.message;
-      if (m.role === "assistant") {
-        const c = contextTokens(m);
-        if (c !== null) pendingC = c;
-      } else if ((m.role === "user" || m.role === "toolResult") && pendingC !== null) {
-        prevC = pendingC;
-        pendingC = null;
+      if (e.type === "message" && e.message.role === "assistant") {
+        const c = contextTokens(e.message);
+        if (c !== null) {
+          lastC = c;
+          lastTs = e.message.timestamp;
+        }
+      } else if (e.type === "custom_message" && e.customType === CHECKPOINT_TYPE) {
+        if (lastC !== null) prevC = lastC;
       }
+    }
+    if (lastC !== null && lastC !== prevC) {
+      emitCheckpoint(lastC - prevC, lastTs);
+      prevC = lastC;
     }
   };
 
   pi.on("message_end", (event, ctx) => {
     ensureSeeded(ctx);
     const msg = event.message;
-
-    if (msg.role === "assistant") {
-      const c = contextTokens(msg);
-      if (c !== null) pendingC = c;
-      return;
-    }
-    if (msg.role !== "user" && msg.role !== "toolResult") return;
-    if (pendingC === null) return;
-
-    // A negative delta means the context shrank underneath us (compaction);
-    // the step's true cost is unknowable, so mark a reset instead.
-    const delta = pendingC - prevC;
-    const line = delta < 0 ? "CheckpointTokens: reset" : `CheckpointTokens: +${delta}`;
-    prevC = pendingC;
-    pendingC = null;
-
-    if (msg.role === "user") {
-      // Into the harness-supplied block when present (first block only — a
-      // batched prompt has one per row; one stamp is enough), appended as
-      // its own block otherwise (e.g. plain steer text).
-      const { content } = msg;
-      if (typeof content === "string") {
-        const next = content.includes(CLOSE_TAG)
-          ? content.replace(CLOSE_TAG, `${line}\n${CLOSE_TAG}`)
-          : `${content}\n\n${wrapBlock([line])}`;
-        return { message: { ...msg, content: next } };
-      }
-      const idx = content.findIndex((c) => c.type === "text" && c.text.includes(CLOSE_TAG));
-      const part = content[idx];
-      if (part?.type === "text") {
-        const next = content.slice();
-        next[idx] = { ...part, text: part.text.replace(CLOSE_TAG, `${line}\n${CLOSE_TAG}`) };
-        return { message: { ...msg, content: next } };
-      }
-      return { message: { ...msg, content: [...content, { type: "text", text: wrapBlock([line]) }] } };
-    }
-    return {
-      message: { ...msg, content: [...msg.content, { type: "text", text: wrapBlock([line]) }] },
-    };
+    if (msg.role !== "assistant") return;
+    const c = contextTokens(msg);
+    if (c === null) return;
+    emitCheckpoint(c - prevC, msg.timestamp);
+    prevC = c;
   });
 
   pi.on("context", (event, ctx) => {
@@ -140,7 +125,7 @@ export default function contextMeta(pi: ExtensionAPI): void {
       lines.push(`ContextUsage: ${usage.tokens}/${usage.contextWindow}`);
     }
     if (lines.length === 0) return;
-    const block = wrapBlock(lines);
+    const block = `<harness-metadata>\n${lines.join("\n")}\n</harness-metadata>`;
 
     const last = event.messages[event.messages.length - 1];
     if (!last) return;
