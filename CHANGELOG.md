@@ -18,6 +18,31 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.11]
+
+### Changed
+
+- **Model overrides in `.secrets/models.json` now configure pi itself.**
+  New `core/pi-models-sync.ts` mirrors the store's `modelOverrides` into
+  pi's own models.json (`~/.pi/agent/models.json`, or
+  `$PI_CODING_AGENT_DIR/models.json`) at server boot, on every agent
+  start, and after `PUT /api/models` — so spawned pi children resolve the
+  overridden `contextWindow`/`maxTokens` natively (model registry,
+  in-context ContextUsage telemetry, and pi's compaction thresholds).
+  Ownership: for providers present in the harness store, the
+  `modelOverrides` key of pi's models.json is harness-owned (replaced
+  wholesale, removed when the store has none); all other fields and
+  providers in that file are preserved, and a corrupt file is skipped,
+  never clobbered.
+- **Pi-as-configured is now the single source of truth for context
+  windows.** The API's reporting (`lastContext` in `/api/agents/usage`
+  and the threads list) resolves context windows via pi models.json
+  (`modelOverrides`, then custom model entries) with pi-ai's built-in
+  catalog as fallback, instead of consulting `.secrets/models.json`
+  directly — the dashboard and the agent's in-context telemetry can no
+  longer disagree, and hand-written custom providers in pi's models.json
+  now report correct context windows too.
+
 ## [0.8.10]
 
 ### Changed
