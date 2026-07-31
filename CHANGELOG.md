@@ -18,6 +18,39 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.8]
+
+### Changed
+
+- **`extensions/context-meta.ts`: checkpoints are now standalone messages
+  instead of stamps on neighboring messages.** After each assistant
+  response the extension injects a custom message
+  (`customType: "context-meta.checkpoint"`) carrying
+  `CheckpointTokens: +<n>` and a self-describing `Covers:` line, delivered
+  at the first provider-legal seam (after the response's tool calls,
+  before the next LLM call). Standalone messages are prune-safe: a future
+  context cleaner can remove a span and its checkpoint by identity,
+  instead of stranding a stamp fused into a kept message that describes
+  deleted content. A checkpoint covers everything up through the nearest
+  assistant response above it; seeding emits a catch-up checkpoint on
+  spawn if the previous batch exited with one still queued, keeping the
+  trail gapless across batches. User messages and tool results are no
+  longer stamped.
+- Base system prompt: `CheckpointTokens` moved out of the incoming-message
+  metadata fields into the telemetry section — documents the standalone
+  checkpoint messages, their coverage rule, and that they are informational
+  only (never act on or reply to them).
+
+### Breaking changes
+
+- Seeded file `extensions/context-meta.ts` changed (standalone checkpoint
+  messages replace per-message stamps). Copy it from the new seed into
+  existing agents.   [affects: agents/*/extensions/*]
+- Message-metadata section of the seeded base system prompt changed
+  (checkpoint messages documented as standalone telemetry, FYI-only; field
+  removed from the block example). Graft into existing agents'
+  prompts.   [affects: agents/*/system_prompts/0-base_prompt.md]
+
 ## [0.8.7]
 
 ### Changed
