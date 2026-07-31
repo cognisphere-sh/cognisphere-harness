@@ -18,6 +18,25 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.10]
+
+### Changed
+
+- **`extensions/context-meta.ts`: turn-ending checkpoints now land right
+  after the final response.** Instead of deferring to the next inbound
+  message (which placed the checkpoint after the next user message), the
+  deferred emit fires on `agent_settled` — the agent is idle there, so
+  `sendMessage` appends the checkpoint directly to the session without
+  triggering a turn or an LLM call. Tool-use responses keep the immediate
+  steer emit (checkpoint after that response's tool results). Inbound-flush
+  and seed-time catch-up remain as fallbacks.
+
+### Breaking changes
+
+- Seeded file `extensions/context-meta.ts` changed (turn-ending checkpoint
+  placement via agent_settled). Copy it from the new seed into existing
+  agents.   [affects: agents/*/extensions/*]
+
 ## [0.8.9]
 
 ### Fixed
