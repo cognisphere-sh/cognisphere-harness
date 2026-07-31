@@ -353,11 +353,28 @@ ids that agents may select.
 
   `getProvider(id)` returns the operator's stored config; `save(cfg)`
   rewrites the whole object at 0600. `modelOverrides` is optional
-  per-model metadata layered over pi-ai's built-in catalog — currently
-  consumed only by the context-window reporting in `api/agents.ts`
-  (an override wins over the built-in registry). `normalize()` (run on
-  both load and save) keeps only finite positive numbers and drops
-  empty entries.
+  per-model metadata whose only consumer is
+  `pi-models-sync.ts:syncPiModelOverrides`, which mirrors the overrides
+  into pi's own models.json (`<getAgentDir()>/models.json`, i.e.
+  `~/.pi/agent/models.json` unless `PI_CODING_AGENT_DIR` is set) so
+  spawned pi children resolve them natively — registry, in-context
+  ContextUsage telemetry, and pi's compaction thresholds all see the
+  overridden values. The sync runs at server boot, on every agent
+  start, and after `PUT /api/models`; for providers present in the
+  harness store the `modelOverrides` key of pi's models.json is
+  harness-owned (replaced wholesale, removed when the store has none),
+  while all other fields and providers in that file are preserved. A
+  corrupt pi models.json is skipped, never clobbered.
+
+  Pi-as-configured is the single source of truth for context windows:
+  the API's reporting (`api/agents.ts`) resolves them via
+  `pi-models-sync.ts:resolveContextWindow` — pi models.json
+  `modelOverrides`, then custom model entries in that file, then
+  pi-ai's built-in catalog (mtime-cached reads; it never consults
+  `.secrets/models.json` directly), so the dashboard and the agent's
+  in-context telemetry cannot disagree. `normalize()` (run on both
+  load and save) keeps only finite positive numbers and drops empty
+  entries.
 
 Agent-level provider validation lives in `agent-manager.ts`
 (`resolveAndValidateProvider`). At start it:

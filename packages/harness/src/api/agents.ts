@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import { resolveContextWindow } from "../core/pi-models-sync.js";
 import type { AgentManager } from "../core/agent-manager.js";
 import { LifecycleError } from "../core/agent-manager.js";
 import { agentDir, secretsRoot } from "../core/config.js";
@@ -213,7 +213,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       // Tail-read keeps this cheap even for large jsonls.
       const lastSessionId = activeSessionId ?? sessions[0]?.sessionId ?? null;
       const lastContext = lastSessionId
-        ? readLastAssistantUsage(models, join(tDir, `${lastSessionId}.jsonl`))
+        ? readLastAssistantUsage(join(tDir, `${lastSessionId}.jsonl`))
         : null;
       // Sum cost.total across every assistant message in every session
       // file so the sidebar can show running spend per thread. Per-file
@@ -331,7 +331,7 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
 
     return c.json({
       threadId,
-      main: stateToAgentUsage(models, "main", mainState),
+      main: stateToAgentUsage("main", mainState),
     });
   });
 
@@ -519,8 +519,8 @@ interface ModelUsageAgg {
 
 interface LastContextInfo {
   tokens: number;
-  /** `null` when the model isn't in pi-ai's registry (e.g. a custom id)
-   *  and no `modelOverrides` entry in `.secrets/models.json` supplies it. */
+  /** `null` when the model is in neither pi's models.json (overrides or
+   *  custom model entries) nor pi-ai's built-in catalog. */
   contextWindow: number | null;
   model: string;
 }
@@ -541,11 +541,7 @@ function newAgentState(): AgentState {
   return { models: new Map(), latest: null };
 }
 
-function stateToAgentUsage(
-  store: ModelsStore,
-  name: string,
-  state: AgentState,
-): AgentUsage {
+function stateToAgentUsage(name: string, state: AgentState): AgentUsage {
   const latest = state.latest;
   return {
     agent: name,
@@ -553,7 +549,7 @@ function stateToAgentUsage(
     lastContext: latest
       ? {
           tokens: latest.tokens,
-          contextWindow: getContextWindow(store, latest.provider, latest.model),
+          contextWindow: resolveContextWindow(latest.provider, latest.model),
           model: latest.provider
             ? `${latest.provider}/${latest.model}`
             : latest.model,
@@ -649,35 +645,13 @@ function lastUsageTokens(usage: Record<string, unknown>): number {
   );
 }
 
-function getContextWindow(
-  store: ModelsStore,
-  provider: string,
-  modelId: string,
-): number | null {
-  if (!provider || !modelId) return null;
-  // Operator override from .secrets/models.json wins over the built-in catalog.
-  const override =
-    store.getProvider(provider)?.modelOverrides?.[modelId]?.contextWindow;
-  if (typeof override === "number") return override;
-  // pi-ai's `getBuiltinModel` is generic over a literal model-id union; we
-  // cast to a dynamic signature since the runtime impl is just a Map lookup
-  // that returns undefined on miss.
-  const fn = getBuiltinModel as unknown as (
-    p: string,
-    m: string,
-  ) => { contextWindow?: number } | undefined;
-  return fn(provider, modelId)?.contextWindow ?? null;
-}
 
 /** Tail-read just the last ~128 KiB of a session jsonl and pull out
  *  the most-recent non-aborted assistant usage. Used by the threads
  *  list, which polls every 5s and can't afford to slurp every session
  *  file in full. Returns null if no assistant message lives within
  *  the tail window. */
-function readLastAssistantUsage(
-  store: ModelsStore,
-  filePath: string,
-): LastContextInfo | null {
+function readLastAssistantUsage(filePath: string): LastContextInfo | null {
   let fd: number;
   try {
     fd = openSync(filePath, "r");
@@ -722,7 +696,7 @@ function readLastAssistantUsage(
       const model = typeof msg.model === "string" ? msg.model : "";
       return {
         tokens,
-        contextWindow: getContextWindow(store, provider, model),
+        contextWindow: resolveContextWindow(provider, model),
         model: provider ? `${provider}/${model}` : model,
       };
     }

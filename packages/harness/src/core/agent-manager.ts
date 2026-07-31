@@ -13,6 +13,7 @@ import { AgentDb } from "./queue.js";
 import { AgentRunner } from "./runner.js";
 import { findProviderInCatalog } from "./models-catalog.js";
 import { ModelsStore } from "./models-store.js";
+import { syncPiModelOverrides } from "./pi-models-sync.js";
 import { AGENT_BUCKET, SecretsStore } from "./secrets.js";
 import type {
   AgentJson,
@@ -114,6 +115,9 @@ export class AgentManager {
    * Scan <root>/agents/* and load each one. Missing root → no agents.
    */
   async boot(): Promise<void> {
+    // Make pi's models.json authoritative from the very start (the API's
+    // context-window reporting reads it even when no agent ever starts).
+    syncPiModelOverrides(this.models, this.log);
     const root = agentsRoot(this.cfg);
     mkdirSync(root, { recursive: true });
     const ids = readdirSync(root, { withFileTypes: true })
@@ -371,6 +375,9 @@ export class AgentManager {
     const dir = agentDir(this.cfg, inst.id);
     // Seed this agent's roster fragment (write-if-absent — operator edits win).
     writeAgentDirectory(agentsRoot(this.cfg), inst.id, dir);
+    // Mirror Models-settings overrides into pi's models.json so the spawned
+    // pi children resolve the overridden contextWindow/maxTokens natively.
+    syncPiModelOverrides(this.models, this.log);
     // Core plugins (admin, scheduler, agent-messaging) are auto-installed on every agent —
     // always started regardless of the agent's plugins dir, then unioned with
     // any user-installed plugins found on disk.

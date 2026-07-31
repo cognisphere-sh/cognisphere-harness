@@ -280,12 +280,12 @@ Session list response:
 `lastContext` is a tail-read (last ~128 KiB) of the active session's
 jsonl: the most-recent non-aborted assistant message's context tokens
 (`usage.totalTokens` or the input/output/cacheRead/cacheWrite sum) and
-the model's context window from pi-ai's registry. `null` when no
-assistant message exists yet (or it's older than the tail window);
-`contextWindow` is `null` for model ids not in the registry. A
-`modelOverrides.<modelId>.contextWindow` entry in
-`.secrets/models.json` takes precedence over the registry (see
-[§7](#7-models--apimodels)).
+the model's context window resolved the way a spawned pi child would:
+pi models.json `modelOverrides` (kept in sync from `.secrets/models.json`,
+see [§7](#7-models--apimodels)), then custom model entries in that file,
+then pi-ai's built-in catalog. `null` when no assistant message exists
+yet (or it's older than the tail window); `contextWindow` is `null` for
+model ids in neither source.
 
 `totalCost` is the sum of `usage.cost.total` across every assistant
 message in every session file in the thread. Per-file totals are cached by
@@ -716,7 +716,10 @@ Filters:
   positive numbers (`contextWindow`, `maxTokens`) — anything else is
   dropped by the store's normalize on save.
 
-After saving, the route reloads every running agent whose
+After saving, the route mirrors the stored `modelOverrides` into pi's
+own models.json (see `pi-models-sync.ts` in [server.md](server.md)) so
+newly spawned pi children resolve the overridden context windows
+natively, then reloads every running agent whose
 `agentJson.model.provider` matches one of the touched providers
 (again via `reloadAgent`). Response:
 

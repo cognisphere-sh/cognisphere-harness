@@ -8,6 +8,7 @@ import type { Logger } from "../core/logger.js";
 import { PROVIDER_CATALOG } from "../core/models-catalog.js";
 import { ModelsStore } from "../core/models-store.js";
 import { OAuthLoginManager } from "../core/oauth-logins.js";
+import { syncPiModelOverrides } from "../core/pi-models-sync.js";
 import type { CredField, ProviderConfig } from "../core/types.js";
 import {
   applyMaskedPut,
@@ -264,6 +265,10 @@ export function modelsRouter(
     }
 
     store.save({ providers: merged });
+    // Mirror overrides into pi's models.json immediately — pi children
+    // re-read it per spawn, so the next batch picks them up even for
+    // providers no running agent uses as its default (thread overrides).
+    syncPiModelOverrides(store, log);
 
     // Restart every running agent whose model.provider matches one we
     // just touched, so the new credentials/allowlist reach the pi
