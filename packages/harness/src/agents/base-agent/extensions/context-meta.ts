@@ -23,18 +23,20 @@
  *    assistant response ABOVE it; tool results between that response and
  *    the checkpoint belong to the NEXT checkpoint.
  *
- *    Emission timing is load-bearing: a pending message keeps pi's agent
- *    loop alive, so a checkpoint sent right after a turn-ending response
- *    would provoke an endless run of empty LLM calls. Checkpoints are
- *    therefore sent immediately only when the response has tool calls
- *    (the loop continues anyway); for a turn-ending response the emit is
- *    deferred to the next inbound message, and if the process exits
- *    first, seeding replays the session on spawn and emits the missing
- *    checkpoint as catch-up — the trail stays gapless across batch
- *    boundaries either way. (Note for the future pruner: tool calls and
- *    their tool results must be removed together — never orphan either —
- *    and checkpoint messages should be selected by customType/entry id,
- *    not by position.)
+ *    Emission timing is load-bearing: while streaming, a pending message
+ *    keeps pi's agent loop alive, so a checkpoint sent right after a
+ *    turn-ending response would provoke an endless run of empty LLM calls.
+ *    Checkpoints are therefore sent immediately only when the response has
+ *    tool calls (the loop continues anyway); for a turn-ending response
+ *    the emit waits for agent_settled, where isStreaming is false and
+ *    sendMessage appends directly — right after the final response, before
+ *    the next user message, no turn triggered. If the process exits first,
+ *    seeding replays the session on spawn and emits the missing checkpoint
+ *    as catch-up — the trail stays gapless across batch boundaries either
+ *    way. (Note for the future pruner: tool calls and their tool results
+ *    must be removed together — never orphan either — and checkpoint
+ *    messages should be selected by customType/entry id, not by
+ *    position.)
  *
  * 2. EPHEMERAL per-call fill (`context` hook): every LLM call gets
  *
@@ -107,24 +109,31 @@ export default function contextMeta(pi: ExtensionAPI): void {
   };
 
   // Checkpoint for a turn-ending response, held until it is safe to send.
-  // sendMessage lands in pi's pending-message queue, and the agent loop
-  // keeps running while ANY pending message exists — so emitting right
-  // after a response with no tool calls would keep provoking empty LLM
-  // calls forever (observed in production). Safe moments to emit: while
-  // the loop is continuing anyway (response has tool calls), or when the
-  // next inbound message is being processed (its LLM call happens
-  // regardless). If the process exits first, seed-time catch-up covers it.
+  // While the agent is streaming, sendMessage lands in pi's pending queue,
+  // and the loop keeps running while ANY pending message exists — so
+  // emitting right after a response with no tool calls would keep
+  // provoking empty LLM calls forever (observed in production). Safe
+  // moments: while the loop continues anyway (response has tool calls,
+  // steer rides along), or once the run has settled — at agent_settled
+  // isStreaming is already false, so sendMessage takes its direct-append
+  // branch: the checkpoint lands in the session right after the final
+  // response, before any future user message, without triggering a turn.
   let deferred: number | null = null;
+
+  const flushDeferred = (): void => {
+    if (deferred === null) return;
+    emitCheckpoint(deferred);
+    deferred = null;
+  };
 
   pi.on("message_end", (event, ctx) => {
     ensureSeeded(ctx);
     const msg = event.message;
 
+    // Fallback flush (e.g. a queued follow-up continues the run before
+    // agent_settled fires): ride the inbound message's imminent LLM call.
     if (msg.role === "user" || msg.role === "toolResult") {
-      if (deferred !== null) {
-        emitCheckpoint(deferred);
-        deferred = null;
-      }
+      flushDeferred();
       return;
     }
     if (msg.role !== "assistant") return;
@@ -138,6 +147,8 @@ export default function contextMeta(pi: ExtensionAPI): void {
       deferred = delta;
     }
   });
+
+  pi.on("agent_settled", () => flushDeferred());
 
   pi.on("context", (event, ctx) => {
     const lines: string[] = [];
