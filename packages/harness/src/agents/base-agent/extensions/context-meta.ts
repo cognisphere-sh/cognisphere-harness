@@ -66,13 +66,25 @@ export default function contextMeta(pi: ExtensionAPI): void {
   let pendingC: number | null = null;
   let seeded = false;
 
+  // Replay the stamping state machine over the persisted history, so this
+  // process resumes exactly where the previous batch's left off. A batch
+  // that ends on a response dies with its checkpoint still pending; the
+  // replay re-derives it, and the first message of THIS batch carries it
+  // (the previous batch's final step). Only a thread's very first message
+  // has no prior response and thus no stamp.
   const ensureSeeded = (ctx: ExtensionContext): void => {
     if (seeded) return;
     seeded = true;
     for (const e of ctx.sessionManager.getEntries()) {
-      if (e.type !== "message" || e.message.role !== "assistant") continue;
-      const c = contextTokens(e.message);
-      if (c !== null) prevC = c;
+      if (e.type !== "message") continue;
+      const m = e.message;
+      if (m.role === "assistant") {
+        const c = contextTokens(m);
+        if (c !== null) pendingC = c;
+      } else if ((m.role === "user" || m.role === "toolResult") && pendingC !== null) {
+        prevC = pendingC;
+        pendingC = null;
+      }
     }
   };
 
