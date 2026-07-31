@@ -18,6 +18,23 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.7]
+
+### Changed
+
+- **`extensions/context-meta.ts`: checkpoint stamps now span batch
+  boundaries.** On spawn the extension replays the stamping state machine
+  over the persisted session instead of only seeding a baseline, so a
+  batch that ended on an assistant response leaves its pending checkpoint
+  recoverable — the next batch's first message carries it (the previous
+  batch's final step). Only a thread's very first message has no
+  `CheckpointTokens` stamp.
+
+### Breaking changes
+
+- Seeded file `extensions/context-meta.ts` changed (cross-batch checkpoint
+  seeding). Copy it from the new seed into existing agents.   [affects: agents/*/extensions/*]
+
 ## [0.8.6]
 
 ### Added
