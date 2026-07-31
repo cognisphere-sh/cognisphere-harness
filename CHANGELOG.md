@@ -18,6 +18,28 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.9]
+
+### Fixed
+
+- **`extensions/context-meta.ts`: infinite invocation loop after
+  turn-ending responses (0.8.8 regression — upgrade off 0.8.8
+  immediately).** A checkpoint message queued via `sendMessage` lands in
+  pi's pending-message queue, and the agent loop keeps running while any
+  pending message exists — so a checkpoint emitted right after a response
+  with no tool calls kept provoking empty LLM calls forever, one paid call
+  per cycle. Checkpoints are now sent immediately only when the response
+  has tool calls (the loop continues anyway); for a turn-ending response
+  the emit is deferred to the next inbound message, with the existing
+  seed-time catch-up covering process exit. Per-step granularity and the
+  gapless trail are unchanged.
+
+### Breaking changes
+
+- Seeded file `extensions/context-meta.ts` changed (checkpoint emission no
+  longer extends the agent loop). Copy it from the new seed into existing
+  agents.   [affects: agents/*/extensions/*]
+
 ## [0.8.8]
 
 ### Changed
