@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import CodeMirror from "@uiw/react-codemirror";
+import { json } from "@codemirror/lang-json";
+import { oneDark } from "@codemirror/theme-one-dark";
 import {
   ArrowUp,
   BarChart3,
   Check,
   ChevronDown,
+  Code2,
   FileText,
   Loader2,
   MessagesSquare,
@@ -45,6 +49,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/lib/theme";
 
 interface Props {
   agentId: string;
@@ -176,10 +181,13 @@ export function ChatWindow({ agentId }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
-  // Toggles the right-hand panel between the message stream and the
-  // per-thread usage breakdown. Both panes stay mounted (display:none
-  // toggle) so the chat scroll position survives a round-trip.
-  const [panelTab, setPanelTab] = useState<"messages" | "usage">("messages");
+  // Toggles the right-hand panel between the message stream, the raw
+  // session JSONL, and the per-thread usage breakdown. The messages/usage
+  // panes stay mounted (display:none toggle) so the chat scroll position
+  // survives a round-trip.
+  const [panelTab, setPanelTab] = useState<"messages" | "raw" | "usage">(
+    "messages",
+  );
 
   // Auto-scroll on new messages, but only if we're already near the bottom.
   // Suppressed while a deep-link target is pending so we don't fight the
@@ -436,6 +444,12 @@ export function ChatWindow({ agentId }: Props) {
               label="Messages"
             />
             <PanelTab
+              active={panelTab === "raw"}
+              onClick={() => setPanelTab("raw")}
+              icon={Code2}
+              label="Raw"
+            />
+            <PanelTab
               active={panelTab === "usage"}
               onClick={() => setPanelTab("usage")}
               icon={BarChart3}
@@ -470,6 +484,11 @@ export function ChatWindow({ agentId }: Props) {
             </div>
           ))}
         </div>
+        {panelTab === "raw" && (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <RawSessionView entries={sessionData?.entries ?? []} />
+          </div>
+        )}
         <div
           className={cn(
             "flex-1 overflow-y-auto",
@@ -608,6 +627,40 @@ function PanelTab({
       <Icon className="size-3.5" />
       {label}
     </button>
+  );
+}
+
+/** Read-only JSONL view of the selected session — same presentation as the
+ *  Raw mode when a .jsonl file is opened in the file explorer. Reconstructed
+ *  from the parsed entries the session endpoint already returns. */
+function RawSessionView({ entries }: { entries: unknown[] }) {
+  const { theme } = useTheme();
+  const text = useMemo(
+    () => entries.map((e) => JSON.stringify(e)).join("\n"),
+    [entries],
+  );
+  if (entries.length === 0) {
+    return (
+      <div className="grid h-full place-items-center text-sm text-muted-foreground">
+        (empty session)
+      </div>
+    );
+  }
+  return (
+    <CodeMirror
+      value={text}
+      height="100%"
+      readOnly
+      theme={theme === "dark" ? oneDark : "light"}
+      extensions={[json()]}
+      basicSetup={{
+        lineNumbers: true,
+        foldGutter: true,
+        highlightActiveLine: true,
+        tabSize: 2,
+      }}
+      style={{ height: "100%", fontSize: 13 }}
+    />
   );
 }
 
