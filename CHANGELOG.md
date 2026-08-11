@@ -18,6 +18,64 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.15]
+
+### Changed
+
+- **Skill-update notices close the prompt-vs-read recency gap.**
+  `<available_skills>` is rebuilt at every spawn, so it always advertises
+  the current skill version — but it sits at position 0 of the context,
+  before any `SKILL.md` read in history; agents reasoned by context order,
+  trusted the (later) read, and concluded the prompt was stale instead of
+  re-reading the updated skill. Two-part fix: the base prompt's Skills
+  section now explains the recency inversion (the prompt is regenerated
+  per spawn, so on a mismatch the *file* changed after the read) and what
+  to do (act per the skill's `CHANGELOG.md`, or re-read `SKILL.md`); and a
+  new seeded pi extension `skill-update-notice.ts` records the frontmatter
+  version of every `SKILL.md` the agent reads (or edits/writes) as custom
+  session entries, and when the file's current version no longer matches,
+  injects a one-time-per-(skill, version) standalone `<harness-metadata>`
+  notice — `SystemMessage: Skill "<name>" changed after you last read it
+  (vX -> vY)` plus the newest changelog entry — checked at
+  `before_agent_start` (spawn-gap bumps, lands before the batch's first
+  LLM call) and each `turn_start` (mid-run bumps, next steer seam). State
+  replays from session entries, so the once-per-version dedupe survives
+  the fresh-pi-per-batch process model. The base prompt's Message metadata
+  section documents the new `SystemMessage` field: a notice from the
+  harness itself, to be acted on as platform instructions.
+- **context-meta checkpoints are now indexed and pre-call.** One
+  standalone checkpoint message before *every* LLM call, after all of that
+  call's inputs are in place: `Checkpoint: <n>` (monotonic per-call
+  counter, seeded across process respawns from session replay) +
+  `CheckpointTokens: +<delta>` (context growth since the previous
+  checkpoint: the previous response, provider-reported and exact, plus the
+  new input after it — tool results / incoming message — estimated at
+  chars/4 and ~1200 tokens per image). Every checkpoint re-anchors on
+  provider-reported usage, so estimation error is bounded to one step and
+  spans sum accurately. Checkpoints are emitted only when the next call is
+  provably imminent (`before_agent_start` return for a run's first call;
+  the last expected toolResult's `message_end` as a steer mid-run), which
+  deletes the old deferred/`agent_settled` flush machinery and its
+  empty-LLM-loop hazard. `CheckpointTokens: reset` now marks any
+  unknowable delta (compaction, unknown fill). The ephemeral per-call
+  `Model`/`ContextUsage` injection is unchanged.
+- **Daily notes: one entry per thread per day.** The base prompt's
+  end-of-task daily-note rule now says to extend the day's existing entry
+  for the ThreadId instead of appending a second one.
+- Shipped `docs/base-harness/skills.md` documents the recency rule and the
+  skill-update notice mechanism (upgrade refreshes it wholesale).
+
+### Breaking changes
+
+- New seeded agent extension `skill-update-notice.ts` — copy the shipped
+  file into each existing agent's `extensions/` dir.   [affects: agents/*/extensions/skill-update-notice.ts]
+- `context-meta.ts` was rewritten (per-call indexed checkpoints) — replace
+  each fork's copy with the shipped version.   [affects: agents/*/extensions/context-meta.ts]
+- `0-base_prompt.md` gained the skills recency guidance, the
+  `SystemMessage` metadata field, the rewritten Checkpoint-messages
+  bullet, and the one-entry-per-thread daily-notes rule. Replace each
+  fork's copy with the new seed (harness-owned).   [affects: agents/*/system_prompts/0-base_prompt.md]
+
 ## [0.8.14]
 
 ### Changed
