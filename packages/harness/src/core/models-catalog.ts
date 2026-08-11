@@ -24,16 +24,20 @@ import type { CredField, ProviderCatalogEntry } from "./types.js";
  * here are typechecked against it.
  */
 
-// Mirrored from pi-mono/packages/ai/src/types.ts:23. If this drifts,
-// catalog ids below will fail to typecheck — that's the alarm.
+// Mirrored from pi-ai's `KnownProvider` (pi-mono/packages/ai/src/types.ts).
+// Only ids declared in the catalog below are typechecked against it, so a
+// provider added upstream stays invisible here until it gets an entry.
 export type KnownProvider =
   | "amazon-bedrock"
+  | "ant-ling"
   | "anthropic"
   | "google"
   | "google-vertex"
   | "openai"
   | "azure-openai-responses"
   | "openai-codex"
+  | "radius"
+  | "nvidia"
   | "deepseek"
   | "github-copilot"
   | "xai"
@@ -42,6 +46,7 @@ export type KnownProvider =
   | "openrouter"
   | "vercel-ai-gateway"
   | "zai"
+  | "zai-coding-cn"
   | "mistral"
   | "minimax"
   | "minimax-cn"
@@ -50,11 +55,15 @@ export type KnownProvider =
   | "huggingface"
   | "fireworks"
   | "together"
+  | "baseten"
   | "opencode"
   | "opencode-go"
   | "kimi-coding"
   | "cloudflare-workers-ai"
   | "cloudflare-ai-gateway"
+  | "qwen-token-plan"
+  | "qwen-token-plan-cn"
+  | "qwen-token-plan-individual"
   | "xiaomi"
   | "xiaomi-token-plan-cn"
   | "xiaomi-token-plan-ams"

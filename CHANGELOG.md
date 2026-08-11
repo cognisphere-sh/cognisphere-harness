@@ -18,6 +18,28 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.12]
+
+### Changed
+
+- **pi upgraded to 0.84.1** (`@earendil-works/pi-ai` +
+  `@earendil-works/pi-coding-agent`, from 0.81.1). No harness code
+  changes were required: the RPC event contract the harness consumes
+  (`agent_start`, `agent_end`, `message_start`, extension `setStatus`
+  reports), the session JSONL format (`CURRENT_SESSION_VERSION` still
+  3), the `pi --mode rpc` flag set, and the `ExtensionAPI` /
+  `ModelRuntime` surfaces the harness uses are all unchanged or
+  additive. pi 0.84.0's `message_update` breaking change (deltas only,
+  no cumulative `message`) does not affect us — the harness never reads
+  `message_update`. `ModelRuntime.reloadConfig()` was removed upstream;
+  the harness never called it.
+- `core/models-catalog.ts`: refreshed the mirrored `KnownProvider` union
+  to pi-ai 0.84.1 (adds `baseten`, `qwen-token-plan-individual`, and the
+  `ant-ling` / `radius` / `nvidia` / `zai-coding-cn` / `qwen-token-plan`
+  / `qwen-token-plan-cn` ids that had drifted in since 0.81.1). Catalog
+  entries themselves are unchanged — new providers stay unlisted in the
+  Models page until an entry is added.
+
 ## [0.8.11]
 
 ### Changed
