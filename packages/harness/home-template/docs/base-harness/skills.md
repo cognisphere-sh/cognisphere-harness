@@ -37,6 +37,13 @@ phrases), and the **version**. `metadata` carries `author` and `version`.
 The base prompt tells agents to compare the advertised version against the
 copy they last read and re-read `SKILL.md` when it moved — so a version
 bump is what makes a procedure change actually reach a long-running agent.
+It also warns them not to trust context order: the system prompt is rebuilt
+on every spawn, so on a mismatch the skill file changed *after* their read —
+the prompt is never the stale side. The harness backs this up with the
+seeded `skill-update-notice` extension: when a skill an agent has read gets
+bumped, the agent receives a one-time `SystemMessage` notice (per new
+version) carrying the version change and the newest changelog entry, telling
+it to act per the changelog or re-read the skill.
 
 ## Shipped skills
 

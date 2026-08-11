@@ -190,6 +190,7 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         ├── extensions/harness-bridge.ts   ← seeded; reports entry ids (§4.7)
         ├── extensions/bash-guard.ts       ← seeded; runs agent bash under `set -u`
         ├── extensions/context-meta.ts     ← seeded; standalone per-step checkpoint messages + live Model/ContextUsage per LLM call
+        ├── extensions/skill-update-notice.ts ← seeded; one-time SystemMessage notice when a read skill's version changes
         ├── extensions/<scope>/{index.ts,package.json,...}
         ├── scripts/<plugin>/<cli>
         └── assets/               ← agent-authored static assets
@@ -216,7 +217,16 @@ Conventions worth knowing:
   the description text (pi injects only name/description/location into the
   prompt — see §4.8.4), and keeps a per-skill `CHANGELOG.md`. The base
   prompt instructs agents to re-read a skill whose advertised version
-  differs from the copy they last read. A skill is self-contained: its
+  differs from the copy they last read (and explains that the system prompt
+  is regenerated per spawn, so on a mismatch the *file* changed after the
+  read — the prompt is never the stale side). The seeded
+  `skill-update-notice.ts` extension enforces this actively: it records the
+  frontmatter version of every `SKILL.md` the agent reads (or edits/writes)
+  as persistent custom session entries, and when the file's current version
+  no longer matches, injects a one-time-per-(skill, version) standalone
+  `<harness-metadata>` message — `SystemMessage: Skill "<name>" changed
+  after you last read it (vX -> vY)` plus the newest `CHANGELOG.md` entry —
+  checked at `before_agent_start` and each `turn_start`. A skill is self-contained: its
   helper scripts live in `<skill>/scripts/` and supporting artifacts in
   `<skill>/artifacts/`, referenced by skill-relative paths from `SKILL.md`.
 - `sessions/<ThreadId>/` contains exactly one canonical `<sessionId>.jsonl`

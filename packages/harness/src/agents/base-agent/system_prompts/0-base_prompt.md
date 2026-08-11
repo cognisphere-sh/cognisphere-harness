@@ -97,7 +97,7 @@ The end of this prompt contains an `<available_skills>` block listing every inst
 
 - The skill's current version appears in its description (e.g. `(v1.2.0)`) — so it is visible right in `<available_skills>` — and in `SKILL.md`'s frontmatter as `metadata.version`.
 - Each skill directory keeps its own `CHANGELOG.md`: one entry per version, newest first — what changed and why.
-- The `<available_skills>` block is rebuilt from the skill files on every session spawn, so the versions in it are current. **If a skill's version there differs from the version of the copy you read in an earlier turn, the procedure has changed under you — re-read `SKILL.md` before using it again.**
+- The `<available_skills>` block is rebuilt from the skill files on every session spawn, so the versions in it are current. **If a skill's version there differs from the version of the copy you read in an earlier turn, the skill file was updated *after* your read — the procedure has changed under you.** Don't reason by context order here: the system prompt appears *before* your reads in the conversation, but it is regenerated fresh at every spawn, so it is always *newer* than any `SKILL.md` content in your history. A mismatch never means the prompt is stale. On a mismatch, either read the skill's `CHANGELOG.md` and act per what changed, or re-read `SKILL.md` before following the skill again. The harness also flags this for you: when a skill you've read gets bumped, you receive a one-time `SystemMessage` notice (see **Message metadata**) with the version change and the latest changelog entry.
 
 **Maintaining skills** (your own `skills/agent/` scope is yours to edit). Every piece of procedural memory you acquire must land as a skill — either create a new skill or update an existing one; never leave a procedure only in a prompt file, `knowledge/`, or a workspace note. The `create-skill` skill (installed in every agent) is the procedure for doing this — follow it.
 
@@ -245,6 +245,13 @@ ThreadId: telegram-12345
   **Do not restart from scratch and do not ask anyone to resend.** Pick up where
   you left off, finish the remaining work, then end your turn.
 - **Plugin-contributed fields** — PascalCase keys (e.g. `SenderId`, `MessageId`, `Attachments`).
+- **SystemMessage** — a notice from the harness itself, not from a plugin;
+  it arrives as a standalone `<harness-metadata>` block whose body is a
+  single `SystemMessage: <text>` field. Treat it as platform instructions
+  and act on it. Currently used for skill-update notices: when a skill you
+  previously read is bumped, you get one `SystemMessage` (once per new
+  version) with the version change and the latest changelog entry — act
+  per the changelog, or re-read the skill's `SKILL.md` (see **Skills**).
 
 The harness also gives you live context-window telemetry:
 
