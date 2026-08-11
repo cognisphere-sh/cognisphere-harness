@@ -18,6 +18,34 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.13]
+
+### Changed
+
+- **`create-skill` installed in every agent** — `agent new` now installs the
+  shipped `create-skill` skill into every agent's own `skills/agent/` dir
+  (previously dev-agent only; the dev agent still gets the full set). The
+  base prompt's "Maintaining skills" section now states the rule explicitly:
+  every piece of procedural memory must land as a skill — create a new one
+  or update an existing one — following the installed `create-skill` skill.
+- **Skill description spec** — a skill's description must carry four parts:
+  summary, what's included (the procedures/topics/scripts/artifacts covered,
+  so an agent can spot a partially relevant skill), when to use it, and the
+  version; `metadata` carries `author` + `version`. Taught in the base
+  prompt, the shipped `docs/base-harness/skills.md`, and `create-skill`
+  (bumped to v1.1.0).
+
+### Breaking changes
+
+- `0-base_prompt.md`'s "Maintaining skills" section was rewritten: procedural
+  memory must always land as a new or updated skill (via the installed
+  `create-skill` skill), and skill descriptions must carry summary +
+  what's-included + when-to-use + version. Replace each fork's copy with the
+  new base file (harness-owned).   [affects: agents/*/system_prompts/0-base_prompt.md]
+- Every agent now carries the `create-skill` skill. Copy the shipped
+  `create-skill` skill directory into each existing agent's
+  `skills/agent/create-skill/`.   [affects: agents/*/skills/agent/create-skill/**]
+
 ## [0.8.12]
 
 ### Changed

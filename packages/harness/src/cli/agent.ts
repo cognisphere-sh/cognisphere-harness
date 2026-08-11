@@ -45,15 +45,18 @@ export function scaffoldAgent(
     copyDir(DEV_AGENT_DIR, target);
     // Other agents reach the dev agent via the core agent-messaging plugin;
     // human-facing channels (e.g. telegram) are opt-in per deployment.
-    // Install the cognisphere skills into the agent's own skills dir — pi
-    // only loads `<agentDir>/skills`, so the home-root `.claude/skills/`
-    // copies aren't visible to the agent.
-    const skillsRoot = shippedSkillsRoot();
-    if (skillsRoot) {
-      for (const id of HOME_SKILL_IDS) {
-        const src = join(skillsRoot, id);
-        if (existsSync(src)) copyDir(src, join(target, "skills", "agent", id));
-      }
+  }
+
+  // Install shipped skills into the agent's own skills dir — pi only loads
+  // `<agentDir>/skills`, so the home-root `.claude/skills/` copies aren't
+  // visible to the agent. Every agent gets `create-skill` (procedural memory
+  // lands as skills); the dev agent gets the full set.
+  const skillsRoot = shippedSkillsRoot();
+  if (skillsRoot) {
+    const ids = opts.dev ? HOME_SKILL_IDS : ["create-skill"];
+    for (const id of ids) {
+      const src = join(skillsRoot, id);
+      if (existsSync(src)) copyDir(src, join(target, "skills", "agent", id));
     }
   }
 

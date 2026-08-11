@@ -163,10 +163,11 @@ to its own package is a contained move.
   net.
 - **The developer agent.** `packages/harness/src/agents/nova/` is an overlay on
   the base template: `agent new <name> --dev` forks the base, copies the
-  overlay on top (the persona, `system_prompts/1-agent.md`), installs the
-  shipped cognisphere skills into the agent's own `skills/agent/` (pi only
-  loads `<agentDir>/skills`, so the home-root `.claude/skills/` copies aren't
-  visible to agents). No plugin is pre-enabled: agent-messaging is a core
+  overlay on top (the persona, `system_prompts/1-agent.md`), and installs the
+  full set of shipped cognisphere skills into the agent's own `skills/agent/`
+  (pi only loads `<agentDir>/skills`, so the home-root `.claude/skills/`
+  copies aren't visible to agents). Non-dev agents get `create-skill` only —
+  every agent authors its own procedural memory as skills. No plugin is pre-enabled: agent-messaging is a core
   plugin on every agent, so the harness's other agents can hand it code/doc
   requests directly; human channels (e.g. telegram) are opt-in.
   `init` pre-creates the developer agent this way in every home — always

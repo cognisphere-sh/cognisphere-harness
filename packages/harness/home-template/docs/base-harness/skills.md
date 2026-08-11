@@ -16,6 +16,12 @@ pi loads every skill at spawn and injects its name, description, and file
 location into the system prompt, so the agent discovers procedures by
 description and reads the full `SKILL.md` only when a task matches.
 
+The description therefore carries four things: a **summary**, **what's
+included** (the procedures, topics, scripts and artifacts the skill covers —
+a skill is often only partially relevant to a task, and the contents list is
+how the agent spots that one section applies), **when to use it** (trigger
+phrases), and the **version**. `metadata` carries `author` and `version`.
+
 **Every skill is versioned:**
 
 - `SKILL.md` frontmatter carries `metadata.version` (semver), **and the
@@ -36,8 +42,10 @@ bump is what makes a procedure change actually reach a long-running agent.
 
 Skills shipped with the harness, installed by `cognisphere init` into
 `.claude/skills/` and `.agents/skills/` at the home root (for coding agents
-working in the home, e.g. Claude Code) and into the developer agent's own
-`skills/agent/` dir (so the running agent loads them natively).
+working in the home, e.g. Claude Code) and into agents' own `skills/agent/`
+dirs (so running agents load them natively): every agent gets `create-skill`
+— procedural memory always lands as a new or updated skill — and the
+developer agent gets the full set.
 
 ## `cognisphere-upgrade`
 

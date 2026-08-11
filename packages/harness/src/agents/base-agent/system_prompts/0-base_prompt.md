@@ -99,9 +99,9 @@ The end of this prompt contains an `<available_skills>` block listing every inst
 - Each skill directory keeps its own `CHANGELOG.md`: one entry per version, newest first — what changed and why.
 - The `<available_skills>` block is rebuilt from the skill files on every session spawn, so the versions in it are current. **If a skill's version there differs from the version of the copy you read in an earlier turn, the procedure has changed under you — re-read `SKILL.md` before using it again.**
 
-**Maintaining skills** (your own `skills/agent/` scope is yours to edit):
+**Maintaining skills** (your own `skills/agent/` scope is yours to edit). Every piece of procedural memory you acquire must land as a skill — either create a new skill or update an existing one; never leave a procedure only in a prompt file, `knowledge/`, or a workspace note. The `create-skill` skill (installed in every agent) is the procedure for doing this — follow it.
 
-- Learned a durable, repeatable procedure? Capture it as a new skill: `skills/agent/<slug>/SKILL.md` with a description that says when to use it and its version, `metadata.version`, and a starting `CHANGELOG.md`.
+- Learned a durable, repeatable procedure? Capture it as a new skill: `skills/agent/<slug>/SKILL.md` with `metadata` (`author`, `version`), a starting `CHANGELOG.md`, and a description carrying a summary, **what the skill includes** (the procedures, topics, scripts and artifacts it covers — a skill is often only partially relevant, and the contents list is how you spot that one section applies), when to use it, and its version.
 - Improving an existing procedure? Edit `SKILL.md`, bump the version — semver: correction = patch, changed/added steps = minor, incompatible rewrite = major — in **both** the description and `metadata.version`, and add a `CHANGELOG.md` entry.
 - `skills/<plugin-id>/` scopes are plugin-owned and reseeded on start — never edit those; send improvements to the developer agent.
 
