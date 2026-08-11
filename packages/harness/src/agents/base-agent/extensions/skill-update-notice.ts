@@ -11,10 +11,10 @@
  * order, tends to trust the (later) read — concluding the prompt is stale
  * instead of realizing the file changed after the read.
  *
- * The fix: track the version of each SKILL.md the agent actually saw (via
- * its `read` tool, or its own `edit`/`write`), and when the file's current
- * version no longer matches, inject ONE persistent notice per (skill, new
- * version) as a standalone `<harness-metadata>` message:
+ * The fix: track the version of each SKILL.md the agent is aware of — the
+ * later of its own `read`/`edit`/`write` and the last notice we sent — and
+ * whenever the file's current version differs, inject one persistent
+ * notice as a standalone `<harness-metadata>` message:
  *
  *   SystemMessage: Skill "<name>" changed after you last read it
  *   (v<read> -> v<current>). <latest CHANGELOG.md entry>
@@ -26,9 +26,12 @@
  *   a fresh pi per batch).
  * - `before_agent_start` (not streaming → direct append, lands before the
  *   batch's first LLM call) and `turn_start` (mid-run bumps, delivered at
- *   the next steer seam) compare last-known vs current and emit the notice.
- * - Sent notices are persisted as custom entries too, keyed
- *   `<path>@<version>`, so each update is announced exactly once.
+ *   the next steer seam) compare the aware version vs current and emit the
+ *   notice.
+ * - Sending a notice marks the agent aware of that version (persisted as a
+ *   custom entry), so a version is never re-announced while the file stays
+ *   put — but ANY later change fires again, including a revert back to a
+ *   previously seen version (e.g. 1.2 → 1.3 → 1.2 notifies twice).
  */
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -72,37 +75,35 @@ const latestChangelog = (skillDir: string): string | null => {
 };
 
 export default function skillUpdateNotice(pi: ExtensionAPI): void {
-  // Version of each SKILL.md as the agent last saw it (abs path → version).
-  const lastKnown = new Map<string, string>();
-  // Updates already announced, keyed `<abs path>@<new version>`.
-  const notified = new Set<string>();
+  // Version of each SKILL.md the agent is aware of (abs path → version):
+  // the later of its own read/edit/write and the last notice we sent.
+  const aware = new Map<string, string>();
   let seeded = false;
 
-  // Rebuild both maps from the session's custom entries — the harness spawns
+  // Rebuild the map from the session's custom entries — the harness spawns
   // a fresh pi per batch, and the spawn gap is exactly when skills change.
+  // Entries replay in order, so the latest read-or-sent wins.
   const ensureSeeded = (ctx: ExtensionContext): void => {
     if (seeded) return;
     seeded = true;
     for (const e of ctx.sessionManager.getEntries()) {
       if (e.type !== "custom") continue;
+      if (e.customType !== READ_TYPE && e.customType !== SENT_TYPE) continue;
       const d = e.data as { path?: string; version?: string } | undefined;
       if (!d?.path || !d.version) continue;
-      if (e.customType === READ_TYPE) lastKnown.set(d.path, d.version);
-      else if (e.customType === SENT_TYPE) notified.add(`${d.path}@${d.version}`);
+      aware.set(d.path, d.version);
     }
   };
 
   const check = (): void => {
-    for (const [path, readVersion] of lastKnown) {
+    for (const [path, awareVersion] of aware) {
       const meta = skillMeta(path);
-      if (!meta || meta.version === readVersion) continue;
-      const key = `${path}@${meta.version}`;
-      if (notified.has(key)) continue;
-      notified.add(key);
+      if (!meta || meta.version === awareVersion) continue;
+      aware.set(path, meta.version);
       pi.appendEntry(SENT_TYPE, { path, version: meta.version });
       const changelog = latestChangelog(dirname(path));
       const lines = [
-        `SystemMessage: Skill "${meta.name}" (${path}) changed after you last read it: v${readVersion} -> v${meta.version}. This is why its advertised version in <available_skills> differs from the copy in your history.`,
+        `SystemMessage: Skill "${meta.name}" (${path}) changed after you last read it or were notified: v${awareVersion} -> v${meta.version}. This is why its advertised version in <available_skills> differs from the copy in your history.`,
         changelog ? `Latest changelog entry:\n${changelog}` : "(No changelog entry found.)",
         `Act per the changelog, or re-read ${path} before following this skill again.`,
       ];
@@ -129,8 +130,8 @@ export default function skillUpdateNotice(pi: ExtensionAPI): void {
     if (typeof p !== "string" || basename(p) !== "SKILL.md") return;
     const abs = resolve(ctx.cwd, p);
     const version = skillMeta(abs)?.version;
-    if (!version || lastKnown.get(abs) === version) return;
-    lastKnown.set(abs, version);
+    if (!version || aware.get(abs) === version) return;
+    aware.set(abs, version);
     pi.appendEntry(READ_TYPE, { path: abs, version });
   });
 

@@ -248,10 +248,11 @@ ThreadId: telegram-12345
 - **SystemMessage** — a notice from the harness itself, not from a plugin;
   it arrives as a standalone `<harness-metadata>` block whose body is a
   single `SystemMessage: <text>` field. Treat it as platform instructions
-  and act on it. Currently used for skill-update notices: when a skill you
-  previously read is bumped, you get one `SystemMessage` (once per new
-  version) with the version change and the latest changelog entry — act
-  per the changelog, or re-read the skill's `SKILL.md` (see **Skills**).
+  and act on it. Currently used for skill-update notices: whenever a skill
+  you previously read changes to a version you haven't been told about yet
+  (upgrades and reverts alike), you get one `SystemMessage` with the
+  version change and the latest changelog entry — act per the changelog,
+  or re-read the skill's `SKILL.md` (see **Skills**).
 
 The harness also gives you live context-window telemetry:
 

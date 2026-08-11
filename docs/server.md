@@ -222,11 +222,14 @@ Conventions worth knowing:
   read — the prompt is never the stale side). The seeded
   `skill-update-notice.ts` extension enforces this actively: it records the
   frontmatter version of every `SKILL.md` the agent reads (or edits/writes)
-  as persistent custom session entries, and when the file's current version
-  no longer matches, injects a one-time-per-(skill, version) standalone
-  `<harness-metadata>` message — `SystemMessage: Skill "<name>" changed
-  after you last read it (vX -> vY)` plus the newest `CHANGELOG.md` entry —
-  checked at `before_agent_start` and each `turn_start`. A skill is self-contained: its
+  as persistent custom session entries, and whenever the file's current
+  version differs from the last one the agent saw *or was notified about*
+  (upgrades and reverts alike — sending a notice marks that version as
+  seen, so a version is never re-announced while the file stays put),
+  injects a standalone `<harness-metadata>` message — `SystemMessage:
+  Skill "<name>" changed after you last read it or were notified
+  (vX -> vY)` plus the newest `CHANGELOG.md` entry — checked at
+  `before_agent_start` and each `turn_start`. A skill is self-contained: its
   helper scripts live in `<skill>/scripts/` and supporting artifacts in
   `<skill>/artifacts/`, referenced by skill-relative paths from `SKILL.md`.
 - `sessions/<ThreadId>/` contains exactly one canonical `<sessionId>.jsonl`

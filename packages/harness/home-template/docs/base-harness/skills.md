@@ -40,10 +40,11 @@ bump is what makes a procedure change actually reach a long-running agent.
 It also warns them not to trust context order: the system prompt is rebuilt
 on every spawn, so on a mismatch the skill file changed *after* their read —
 the prompt is never the stale side. The harness backs this up with the
-seeded `skill-update-notice` extension: when a skill an agent has read gets
-bumped, the agent receives a one-time `SystemMessage` notice (per new
-version) carrying the version change and the newest changelog entry, telling
-it to act per the changelog or re-read the skill.
+seeded `skill-update-notice` extension: whenever a skill an agent has read
+changes to a version the agent hasn't been told about yet — upgrades and
+reverts alike — the agent receives one `SystemMessage` notice carrying the
+version change and the newest changelog entry, telling it to act per the
+changelog or re-read the skill.
 
 ## Shipped skills
 
