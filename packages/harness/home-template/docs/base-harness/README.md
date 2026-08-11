@@ -63,9 +63,22 @@ plugin config, secrets, and model providers. Login users live in
   `maxConcurrentSlots?`, `devAgent?` (marks the developer agent), optional
   `secretsSchema`/`configSchema`/`config`.
 - `system_prompts/*.md` — concatenated in lexical order into the system
-  prompt. `0-*` files are harness-owned and kept in sync with the installed
-  harness version on upgrade (replaced by the new seed — don't edit them).
-  All agent- or app-specific instructions go in `1-agent.md`.
+  prompt. Each file has an owner:
+  - `0-*` — **harness-owned**: replaced by the shipped seed on every upgrade;
+    don't edit them (`0.1-agent-directory.md` excepted — regenerated only
+    when missing, edits survive).
+  - `plugin-<id>.md` — **plugin-owned**: reseeded from the installed plugin
+    on every agent start; edits are silently overwritten — don't edit them.
+    Need different plugin behaviour? Fork the plugin instead.
+  - `1-agent.md` — **yours**: the agent's identity, persona, and behaviour —
+    and nothing procedural. Step-by-step procedures (SOPs, runbooks) are
+    versioned skills under `skills/agent/` (see skills.md), so they stay
+    discoverable and the agent notices when they change.
+
+  If a deployment genuinely must override a harness- or plugin-owned prompt
+  file, document the override (what and why) in `docs/harness/` — an
+  undocumented divergence is treated as drift and reverted on the next
+  upgrade or restart.
 - `workspace/` — the agent's durable notes; `knowledge/` for cross-thread
   reference docs.
 - `sessions/<threadId>/` — conversation history (JSONL), the assembled
@@ -120,7 +133,7 @@ and software-install requests directly; human-facing channels (e.g. telegram)
 are opt-in per deployment. It keeps
 `docs/harness/` and `docs/app/` up to
 date after every change. The cognisphere skills (`cognisphere-upgrade`,
-`create-plugin`) are installed in its own `skills/agent/` dir, so it can
+`create-plugin`, `create-skill`) are installed in its own `skills/agent/` dir, so it can
 drive harness upgrades and author plugins directly. To bring it up: set a
 model provider. Other agents are instructed to pass code-change and install
 requests to it rather than modify the platform themselves.

@@ -39,6 +39,57 @@ project adheres to [Semantic Versioning](https://semver.org/).
   / `qwen-token-plan-cn` ids that had drifted in since 0.81.1). Catalog
   entries themselves are unchanged — new providers stay unlisted in the
   Models page until an entry is added.
+- **System-prompt file ownership is now an explicit contract**, taught in
+  the base prompt (new "System prompts" section) and documented in
+  `docs/server.md` §3 and the shipped `docs/base-harness/README.md`:
+  `0-*` files are harness-owned (replaced by the seed on upgrade;
+  `0.1-agent-directory.md` excepted), `plugin-<id>.md` is plugin-owned
+  (reseeded on every agent start — edits are clobbered), and `1-agent.md`
+  is deployment-owned: identity/persona/behaviour only. Any deliberate
+  override of a harness- or plugin-owned prompt file must be documented in
+  the home's `docs/harness/`; undocumented divergence is drift.
+- **Skills are the agent's procedural memory, and are versioned.** The base
+  prompt's new "Skills" section tells agents to keep every step-by-step
+  procedure (SOP, runbook) as a skill — never inlined in prompt files,
+  `knowledge/`, or workspace notes — with the version stated in the skill's
+  description (the only metadata pi injects into the prompt) and in
+  `SKILL.md`'s `metadata.version`, plus a per-skill `CHANGELOG.md`. Skills
+  are self-contained — helper scripts in the skill's `scripts/`, supporting
+  files in `artifacts/`, referenced by skill-relative paths. Agents
+  re-read a skill whose advertised version differs from the copy they last
+  read, so version bumps propagate procedure changes to long-running
+  agents, and task-thread briefs name the skill (and version) to follow
+  instead of restating its steps. Shipped skills (`cognisphere-upgrade` v1.1.0, `create-plugin`
+  v1.1.0) follow the convention; the `cognisphere-upgrade` skill now also
+  migrates procedural content out of prompts/SOPs into versioned skills
+  when an upgrade window touches an agent's prompts.
+- **New shipped skill `create-skill` (v1.0.0)** — the authoring/updating
+  procedure for versioned agent skills: scaffold `SKILL.md` + per-skill
+  `CHANGELOG.md` + `scripts/`/`artifacts/`, semver bump rules, SOP
+  migration, and pi's frontmatter constraints. Installed like the other
+  cognisphere skills — into the home's `.claude/skills/` + `.agents/skills/`
+  by `init`, and into the developer agent's own `skills/agent/` — so the
+  dev agent carries the skill-authoring procedure as a skill itself.
+  Existing homes pick it up via the upgrade's scaffold refresh; existing
+  dev agents by copying it into `agents/nova/skills/agent/create-skill/`.
+- `cognisphere agent new` seeds a starter `system_prompts/1-agent.md`
+  (persona skeleton) so every agent dir carries the same prompt layout.
+
+### Breaking changes
+
+- The developer-agent persona file was renamed for layout consistency:
+  `system_prompts/1-dev-agent.md` → `system_prompts/1-agent.md`. Rename the
+  fork's file (contents unchanged).   [affects: agents/nova/system_prompts/*]
+- `0-base_prompt.md` gained the "Skills" and "System prompts" sections and
+  moved procedures out of `knowledge/SOPs/`. Replace each fork's copy with
+  the new seed (local edits in a `0-*` file move to `1-agent.md`).   [affects: agents/*/system_prompts/0-base_prompt.md]
+- Procedural memory must live in versioned skills: for every agent, re-read
+  its `system_prompts/*.md` and `knowledge/` (incl. `knowledge/SOPs/`) and
+  migrate each step-by-step procedure into
+  `skills/agent/<slug>/SKILL.md` (version in description +
+  `metadata.version`, per-skill `CHANGELOG.md`, helper scripts in the
+  skill's `scripts/`, supporting files in `artifacts/`), updating
+  `1-agent.md` to reference the skill instead of restating it.   [affects: agents/*]
 
 ## [0.8.11]
 

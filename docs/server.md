@@ -135,7 +135,7 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 ├── scripts/                      ← lifecycle (setup-server, server, build)
 │   └── aws/                         + per-platform provisioning & backup
 │                                    (setup.sh, backup.sh, config.example)
-├── .claude/skills/               ← agent skills (upgrade, create-plugin), copied
+├── .claude/skills/               ← agent skills (upgrade, create-plugin, create-skill), copied
 ├── .agents/skills/                   in by `cognisphere init` from the package
 ├── app/                          ← the user-facing app (placeholder until built)
 └── harness/                      ← the harness data dir documented below
@@ -165,8 +165,10 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         │   ├── 0-base_prompt.md  ← the agent prompt (tools, workspace, threads, plugins, comms, task threads, dev-agent hand-off); vars baked at create; harness-owned — kept in sync with the installed version on upgrade
         │   ├── 0.1-agent-directory.md ← roster of the OTHER agents (id + description);
         │   │                       written by the manager if absent, edits survive
-        │   ├── 1-agent.md        ← persona + all agent/app-specific instructions, hand-written
-        │   └── plugin-<id>.md    ← plugin seeds (when installed)
+        │   ├── 1-agent.md        ← persona + behaviour, hand-written; NO procedures
+        │   │                       (step-by-step procedures live in skills/)
+        │   └── plugin-<id>.md    ← plugin seeds (when installed); plugin-owned,
+        │                           overwritten from the seed on every agent start
         ├── scripts/agent/        ← ddgs / markitdown / agent-browser / session-reader wrappers
         ├── workspace/            ← agent's scratch space
         │   ├── index.md
@@ -198,6 +200,23 @@ Conventions worth knowing:
 - `system_prompts/*.md` is concatenated lex-sorted to form the system
   prompt sent to pi — written to `sessions/<ThreadId>/.system-prompt.md`
   and handed to pi as a path, not as argv text (§4.8.4).
+- **Prompt-file ownership.** `0-*` files are harness-owned (replaced with
+  the shipped seed on upgrade; `0.1-agent-directory.md` excepted — only
+  regenerated when missing). `plugin-<id>.md` is plugin-owned (reseeded on
+  every start — edits are clobbered). `1-agent.md` (and other `1-*` files)
+  is deployment-owned: identity/persona/behaviour only, no procedural
+  content — procedures are versioned skills under `skills/agent/`. If a
+  deployment must override a harness- or plugin-owned prompt file, the
+  override is documented in the home's `docs/harness/`; an undocumented
+  divergence is drift and gets reverted on the next upgrade/restart.
+- **Skill versioning.** Every skill (`skills/<scope>/<skill>/SKILL.md`)
+  carries its version in the frontmatter (`metadata.version`) **and** in
+  the description text (pi injects only name/description/location into the
+  prompt — see §4.8.4), and keeps a per-skill `CHANGELOG.md`. The base
+  prompt instructs agents to re-read a skill whose advertised version
+  differs from the copy they last read. A skill is self-contained: its
+  helper scripts live in `<skill>/scripts/` and supporting artifacts in
+  `<skill>/artifacts/`, referenced by skill-relative paths from `SKILL.md`.
 - `sessions/<ThreadId>/` contains exactly one canonical `<sessionId>.jsonl`
   per thread. The harness owns the filename — `sessionId` is a UUID
   generated on the thread's first batch and persisted in `.events.db`'s
@@ -897,7 +916,11 @@ swaps in a fresh runner constructed with the new env snapshot.
 
 The result is written to `<agentDir>/sessions/<threadId>/.system-prompt.md`
 (rewritten on every spawn) and pi gets **that path** as its `--system-prompt`
-value, not the text. pi's `resolvePromptInput` reads the value as a file when
+value, not the text. pi then appends its own `<available_skills>` block to
+the custom prompt — one `<skill>` entry (name, description, location) per
+skill loaded from the `--skill` root (`<agentDir>/skills`, §4.8.1's spawn
+args) — which is why a skill's version must appear in its *description*:
+that is the only skill metadata the model sees without reading `SKILL.md`. pi's `resolvePromptInput` reads the value as a file when
 it names an existing path, so this needs no pi-side flag. It is not a
 cosmetic choice: Linux caps a **single** argv/env string at
 `MAX_ARG_STRLEN` = 131 072 bytes — a per-string limit, independent of the

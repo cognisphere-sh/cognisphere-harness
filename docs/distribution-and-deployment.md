@@ -69,7 +69,7 @@ init <name>` scaffolds it:
 │   ├── aws/                      (setup.sh + backup.sh + config.example; cp to `config` there)
 │   ├── contabo/                  (setup.sh + config.example; same pattern, cntb-driven)
 │   └── lib/                      (remote-bootstrap.sh — shared by the per-platform setup.sh)
-├── .claude/skills/            → agent skills (upgrade, create-plugin), copied in by init
+├── .claude/skills/            → agent skills (upgrade, create-plugin, create-skill), copied in by init
 ├── .agents/skills/               (same set — for non-Claude coding agents)
 ├── app/                       ← the user-facing app (placeholder README until you
 │                                 add one; a Next.js app is the convention)
@@ -161,7 +161,7 @@ to its own package is a contained move.
   net.
 - **The developer agent.** `packages/harness/src/agents/nova/` is an overlay on
   the base template: `agent new <name> --dev` forks the base, copies the
-  overlay on top (the persona, `system_prompts/1-dev-agent.md`), installs the
+  overlay on top (the persona, `system_prompts/1-agent.md`), installs the
   shipped cognisphere skills into the agent's own `skills/agent/` (pi only
   loads `<agentDir>/skills`, so the home-root `.claude/skills/` copies aren't
   visible to agents). No plugin is pre-enabled: agent-messaging is a core

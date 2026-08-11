@@ -88,6 +88,6 @@ export function cmdAgentNew(argv: string[]): void {
   info("");
   info("Next steps:");
   info(`  edit agents/${name}/agent.json           # set model/provider`);
-  info(`  edit agents/${name}/system_prompts/      # tailor the prompt`);
+  info(`  edit agents/${name}/system_prompts/1-agent.md  # persona & behaviour (0-* files are harness-owned)`);
   info("  cognisphere plugin add <id>              # add a catalog plugin (e.g. telegram)");
 }

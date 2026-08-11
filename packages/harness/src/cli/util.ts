@@ -49,7 +49,7 @@ export const MAIN_TS = join(SRC_ROOT, "core", "main.ts");
 export const CORE_PLUGINS = new Set<string>(CORE_PLUGIN_IDS);
 
 /** The home-facing cognisphere skills shipped with the package. */
-export const HOME_SKILL_IDS = ["cognisphere-upgrade", "create-plugin"];
+export const HOME_SKILL_IDS = ["cognisphere-upgrade", "create-plugin", "create-skill"];
 
 /** The developer agent's fixed id. Every home's dev agent is named this;
  *  the name is reserved — no other agent may use it. */

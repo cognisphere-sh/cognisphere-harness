@@ -1,9 +1,9 @@
 ---
 name: cognisphere-upgrade
-description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere-sh/cognisphere-harness dependency.
+description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere-sh/cognisphere-harness dependency. (v1.1.0)
 metadata:
   author: cognisphere
-  version: "1.0.0"
+  version: "1.1.0"
   argument-hint: <target-version (optional)>
 ---
 
@@ -75,6 +75,34 @@ determine the exact edits. Common shapes:
   operator to perform; prefer instructing over editing secret values yourself.
 
 Keep edits **surgical** — only what each entry requires (CLAUDE.md §3).
+
+#### Procedural memory → skills
+
+Whenever the window touches an agent's prompts (a base-prompt refresh or any
+`agents/*/system_prompts/*` entry), also **re-read that agent's
+`system_prompts/*.md` and `knowledge/` (including any `knowledge/SOPs/`)**
+and migrate procedural content to skills — prompt files hold identity and
+behaviour only; every step-by-step procedure (SOP, runbook, multi-step
+workflow) is a versioned skill:
+
+1. For each procedure found inlined in `1-agent.md` (or other `1-*` files)
+   or sitting in `knowledge/SOPs/`, create
+   `agents/<id>/skills/agent/<slug>/SKILL.md` — frontmatter `name`, a
+   `description` that says when to use it **and its version** (e.g.
+   `(v1.0.0)`), `metadata.version` — plus a starting `CHANGELOG.md` in the
+   skill dir.
+2. Move the procedure's body into the `SKILL.md`; delete it from the prompt
+   file / SOP file. Move helper scripts the procedure invokes into the
+   skill's own `scripts/`, and its templates/reference files into
+   `artifacts/`, fixing paths in `SKILL.md` to be skill-relative.
+3. Update `1-agent.md` to *reference* the skill (when to reach for it), not
+   restate its steps.
+
+Ownership reminders while in the prompts: `0-*` files are harness-owned
+(replaced by the seed), `plugin-<id>.md` is plugin-owned (reseeded on every
+start — a local edit there is already being clobbered; surface it), and any
+deliberate override of a harness/plugin-owned file must be documented in
+`docs/harness/` — flag undocumented drift in your summary.
 
 ### 4. Refresh the harness-owned scaffold files
 

@@ -1,6 +1,6 @@
 ---
 name: create-plugin
-description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin", or "write a plugin for the harness".
+description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin", or "write a plugin for the harness". (v1.1.0)
 metadata:
   author: cognisphere
   version: "1.1.0"

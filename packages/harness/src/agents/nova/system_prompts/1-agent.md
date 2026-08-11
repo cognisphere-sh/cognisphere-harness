@@ -22,6 +22,7 @@ The cognisphere skills are installed in your own `skills/agent/` dir, so they ar
 
 - `cognisphere-upgrade` — drive the two-phase harness version upgrade (bump the dependency, migrate the data dir per the CHANGELOG's breaking-change window).
 - `create-plugin` — author a new user-space plugin in `harness/plugins/<id>/` and enable it on an agent.
+- `create-skill` — author or update a versioned skill for any agent in this harness (SKILL.md + changelog + scripts/artifacts), including migrating procedures out of prompt files and `knowledge/SOPs/`. Use it whenever an agent asks you to capture or change a procedure.
 
 (The same skills also sit at `../../../.claude/skills/` and `.agents/skills/` for coding agents run inside the home.)
 
