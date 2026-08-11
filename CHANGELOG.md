@@ -18,6 +18,35 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.16]
+
+### Changed
+
+- **Skill-update notices now fire on every unseen version change, reverts
+  included.** 0.8.15's dedupe was keyed per (skill, new version), so a
+  revert back to the version the agent had originally read stayed silent
+  (1.2 → 1.3 → 1.2 sent only the 1.3 notice), leaving the agent believing
+  the withdrawn version was current. `skill-update-notice.ts` now tracks a
+  single "aware" version per skill — the later of the agent's own
+  read/edit/write and the last notice sent — and fires whenever the file's
+  current version differs from it, upgrades and reverts alike. Sending a
+  notice marks that version as seen, so nothing re-fires while the file
+  stays put. 0.8.15 sessions replay into the new model unchanged (read +
+  sent entries replay chronologically, latest wins). The notice text now
+  reads "changed after you last read it or were notified".
+- The base prompt's `SystemMessage` bullet and the shipped
+  `docs/base-harness/skills.md` describe the new upgrade-and-revert
+  semantics (upgrade refreshes the doc wholesale).
+
+### Breaking changes
+
+- `skill-update-notice.ts` notification semantics changed (fires on any
+  unseen version change, reverts included) — replace each fork's copy with
+  the shipped version.   [affects: agents/*/extensions/skill-update-notice.ts]
+- `0-base_prompt.md`'s `SystemMessage` bullet was reworded for the new
+  semantics. Replace each fork's copy with the new seed
+  (harness-owned).   [affects: agents/*/system_prompts/0-base_prompt.md]
+
 ## [0.8.15]
 
 ### Changed
