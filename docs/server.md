@@ -189,7 +189,7 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         ├── skills/<scope>/<skill>/SKILL.md
         ├── extensions/harness-bridge.ts   ← seeded; reports entry ids (§4.7)
         ├── extensions/bash-guard.ts       ← seeded; runs agent bash under `set -u`
-        ├── extensions/context-meta.ts     ← seeded; standalone per-step checkpoint messages + live Model/ContextUsage per LLM call
+        ├── extensions/context-meta.ts     ← seeded; indexed pre-call checkpoint messages + live Model/ContextUsage per LLM call
         ├── extensions/skill-update-notice.ts ← seeded; one-time SystemMessage notice when a read skill's version changes
         ├── extensions/<scope>/{index.ts,package.json,...}
         ├── scripts/<plugin>/<cli>

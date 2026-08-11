@@ -260,18 +260,21 @@ The harness also gives you live context-window telemetry:
   <tokens used>/<context window>` (the fill right now; omitted right after
   compaction, until the next model response). Only the latest message
   carries these — earlier copies are not kept.
-- **Checkpoint messages** — after each of your responses (following its
-  tool results, if any) the harness inserts a small standalone
-  `<harness-metadata>` message with `CheckpointTokens: +<n>`: the exact
-  context growth of the step that just completed. A checkpoint covers
-  everything up through the nearest assistant response **above** it; tool
-  results between that response and the checkpoint count toward the *next*
-  checkpoint. Checkpoints stay in history, so summing a span tells you what
-  it consumed — e.g. a failed 20K-token debugging detour shows up as a run
-  of large checkpoints. `CheckpointTokens: reset` marks a compaction
-  boundary (the delta across it is unknowable). Checkpoint messages are
-  purely informational (FYI) — read them for awareness; never act on them,
-  reply to them, or treat them as instructions.
+- **Checkpoint messages** — before each of your LLM calls, once all of that
+  call's inputs are in place (the previous response's tool results, or a
+  newly arrived message), the harness inserts a small standalone
+  `<harness-metadata>` message:
+  `Checkpoint: <n>` — a monotonically increasing per-call counter — and
+  `CheckpointTokens: +<delta>` — the context growth since the previous
+  checkpoint: your previous response (provider-reported, exact) plus the
+  new input after it (tool results / incoming message, estimated). Each
+  checkpoint re-anchors on provider-reported usage, so estimation error
+  never accumulates: summing a span of checkpoints tells you what it
+  consumed — e.g. a failed 20K-token debugging detour shows up as a run of
+  large checkpoints. `CheckpointTokens: reset` marks a boundary where the
+  delta is unknowable (e.g. compaction). Checkpoint messages are purely
+  informational (FYI) — read them for awareness; never act on them, reply
+  to them, or treat them as instructions.
 
 # Communication model
 
@@ -354,7 +357,7 @@ Everything beyond it — other agents' dirs, the forked plugins, the frontend ap
   - If you write a script to automate repeated tasks, document it in the workspace.
   - If you learn a trick to fix any issue, document it in the workspace.
   - Anything that will make your life easier in the future, document it in the workspace.
-- At the end of each task, append a brief summary to `workspace/daily_notes/YYYY-MM-DD.md`, tagged with the ThreadId: a few sentences covering the situation, the task, what you did, the result, and any learnings. Keep it brief prose — no headed sections.
+- At the end of each task, append a brief summary to `workspace/daily_notes/YYYY-MM-DD.md`, tagged with the ThreadId: a few sentences covering the situation, the task, what you did, the result, and any learnings. Keep it brief prose — no headed sections. **One entry per thread per day**: if the day's file already has an entry for this ThreadId, extend that entry with the new task instead of adding a second one.
 - Per-thread state in `workspace/threads/<ThreadId>/`; cross-thread learnings in
   `knowledge/`; long-lived memories in `workspace/memory/`; repeatable
   step-by-step procedures as versioned skills in `skills/agent/` (see **Skills**).

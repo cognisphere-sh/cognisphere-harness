@@ -3,39 +3,51 @@
  * child (see `runner.ts:spawnPi`). Gives the agent context-window
  * awareness through two complementary mechanisms:
  *
- * 1. CHECKPOINT MESSAGES: after each assistant response, a standalone
- *    custom message (customType "context-meta.checkpoint") is injected:
+ * 1. CHECKPOINT MESSAGES: one standalone custom message (customType
+ *    "context-meta.checkpoint") is injected before EVERY LLM call —
+ *    after all inputs to that call (tool results / the user message)
+ *    are in place:
  *
- *      CheckpointTokens: +<n>
+ *      Checkpoint: <n>
+ *      CheckpointTokens: +<delta>
  *
- *    <n> is the exact context growth of the completed step, computed from
- *    consecutive provider-reported usage totals (input + output + cache) —
- *    no estimation. Standalone messages (rather than stamps fused into
- *    neighboring messages) keep the trail prune-safe: a future context
- *    cleaner can add/remove checkpoints by identity, independent of the
- *    content messages they describe. `CheckpointTokens: reset` marks a
- *    shrink (compaction) where the delta is unknowable.
+ *    <n> is a monotonically increasing integer (one per LLM call, seeded
+ *    across process respawns by replaying the session), and <delta> is the
+ *    context growth since the previous checkpoint. The number is
+ *    anchor + estimate: the last provider-reported assistant usage total
+ *    (exact) plus pi's estimate of the messages after it (chars/4 for
+ *    text, ~1200 tokens per image — `estimateContextTokens`, surfaced via
+ *    ctx.getContextUsage()). Because every checkpoint re-anchors on
+ *    provider truth, estimation error never accumulates: an off-by-X in
+ *    one checkpoint's trailing estimate is compensated in the next
+ *    checkpoint's delta, so summing a span of checkpoints stays accurate.
+ *    `CheckpointTokens: reset` marks a boundary where the delta is
+ *    unknowable (compaction shrink, or the fill is momentarily unknown).
  *
- *    Placement: `deliverAs: "steer"` appends at the first provider-legal
- *    seam — after the response's tool calls finish (nothing may sit
- *    between a tool-use response and its tool results), before the next
- *    LLM call. So a checkpoint covers everything up through the nearest
- *    assistant response ABOVE it; tool results between that response and
- *    the checkpoint belong to the NEXT checkpoint.
+ *    Emission points — chosen so a message is only ever sent when the
+ *    next LLM call is provably imminent (this is load-bearing: a pending
+ *    message keeps pi's agent loop alive, so steering after a turn-ending
+ *    response would provoke endless empty LLM calls — observed in
+ *    production with an earlier design):
  *
- *    Emission timing is load-bearing: while streaming, a pending message
- *    keeps pi's agent loop alive, so a checkpoint sent right after a
- *    turn-ending response would provoke an endless run of empty LLM calls.
- *    Checkpoints are therefore sent immediately only when the response has
- *    tool calls (the loop continues anyway); for a turn-ending response
- *    the emit waits for agent_settled, where isStreaming is false and
- *    sendMessage appends directly — right after the final response, before
- *    the next user message, no turn triggered. If the process exits first,
- *    seeding replays the session on spawn and emits the missing checkpoint
- *    as catch-up — the trail stays gapless across batch boundaries either
- *    way. (Note for the future pruner: tool calls and their tool results
- *    must be removed together — never orphan either — and checkpoint
- *    messages should be selected by customType/entry id, not by
+ *    - Run start: `before_agent_start` returns the checkpoint message —
+ *      pi appends it right after the incoming user message, before the
+ *      run's first LLM call. This checkpoint also covers the PREVIOUS
+ *      run's final response (the anchor), so nothing is lost across
+ *      batches and no settle/catch-up machinery is needed.
+ *    - Mid-run: the tool-calling assistant response says how many tool
+ *      results to expect; on the last toolResult's `message_end` the
+ *      checkpoint is sent as a steer, which pi drains after tool
+ *      execution, before the next LLM call. The loop is guaranteed to
+ *      continue (the response had tool calls), so the steer can't strand.
+ *
+ *    Placement caveats (all self-correcting at the next anchor): the last
+ *    tool result may not yet be inside getContextUsage()'s estimate when
+ *    its message_end fires, and steer user messages queued before the
+ *    checkpoint land between it and the call. A checkpoint therefore
+ *    reads as "approximately the input to the next LLM call"; spans are
+ *    exact. (Note for a future pruner: tool calls and their results must
+ *    be removed together, and checkpoints selected by customType, not
  *    position.)
  *
  * 2. EPHEMERAL per-call fill (`context` hook): every LLM call gets
@@ -46,109 +58,106 @@
  *    appended to the outgoing context's last message. The hook receives a
  *    deep copy, so nothing persists — exactly one fresh block exists per
  *    call, correct even right after compaction, and absolute fill never
- *    freezes into history where it could drift. `ContextUsage` = last
- *    valid assistant usage plus a chars/4 estimate of trailing messages
- *    (pi's `estimateContextTokens`); omitted while unknown.
+ *    freezes into history where it could drift.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const CHECKPOINT_TYPE = "context-meta.checkpoint";
 
-interface AssistantLike {
-  stopReason: string;
-  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number };
-}
-
-/** True context size after a response: provider-reported, includes cache. */
-const contextTokens = (m: AssistantLike): number | null => {
-  if (m.stopReason === "aborted" || m.stopReason === "error") return null;
-  const u = m.usage;
-  const total = u.totalTokens || u.input + u.output + u.cacheRead + u.cacheWrite;
-  return total > 0 ? total : null;
-};
+/** Mirrors pi's ESTIMATED_IMAGE_CHARS (4800 chars ≈ 1200 tokens) for the
+ *  incoming user message's images, which aren't in agent state yet when
+ *  before_agent_start fires. */
+const IMAGE_TOKENS = 1200;
 
 export default function contextMeta(pi: ExtensionAPI): void {
-  // Context size covered by the last checkpoint emitted (or found in the
-  // session at seed time). The next checkpoint's delta is measured from it.
-  let prevC = 0;
+  // Next checkpoint index and the total the previous checkpoint reported
+  // (anchor + estimate; null when the fill was unknown, e.g. right after
+  // compaction). Both seeded from the session on spawn.
+  let nextIndex = 1;
+  let prevTotal: number | null = null;
   let seeded = false;
 
-  const emitCheckpoint = (delta: number): void => {
-    const line = delta < 0 ? "CheckpointTokens: reset" : `CheckpointTokens: +${delta}`;
-    pi.sendMessage(
-      {
-        customType: CHECKPOINT_TYPE,
-        content: `<harness-metadata>\n${line}\n</harness-metadata>`,
-        display: true,
-      },
-      { deliverAs: "steer", triggerTurn: false },
-    );
-  };
-
-  // Replay the session to recover where the previous batch left off: each
-  // checkpoint entry consumes the nearest assistant total above it. If the
-  // last response has no checkpoint after it (the previous process exited
-  // with the message still queued), emit it now as catch-up — it lands
-  // before this batch's first LLM call.
+  // Replay the session to continue the numbering and delta chain across
+  // process respawns (the harness spawns a fresh pi per batch).
   const ensureSeeded = (ctx: ExtensionContext): void => {
     if (seeded) return;
     seeded = true;
-    let lastC: number | null = null;
+    let count = 0;
+    let lastDetails: { index?: number; total?: number | null } | undefined;
     for (const e of ctx.sessionManager.getEntries()) {
-      if (e.type === "message" && e.message.role === "assistant") {
-        const c = contextTokens(e.message);
-        if (c !== null) lastC = c;
-      } else if (e.type === "custom_message" && e.customType === CHECKPOINT_TYPE) {
-        if (lastC !== null) prevC = lastC;
-      }
+      if (e.type !== "custom_message" || e.customType !== CHECKPOINT_TYPE) continue;
+      count++;
+      lastDetails = e.details as typeof lastDetails;
     }
-    if (lastC !== null && lastC !== prevC) {
-      emitCheckpoint(lastC - prevC);
-      prevC = lastC;
-    }
+    nextIndex = (lastDetails?.index ?? count) + 1;
+    prevTotal = lastDetails?.total ?? null;
   };
 
-  // Checkpoint for a turn-ending response, held until it is safe to send.
-  // While the agent is streaming, sendMessage lands in pi's pending queue,
-  // and the loop keeps running while ANY pending message exists — so
-  // emitting right after a response with no tool calls would keep
-  // provoking empty LLM calls forever (observed in production). Safe
-  // moments: while the loop continues anyway (response has tool calls,
-  // steer rides along), or once the run has settled — at agent_settled
-  // isStreaming is already false, so sendMessage takes its direct-append
-  // branch: the checkpoint lands in the session right after the final
-  // response, before any future user message, without triggering a turn.
-  let deferred: number | null = null;
-
-  const flushDeferred = (): void => {
-    if (deferred === null) return;
-    emitCheckpoint(deferred);
-    deferred = null;
+  // Build one checkpoint: delta from the previous checkpoint's total, or
+  // `reset` when either side is unknown or the context shrank (compaction).
+  const buildCheckpoint = (
+    total: number | null,
+  ): { customType: string; content: string; display: boolean; details: { index: number; total: number | null } } => {
+    const delta =
+      total !== null && prevTotal !== null && total >= prevTotal ? total - prevTotal : null;
+    const index = nextIndex++;
+    prevTotal = total;
+    return {
+      customType: CHECKPOINT_TYPE,
+      content: `<harness-metadata>\nCheckpoint: ${index}\nCheckpointTokens: ${delta === null ? "reset" : `+${delta}`}\n</harness-metadata>`,
+      display: true,
+      details: { index, total },
+    };
   };
+
+  // Run start: the returned message is appended after the incoming user
+  // message, before the run's first LLM call. getContextUsage() doesn't
+  // include that user message yet (it enters agent state after this hook),
+  // so estimate it from the prompt text and attached images.
+  pi.on("before_agent_start", (event, ctx) => {
+    ensureSeeded(ctx);
+    const usage = ctx.getContextUsage();
+    let total: number | null = null;
+    if (usage && usage.tokens !== null) {
+      const images = event.images?.length ?? 0;
+      total = usage.tokens + Math.ceil(event.prompt.length / 4) + images * IMAGE_TOKENS;
+    }
+    return { message: buildCheckpoint(total) };
+  });
+
+  // Mid-run: the tool-calling response tells us how many tool results to
+  // expect; the last one's message_end is the post-tool-results seam.
+  let expectedToolResults = 0;
+  let seenToolResults = 0;
 
   pi.on("message_end", (event, ctx) => {
     ensureSeeded(ctx);
     const msg = event.message;
-
-    // Fallback flush (e.g. a queued follow-up continues the run before
-    // agent_settled fires): ride the inbound message's imminent LLM call.
-    if (msg.role === "user" || msg.role === "toolResult") {
-      flushDeferred();
+    if (msg.role === "assistant") {
+      expectedToolResults =
+        msg.stopReason === "toolUse"
+          ? (msg.content as Array<{ type: string }>).filter((b) => b.type === "toolCall").length
+          : 0;
+      seenToolResults = 0;
       return;
     }
-    if (msg.role !== "assistant") return;
-    const c = contextTokens(msg);
-    if (c === null) return;
-    const delta = c - prevC;
-    prevC = c;
-    if (msg.stopReason === "toolUse") {
-      emitCheckpoint(delta);
-    } else {
-      deferred = delta;
-    }
+    if (msg.role !== "toolResult" || expectedToolResults === 0) return;
+    seenToolResults++;
+    if (seenToolResults < expectedToolResults) return;
+    expectedToolResults = 0;
+    const usage = ctx.getContextUsage();
+    pi.sendMessage(buildCheckpoint(usage?.tokens ?? null), {
+      deliverAs: "steer",
+      triggerTurn: false,
+    });
   });
 
-  pi.on("agent_settled", () => flushDeferred());
+  // An aborted tool batch can end the run with an expectation pending;
+  // clear it so a stale count can't mis-fire in a later run.
+  pi.on("agent_settled", () => {
+    expectedToolResults = 0;
+    seenToolResults = 0;
+  });
 
   pi.on("context", (event, ctx) => {
     const lines: string[] = [];
