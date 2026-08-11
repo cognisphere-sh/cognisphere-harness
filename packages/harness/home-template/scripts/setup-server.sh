@@ -245,6 +245,16 @@ else
   echo ">> backups: off (BACKUP_S3_BUCKET is blank)"
 fi
 
+# ---- deployment hook --------------------------------------------------------
+# App-specific provisioning (extra apt packages, nginx tweaks, extra units or
+# crons) lives in the deployment-owned scripts/app/setup-server.sh (see
+# scripts/app/README.md), never in this file. Sourced as root with config +
+# the vars above (ROOT, NAME, RUN_USER, RUN_HOME, UNIT_PATH, HAS_APP) in scope.
+if [[ -f "$ROOT/scripts/app/setup-server.sh" ]]; then
+  echo ">> deployment hook: scripts/app/setup-server.sh"
+  source "$ROOT/scripts/app/setup-server.sh"
+fi
+
 if $HAS_APP; then
   echo ">> done. app: https://$DOMAIN  console: https://$CONSOLE_DOMAIN  |  manage: ./scripts/server.sh status"
 else

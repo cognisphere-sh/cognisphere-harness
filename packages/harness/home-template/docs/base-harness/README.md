@@ -155,3 +155,9 @@ what each version changed.
 See the scaffolded `scripts/` (`setup-server.sh`, `server.sh`, plus
 `scripts/aws/` / `scripts/contabo/` provisioning) and `config.example`.
 Day-to-day deploy loop on the box: `git pull && sudo ./scripts/server.sh restart`.
+
+Those scripts are harness-owned (refreshed on upgrade) — never edit them.
+App-specific deploy customization (extra secrets/env materialization, extra
+provisioning, extra config params) lives in the deployment-owned hooks under
+`scripts/app/`, which the harness-owned scripts source when present. See
+`scripts/app/README.md` for the hook contract.

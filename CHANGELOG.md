@@ -22,6 +22,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Deployment-owned deploy hooks (`scripts/app/`)** — the scaffolded deploy
+  scripts are harness-owned and refreshed on upgrade, so app-specific deploy
+  logic no longer gets edited into them. Each script now sources an optional
+  deployment-owned hook: `server.sh` `gen_secrets` → `scripts/app/secrets.sh`
+  (after the stock secrets), `server.sh` → `scripts/app/server.sh` (after every
+  stock action except `harness`/`dev`/`logs`, same positional args — app
+  lifecycle work), `setup-server.sh` → `scripts/app/setup-server.sh`
+  (end, as root), `aws/setup.sh` → `scripts/app/aws-setup.sh` and
+  `contabo/setup.sh` → `scripts/app/contabo-setup.sh` (end of provisioning).
+  Hooks are sourced with the deploy `config` + the caller's resolved vars in
+  scope. Extra deploy params go in the deployment-owned root `config`,
+  documented in a deployment-owned `scripts/app/config.example` (the root
+  `config.example` stays harness-owned). Only `scripts/app/README.md` (the
+  contract) ships with the template. `cognisphere-upgrade` bumped to v1.2.0
+  to teach the scaffold refresh this ownership split.
+
 - **pi upgraded to 0.84.1** (`@earendil-works/pi-ai` +
   `@earendil-works/pi-coding-agent`, from 0.81.1). No harness code
   changes were required: the RPC event contract the harness consumes

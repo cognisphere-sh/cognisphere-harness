@@ -1,5 +1,14 @@
 # cognisphere-upgrade — changelog
 
+## 1.2.0
+
+- Scaffold-refresh ownership: inside `scripts/app/` only `README.md` is
+  harness-owned; the deployment's hook scripts (`secrets.sh`, `server.sh`,
+  `setup-server.sh`, `aws-setup.sh`, `contabo-setup.sh`) and
+  `config.example` are user-owned and survive the copy. Deployment
+  customizations found edited into harness-owned scripts should be offered
+  a move into a `scripts/app/` hook during re-apply.
+
 ## 1.1.0
 
 - New step: when the upgrade window touches an agent's prompts, re-read its

@@ -135,3 +135,13 @@ add_ssh_config_entry ubuntu "$PEM"
 # ---- 8. remote bootstrap: gh + Claude Code (interactive auth) + clone --------
 wait_for_ssh
 remote_bootstrap
+
+# ---- 9. deployment hook ------------------------------------------------------
+# Extra AWS provisioning (more buckets, wider IAM grants, SES, …) lives in the
+# deployment-owned scripts/app/aws-setup.sh (see scripts/app/README.md), never
+# in this file. Sourced, so config + ROLE/S3_BUCKET/SG_ID/INSTANCE_ID/IP are
+# in scope; add IAM statements via put-role-policy under a distinct policy name.
+if [[ -f "$ROOT/scripts/app/aws-setup.sh" ]]; then
+  echo ">> deployment hook: scripts/app/aws-setup.sh"
+  source "$ROOT/scripts/app/aws-setup.sh"
+fi

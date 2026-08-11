@@ -124,6 +124,16 @@ sudo ufw --force enable
 REMOTE
 
 remote_bootstrap
+
+# ---- 8. deployment hook ------------------------------------------------------
+# Extra Contabo provisioning lives in the deployment-owned
+# scripts/app/contabo-setup.sh (see scripts/app/README.md), never in this file.
+# Sourced, so config + INSTANCE_ID/IP/BUCKET are in scope.
+if [[ -f "$ROOT/scripts/app/contabo-setup.sh" ]]; then
+  echo ">> deployment hook: scripts/app/contabo-setup.sh"
+  source "$ROOT/scripts/app/contabo-setup.sh"
+fi
+
 echo ">> backups have no IAM role here — set these in the root config on the box:"
 echo "     BACKUP_S3_BUCKET=$BUCKET"
 echo "     BACKUP_S3_ENDPOINT=$S3_URL"

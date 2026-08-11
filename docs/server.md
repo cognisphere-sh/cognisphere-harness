@@ -133,8 +133,10 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 │                                    the home), harness/ + app/ (deployment-
 │                                    owned, kept current by the dev agent)
 ├── scripts/                      ← lifecycle (setup-server, server, build)
-│   └── aws/                         + per-platform provisioning & backup
-│                                    (setup.sh, backup.sh, config.example)
+│   ├── aws/                         + per-platform provisioning & backup
+│   │                                (setup.sh, backup.sh, config.example)
+│   └── app/                         deployment-owned deploy hooks (only its
+│                                    README.md is harness-owned)
 ├── .claude/skills/               ← agent skills (upgrade, create-plugin, create-skill), copied
 ├── .agents/skills/                   in by `cognisphere init` from the package
 ├── app/                          ← the user-facing app (placeholder until built)

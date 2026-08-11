@@ -1,9 +1,9 @@
 ---
 name: cognisphere-upgrade
-description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere-sh/cognisphere-harness dependency. (v1.1.0)
+description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere-sh/cognisphere-harness dependency. (v1.2.0)
 metadata:
   author: cognisphere
-  version: "1.1.0"
+  version: "1.2.0"
   argument-hint: <target-version (optional)>
 ---
 
@@ -146,7 +146,11 @@ local edit is dropped only when the operator explicitly approves dropping it.
 
 **User-owned files are never refreshed:** `app/`, `docs/harness/`,
 `docs/app/`, `CLAUDE.md`, `config`, and everything under the harness data dir
-(that's what the breaking-change entries scope).
+(that's what the breaking-change entries scope). Inside `scripts/app/` only
+`README.md` is harness-owned (the `cp -R` refreshes it); the deployment's
+hook scripts and `config.example` there are user-owned and survive the copy
+untouched — a deployment customization found edited into a harness-owned
+script belongs in a `scripts/app/` hook, so offer that move in step 4c.
 
 ### 5. Show the diff and get approval
 

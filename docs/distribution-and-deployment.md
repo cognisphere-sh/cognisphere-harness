@@ -68,7 +68,9 @@ init <name>` scaffolds it:
 ├── scripts/                   → lifecycle scripts + per-platform provisioning (§8)
 │   ├── aws/                      (setup.sh + backup.sh + config.example; cp to `config` there)
 │   ├── contabo/                  (setup.sh + config.example; same pattern, cntb-driven)
-│   └── lib/                      (remote-bootstrap.sh — shared by the per-platform setup.sh)
+│   ├── lib/                      (remote-bootstrap.sh — shared by the per-platform setup.sh)
+│   └── app/                      deployment-owned deploy hooks + config.example (§8) —
+│                                 only its README.md is harness-owned/refreshed
 ├── .claude/skills/            → agent skills (upgrade, create-plugin, create-skill), copied in by init
 ├── .agents/skills/               (same set — for non-Claude coding agents)
 ├── app/                       ← the user-facing app (placeholder README until you
@@ -289,6 +291,26 @@ platform dir's own `scripts/<platform>/config`:
 | `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json` + `app/.env.local`; `start`/`restart` are the same command (secrets + build + `systemctl restart`, which also starts stopped units), so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. `start`/`stop`/`restart` take an optional `app`\|`harness` target to bounce a single unit (`restart app` applies an app-only change without touching the harness); omit it for both. |
 | `scripts/build.sh` | on the box (or locally) | `pnpm install --frozen-lockfile` + the app build (when `app/` exists). |
 | `scripts/aws/backup.sh` | cron (written by setup-server) | zips the whole home to S3 with consistent SQLite snapshots, prunes to `BACKUP_KEEP`. Reads the root `config` (the `BACKUP_*` keys), not `scripts/aws/config`. Provider-neutral despite the path: `BACKUP_S3_ENDPOINT` + keys point it at any S3-compatible store (Contabo). |
+
+**Deployment hooks (`scripts/app/`).** The scaffolded scripts above are
+harness-owned — the upgrade skill refreshes them (§9), so app-specific deploy
+logic must not be edited into them. Instead each script sources an optional
+deployment-owned hook at a fixed point: `server.sh`'s `gen_secrets` →
+`scripts/app/secrets.sh` (after the stock secrets, on every
+`secrets`/`start`/`restart`/`dev`), `server.sh` itself → `scripts/app/server.sh`
+(after every stock action except the foreground/exec commands `harness`/`dev`/
+`logs`, with the same positional args — for app lifecycle work like migrations
+on restart), `setup-server.sh` →
+`scripts/app/setup-server.sh` (end of provisioning, as root), `aws/setup.sh` →
+`scripts/app/aws-setup.sh` and `contabo/setup.sh` →
+`scripts/app/contabo-setup.sh` (end of platform provisioning, locally). Hooks
+are *sourced*, so they see the sourced `config` plus the caller's resolved
+vars, and run under `set -euo pipefail`. Extra deploy params go straight into
+the deployment-owned root `config` (read by the hooks) and are documented in a
+deployment-owned `scripts/app/config.example` — the shipped root
+`config.example` is harness-owned and refreshed on upgrade. Inside
+`scripts/app/` only `README.md` (the contract) is harness-owned; everything
+else survives upgrades untouched.
 
 **Future platforms.** The platform seam is *platform-specific vs. lifecycle*.
 Platform-specific scripts live in their own directory (`scripts/aws/`,

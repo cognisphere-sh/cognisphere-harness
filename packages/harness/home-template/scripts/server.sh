@@ -56,6 +56,14 @@ NODE
   else
     echo ">> wrote harness/.secrets/users.json from config"
   fi
+  # Deployment hook: app-specific secrets/config materialization lives in the
+  # deployment-owned scripts/app/secrets.sh (see scripts/app/README.md), never
+  # in this file. Sourced, so it sees ROOT/NAME/HAS_APP + everything in config;
+  # the resolved operator login is in harness/.secrets/users.json.
+  if [[ -f "$ROOT/scripts/app/secrets.sh" ]]; then
+    echo ">> deployment hook: scripts/app/secrets.sh"
+    source "$ROOT/scripts/app/secrets.sh"
+  fi
 }
 
 # Build via scripts/build.sh. Under sudo, drop to the app user so node_modules
@@ -116,3 +124,14 @@ case "${1:-}" in
     ;;
   *) echo "usage: $0 {start|stop|restart [app|harness]|status|logs|build|harness|dev|secrets}"; exit 1 ;;
 esac
+
+# Deployment hook: app-specific lifecycle work (migrations on restart, extra
+# services to bounce, …) lives in the deployment-owned scripts/app/server.sh
+# (see scripts/app/README.md), never in this file. Sourced after the stock
+# action with the same positional args ($1 command, $2 target) and vars
+# (ROOT/NAME/UNITS/HAS_APP/…) in scope — case on "$1" for per-command work.
+# Not reached by the foreground/exec commands (harness, dev, logs).
+if [[ -f "$ROOT/scripts/app/server.sh" ]]; then
+  echo ">> deployment hook: scripts/app/server.sh $*"
+  source "$ROOT/scripts/app/server.sh"
+fi

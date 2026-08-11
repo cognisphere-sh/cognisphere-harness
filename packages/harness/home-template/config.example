@@ -37,3 +37,8 @@ AWS_PROFILE=             # local testing only: named aws-cli profile (EC2 uses t
 # `read:packages` scope: gh auth refresh -s read:packages). Or paste a
 # GitHub PAT with read:packages here for a non-interactive box.
 COGNISPHERE_NPM_TOKEN=
+
+# ---- deployment-specific params ---------------------------------------------
+# This file is harness-owned (refreshed on upgrade). Your app's extra keys go
+# in `config` too, but document them in scripts/app/config.example and read
+# them from the scripts/app/ hooks — see scripts/app/README.md.
