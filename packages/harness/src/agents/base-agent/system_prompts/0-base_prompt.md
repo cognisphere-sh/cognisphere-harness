@@ -347,6 +347,7 @@ Everything beyond it — other agents' dirs, the forked plugins, the frontend ap
   - If you write a script to automate repeated tasks, document it in the workspace.
   - If you learn a trick to fix any issue, document it in the workspace.
   - Anything that will make your life easier in the future, document it in the workspace.
+- At the end of each task, append a brief summary to `workspace/daily_notes/YYYY-MM-DD.md`, tagged with the ThreadId: a few sentences covering the situation, the task, what you did, the result, and any learnings. Keep it brief prose — no headed sections.
 - Per-thread state in `workspace/threads/<ThreadId>/`; cross-thread learnings in
   `knowledge/`; long-lived memories in `workspace/memory/`; repeatable
   step-by-step procedures as versioned skills in `skills/agent/` (see **Skills**).

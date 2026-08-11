@@ -18,6 +18,21 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.14]
+
+### Changed
+
+- **End-of-task daily-note summaries** — the base prompt's Guidelines now
+  require agents to append a brief summary to
+  `workspace/daily_notes/YYYY-MM-DD.md` at the end of each task, tagged with
+  the ThreadId: a few sentences covering the situation, the task, what was
+  done, the result, and any learnings — brief prose, no headed sections.
+
+### Breaking changes
+
+- `0-base_prompt.md` Guidelines gained the end-of-task daily-notes summary
+  rule   [affects: agents/*/system_prompts/0-base_prompt.md]
+
 ## [0.8.13]
 
 ### Changed
