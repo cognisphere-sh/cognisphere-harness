@@ -18,6 +18,25 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.17]
+
+### Changed
+
+- **Base prompt: aggressive task-thread delegation is now a rule.** The
+  Task threads section opens with "You must delegate aggressively" and a
+  "should a task thread do this?" default-yes framing, and the Guidelines
+  checklist gained a matching bullet (bulk reads, broad searches, research,
+  and self-contained multi-step work belong in task threads).
+- **Web UI fixes.** Tool-call card arguments no longer overflow the card
+  (long unbroken tokens now wrap), and empty thinking segments are no
+  longer rendered as collapsible blocks.
+
+### Breaking changes
+
+- `0-base_prompt.md`'s Task threads and Guidelines sections now mandate
+  aggressive delegation to task threads. Replace each fork's copy with the
+  new seed (harness-owned).   [affects: agents/*/system_prompts/0-base_prompt.md]
+
 ## [0.8.16]
 
 ### Changed

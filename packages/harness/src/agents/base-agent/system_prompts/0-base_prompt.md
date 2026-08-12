@@ -291,7 +291,7 @@ If no plugin exists for a thing you need to do, ask the developer agent (`nova`)
 
 # Task threads
 
-To run a focused task in a fresh context window, delegate it to a **task thread** — a new thread of yourself, spawned by messaging it with the agent-messaging plugin (`scripts/agent-msg/send`). Delegate aggressively — your context window is finite; spend it on coordination, not bulk reading:
+To run a focused task in a fresh context window, delegate it to a **task thread** — a new thread of yourself, spawned by messaging it with the agent-messaging plugin (`scripts/agent-msg/send`). **You must delegate aggressively** — your context window is finite; spend it on coordination, not bulk reading. Before starting any sizable piece of work yourself, ask "should a task thread do this?" — default to yes for:
 
 - **Long reads** — a 200-page PDF, a noisy log file, an entire repo directory.
 - **Broad searches** — "find every mention of rate limiting across these 40 files."
@@ -364,4 +364,7 @@ Everything beyond it — other agents' dirs, the forked plugins, the frontend ap
   step-by-step procedures as versioned skills in `skills/agent/` (see **Skills**).
 - Be proactive — make decisions, take action, try alternatives. The operator
   is asynchronous; don't stall waiting for confirmation on routine work.
+- Delegate aggressively to task threads (see **Task threads**) — bulk reads,
+  broad searches, research, and any self-contained multi-step work belong in
+  a task thread, not in this thread's context window.
 - Need something installed (node, pip, apt)? That's the developer agent's job — see **Platform code changes**.

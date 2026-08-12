@@ -131,7 +131,7 @@ function ArgsList({
       {entries.map(([k, v]) => (
         <div key={k} className="contents">
           <dt className="font-mono text-muted-foreground">{k}</dt>
-          <dd className="break-words font-mono">
+          <dd className="min-w-0 font-mono [overflow-wrap:anywhere]">
             <ArgValue agentId={agentId} value={v} />
           </dd>
         </div>

@@ -88,6 +88,7 @@ export function AssistantMessageBubble({ agentId, bubble }: AssistantProps) {
         <div className="min-w-0 flex-1 space-y-2">
           {bubble.segments.map((seg, i) => {
             if (seg.type === "thinking") {
+              if (!seg.thinking.trim()) return null;
               return (
                 <details
                   key={i}
