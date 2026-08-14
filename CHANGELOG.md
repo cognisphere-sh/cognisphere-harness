@@ -18,6 +18,23 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.19]
+
+### Added
+
+- **Chat pagination.** `GET /api/agents/:id/sessions/:threadId/:sessionId`
+  takes an optional `?limit=N` that returns only the newest N jsonl entries.
+  The file is tail-seeked — read backwards in 256 KiB chunks until N lines
+  are in hand — so opening a long-running thread costs the same as a short
+  one. The response gains `hasMore` (older rows exist above the window);
+  without `limit` the whole file is read and `hasMore` is `false`.
+- **"Load 100 more" in the web chat.** Threads open at the newest 100
+  entries and page backwards on demand, preserving scroll position. The
+  window resets on thread/session switch, and a deep link
+  (`?thread=&session=&entry=`) drops the limit so the targeted entry is
+  always in range. The Raw JSONL tab shares the query and therefore shows
+  the same window.
+
 ## [0.8.18]
 
 ### Changed

@@ -126,15 +126,32 @@ export function ChatWindow({ agentId }: Props) {
     if (sid) setSelected({ threadId: selected.threadId, sessionId: sid });
   }, [threads, selected]);
 
+  // The server returns only the newest `entryLimit` jsonl entries; the Load
+  // more button bumps it. null = unlimited, used when a deep-linked entry may
+  // live above the window.
+  const [entryLimit, setEntryLimit] = useState<number | null>(100);
+  useEffect(() => {
+    setEntryLimit(100);
+  }, [selected?.threadId, selected?.sessionId]);
+  useEffect(() => {
+    if (highlightEntryId) setEntryLimit(null);
+  }, [highlightEntryId]);
+
   const { data: sessionData } = useQuery({
     queryKey: [
       "session",
       agentId,
       selected?.threadId,
       selected?.sessionId,
+      entryLimit,
     ],
     queryFn: () =>
-      endpoints.readSession(agentId, selected!.threadId, selected!.sessionId),
+      endpoints.readSession(
+        agentId,
+        selected!.threadId,
+        selected!.sessionId,
+        entryLimit ?? undefined,
+      ),
     enabled: !!selected?.sessionId,
     refetchInterval: 3_000,
   });
@@ -143,6 +160,8 @@ export function ChatWindow({ agentId }: Props) {
     () => (sessionData ? flattenSession(sessionData.entries) : []),
     [sessionData],
   );
+
+  const hasOlder = sessionData?.hasMore ?? false;
 
   const currentThread = useMemo(
     () => threads.find((t) => t.threadId === selected?.threadId) ?? null,
@@ -180,6 +199,9 @@ export function ChatWindow({ agentId }: Props) {
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  // Scroll height captured when Load more is clicked, so the older entries
+  // land above the viewport instead of yanking it.
+  const restoreHeightRef = useRef<number | null>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
   // Toggles the right-hand panel between the message stream, the raw
   // session JSONL, and the per-thread usage breakdown. The messages/usage
@@ -188,6 +210,14 @@ export function ChatWindow({ agentId }: Props) {
   const [panelTab, setPanelTab] = useState<"messages" | "raw" | "usage">(
     "messages",
   );
+
+  useEffect(() => {
+    const before = restoreHeightRef.current;
+    const el = scrollerRef.current;
+    if (before === null || !el) return;
+    restoreHeightRef.current = null;
+    el.scrollTop += el.scrollHeight - before;
+  }, [chunks]);
 
   // Auto-scroll on new messages, but only if we're already near the bottom.
   // Suppressed while a deep-link target is pending so we don't fight the
@@ -472,6 +502,21 @@ export function ChatWindow({ agentId }: Props) {
                 : selected
                   ? "(empty session)"
                   : "Send a message to start a thread."}
+            </div>
+          )}
+          {hasOlder && (
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  restoreHeightRef.current =
+                    scrollerRef.current?.scrollHeight ?? null;
+                  setEntryLimit((n) => (n ?? 0) + 100);
+                }}
+              >
+                Load 100 more
+              </Button>
             </div>
           )}
           {chunks.map((c) => (

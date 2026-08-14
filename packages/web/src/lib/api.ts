@@ -412,9 +412,20 @@ export const endpoints = {
 
   listThreads: (id: string) =>
     api.get<{ threads: ThreadRow[] }>(`/api/agents/${id}/sessions`),
-  readSession: (id: string, threadId: string, sessionId: string) =>
-    api.get<{ threadId: string; sessionId: string; entries: unknown[] }>(
-      `/api/agents/${id}/sessions/${encodeURIComponent(threadId)}/${encodeURIComponent(sessionId)}`,
+  readSession: (
+    id: string,
+    threadId: string,
+    sessionId: string,
+    limit?: number,
+  ) =>
+    api.get<{
+      threadId: string;
+      sessionId: string;
+      entries: unknown[];
+      hasMore: boolean;
+    }>(
+      `/api/agents/${id}/sessions/${encodeURIComponent(threadId)}/${encodeURIComponent(sessionId)}` +
+        (limit ? `?limit=${limit}` : ""),
     ),
   deleteThread: (id: string, threadId: string) =>
     api.delete<{

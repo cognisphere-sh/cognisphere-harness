@@ -31,6 +31,7 @@ import { requiredCredentialsPresent } from "./credentials.js";
  *   POST /api/agents/:id/restart                        — lifecycle (full reload)
  *   GET  /api/agents/:id/sessions                       — list threads + sessions
  *   GET  /api/agents/:id/sessions/:threadId/:sessionId  — raw jsonl entries
+ *        ?limit=N — newest N entries only (default: all); response carries `hasMore`
  *   GET  /api/agents/:id/sessions/:threadId/usage       — per-(agent, model) token/cost totals
  *   GET  /api/agents/:id/events?status=&plugin=&search=&sortBy=&sortDir=&limit=&offset=
  *   POST /api/agents/:id/events/:rowId/requeue          — re-queue a status=failed row
@@ -350,17 +351,20 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
       `${sessionId}.jsonl`,
     );
     if (!existsSync(fp)) return c.json({ error: "no such session" }, 404);
-    const text = readFileSync(fp, "utf8");
+    // `limit` returns only the newest N entries (the chat window paginates
+    // backwards with a growing limit). Omitted → the whole session.
+    const raw = c.req.query("limit");
+    const limit = raw === undefined ? null : clampLimit(raw, 100, 100_000);
+    const { lines, hasMore } = readTailLines(fp, limit);
     const entries: unknown[] = [];
-    for (const line of text.split("\n")) {
-      if (!line) continue;
+    for (const line of lines) {
       try {
         entries.push(JSON.parse(line));
       } catch {
         // skip malformed lines
       }
     }
-    return c.json({ threadId, sessionId, entries });
+    return c.json({ threadId, sessionId, entries, hasMore });
   });
 
   r.get("/:id/events", (c) => {
@@ -645,6 +649,55 @@ function lastUsageTokens(usage: Record<string, unknown>): number {
   );
 }
 
+
+/** Read the last `limit` non-empty lines of a file without slurping the
+ *  whole thing: seek backwards in 256 KiB chunks until enough lines are in
+ *  hand or the start is reached. `limit === null` reads everything.
+ *  `hasMore` reports whether lines were left behind above the window. */
+function readTailLines(
+  filePath: string,
+  limit: number | null,
+): { lines: string[]; hasMore: boolean } {
+  if (limit === null) {
+    const all = readFileSync(filePath, "utf8").split("\n").filter(Boolean);
+    return { lines: all, hasMore: false };
+  }
+  let fd: number;
+  try {
+    fd = openSync(filePath, "r");
+  } catch {
+    return { lines: [], hasMore: false };
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const CHUNK = 256 * 1024;
+    let start = size;
+    const chunks: Buffer[] = [];
+    let text = "";
+    // Decode the accumulated buffers as a whole each pass — decoding chunk
+    // by chunk would corrupt any multi-byte char split across a boundary.
+    while (start > 0) {
+      const nextStart = Math.max(0, start - CHUNK);
+      const len = start - nextStart;
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, nextStart);
+      chunks.unshift(buf);
+      start = nextStart;
+      text = Buffer.concat(chunks).toString("utf8");
+      // The first line is partial unless we reached the start of the file.
+      const complete = text.split("\n").length - (start === 0 ? 0 : 1);
+      if (complete > limit) break;
+    }
+    const split = text.split("\n");
+    const usable = (start === 0 ? split : split.slice(1)).filter(Boolean);
+    return {
+      lines: usable.slice(-limit),
+      hasMore: start > 0 || usable.length > limit,
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** Tail-read just the last ~128 KiB of a session jsonl and pull out
  *  the most-recent non-aborted assistant usage. Used by the threads

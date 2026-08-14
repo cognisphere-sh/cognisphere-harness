@@ -246,7 +246,7 @@ compatibility with future settings that *would* need a full restart.
 | Method | Path | Effect |
 |---|---|---|
 | GET | `/api/agents/:id/sessions` | List threads under `<agent>/sessions/` and their `.jsonl` files, newest-first. |
-| GET | `/api/agents/:id/sessions/:threadId/:sessionId` | Read the JSONL file as an array of parsed entries. |
+| GET | `/api/agents/:id/sessions/:threadId/:sessionId?limit=` | Read the JSONL file as an array of parsed entries. `limit=N` returns only the newest N entries (omitted → all). |
 | GET | `/api/agents/:id/sessions/:threadId/usage` | Per-model token + cost totals for the thread. Aggregates every assistant message in every `*.jsonl` under `<agent>/sessions/<threadId>/`. |
 | PUT | `/api/agents/:id/sessions/:threadId/model` | Set or clear the thread's model override. Takes effect on the next batch (no agent reload). |
 | DELETE | `/api/agents/:id/sessions/:threadId` | Permanently remove a thread — drops every `events` row for the thread, its `threads` row, and the on-disk `<agent>/sessions/<threadId>/` directory (all sessions). Returns `409` if a batch is in-flight; abort it first. |
@@ -295,8 +295,16 @@ poll. `0` when no assistant messages have landed yet.
 Per-session response:
 
 ```json
-{ "threadId": "...", "sessionId": "...", "entries": [ <jsonl row>, ... ] }
+{ "threadId": "...", "sessionId": "...", "entries": [ <jsonl row>, ... ], "hasMore": true }
 ```
+
+With `limit=N` the file is tail-seeked — read backwards in 256 KiB chunks
+until N lines are in hand — so a long session costs the same as a short
+one. `entries` holds its newest N rows and `hasMore` says whether older
+rows were left above the window. Without `limit` the whole file is read
+and `hasMore` is `false`. The web chat paginates backwards on this: it
+opens a session at `limit=100` and its **Load 100 more** button re-fetches
+with a larger limit.
 
 Malformed JSONL lines are silently skipped. `threadId` and `sessionId`
 must each be a single path segment (no `/`, `\`, NUL, leading `.`, or
