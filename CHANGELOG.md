@@ -18,6 +18,77 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.18]
+
+### Changed
+
+- **Base prompt: reorganised, and workspace/memory layout reworked.**
+  `0-base_prompt.md` is reordered to follow the agent's actual reading path
+  (Cwd → System prompts → Plugins → Skills → Threads → Message metadata →
+  Communication model → Task threads → Workspace → Sessions → …), and the
+  `# Guidelines` grab-bag is gone — its content folded into **Workspace**
+  (persist immediately, daily notes) and **Communication model** (be
+  proactive).
+- **New on-disk layout for notes, knowledge and memory:**
+
+  ```
+  workspace/
+    index.md
+    threads/<ThreadId>/{notes.md, files/, tasks/<task-slug>/notes.md}
+    daily_notes/YYYY-MM-DD.md
+  knowledge/
+    index.md, memory.md, files/
+  ```
+
+  - Task-thread notes moved from `workspace/taskThreads/<ThreadId>/tasks.md`
+    to `workspace/threads/<ThreadId>/tasks/<task-slug>/notes.md`; the parent
+    tracks its task threads in its own `notes.md → ## Tasks` section.
+  - Each thread dir gains a `files/` dir for files belonging to that thread.
+  - `workspace/memory/` is **removed**. Memory now lives in the cross-thread
+    `knowledge/` dir as a single `knowledge/memory.md`, with `knowledge/index.md`
+    indexing `knowledge/files/` (reference docs and long-term documents).
+- **Memory is one grep-able file.** `knowledge/memory.md` holds sections
+  separated by `-----$-----$-----$-----`, each with `name`, `lastUpdated`
+  (`YYYY-MM-DD HH:MM:SS`) and a `description` covering what to remember, why,
+  where it came from, the reasoning, and how long it stays relevant. The agent
+  greps for the sections it needs and edits them in place instead of reading
+  the whole file.
+- **Notes have a fixed shape.** Every `notes.md` (thread or task) is current
+  state, not a log: `## Context`, `## Tasks`, `## Decisions`, `## ToDos`,
+  `## Notes`, `## References` — every entry timestamped `YYYY-MM-DD HH:MM:SS`,
+  updated in place, with stale entries deleted.
+- **Daily notes** now explicitly capture observations and learnings alongside
+  the situation/task/result summary.
+- Base-agent seeds updated to match: new `knowledge/index.md` and
+  `knowledge/memory.md`, refreshed `workspace/index.md`.
+- Docs updated: `docs/server.md` §3 on-disk tree and the shipped
+  `docs/base-harness/README.md` agent-anatomy list.
+
+### Breaking changes
+
+Existing harnesses must migrate their agents' on-disk files to the new layout —
+the prompt no longer describes the old paths, so anything left behind is
+invisible to the agent. Per agent dir:
+
+- `0-base_prompt.md` reordered; `# Guidelines` removed; Workspace/Task-threads
+  sections rewritten for the new layout. Replace each fork's copy with the new
+  seed (harness-owned).   [affects: agents/*/system_prompts/0-base_prompt.md]
+- Move `workspace/memory/**` into a single `knowledge/memory.md`, one section
+  per memory in the new `name` / `lastUpdated` / `description` format,
+  separated by `-----$-----$-----$-----`; delete `workspace/memory/`.   [affects: agents/*/workspace/memory/**]
+- Move `workspace/taskThreads/<ThreadId>/tasks.md` content into the parent
+  thread's `workspace/threads/<ThreadId>/notes.md` under `## Tasks`, and any
+  per-task notes to `workspace/threads/<ThreadId>/tasks/<task-slug>/notes.md`;
+  delete `workspace/taskThreads/`.   [affects: agents/*/workspace/taskThreads/**]
+- Rewrite each `workspace/threads/<ThreadId>/notes.md` into the fixed sections
+  (`## Context`, `## Tasks`, `## Decisions`, `## ToDos`, `## Notes`,
+  `## References`) with timestamped entries; drop `summary.md` by folding it
+  into `## Context`.   [affects: agents/*/workspace/threads/**]
+- Seed `knowledge/index.md` and `knowledge/memory.md` if absent, and move
+  existing cross-thread reference docs under `knowledge/files/`.   [affects: agents/*/knowledge/**]
+- Refresh `workspace/index.md` from the new seed (its `## Memory` section is
+  gone; knowledge is indexed in `knowledge/index.md`).   [affects: agents/*/workspace/index.md]
+
 ## [0.8.17]
 
 ### Changed

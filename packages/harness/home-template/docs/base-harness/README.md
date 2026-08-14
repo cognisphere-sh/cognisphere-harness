@@ -79,8 +79,11 @@ plugin config, secrets, and model providers. Login users live in
   file, document the override (what and why) in `docs/harness/` — an
   undocumented divergence is treated as drift and reverted on the next
   upgrade or restart.
-- `workspace/` — the agent's durable notes; `knowledge/` for cross-thread
-  reference docs.
+- `workspace/` — the agent's durable notes: `index.md`, `daily_notes/`, and
+  `threads/<ThreadId>/` (`notes.md`, `files/`, `tasks/<task-slug>/notes.md`).
+- `knowledge/` — cross-thread reference docs (`index.md`, `files/`) plus
+  `memory.md`, the agent's long-lived memory (grep-able sections separated by
+  `-----$-----$-----$-----`).
 - `sessions/<threadId>/` — conversation history (JSONL), the assembled
   `.system-prompt.md` handed to pi on each spawn, + `.events.db`
   (message queue / event log — inspect with `sqlite3`).

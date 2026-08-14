@@ -172,11 +172,17 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
         │   └── plugin-<id>.md    ← plugin seeds (when installed); plugin-owned,
         │                           overwritten from the seed on every agent start
         ├── scripts/agent/        ← ddgs / markitdown / agent-browser / session-reader wrappers
-        ├── workspace/            ← agent's scratch space
+        ├── workspace/            ← agent's durable notes
         │   ├── index.md
-        │   ├── knowledge/
-        │   ├── memory/
-        │   └── <ThreadId>/...
+        │   ├── daily_notes/<YYYY-MM-DD>.md
+        │   └── threads/<ThreadId>/
+        │       ├── notes.md
+        │       ├── files/
+        │       └── tasks/<task-slug>/notes.md
+        ├── knowledge/            ← cross-thread reference docs + memory
+        │   ├── index.md
+        │   ├── memory.md
+        │   └── files/
         ├── sessions/
         │   ├── .events.db        ← SQLite WAL: single `events` lifecycle table
         │   └── <ThreadId>/
