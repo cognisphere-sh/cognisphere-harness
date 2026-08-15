@@ -18,6 +18,28 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.20]
+
+### Changed
+
+- **Memory is episodic; procedural guidance lives elsewhere.** The base
+  prompt's **Memory** section now states that `knowledge/memory.md` holds
+  events and facts only — a rule about *how to behave* belongs in
+  `system_prompts/1-agent.md` when it holds globally, or in the skill for the
+  procedure it governs when it only applies there. The seeded
+  `knowledge/memory.md` header carries the same rule.
+- **`1-*` prompt files are the agent's to edit, with admin approval.**
+  Previously the base prompt routed every prompt change through the developer
+  agent (`nova`). Now only `0-*` and `plugin-<id>.md` files do; `1-*` files
+  the agent edits itself once the relevant admin has approved the change.
+
+### Breaking changes
+
+- Memory section rewritten (episodic-only) and prompt-ownership rules changed
+  (`1-*` = self-edit with admin approval, not a `nova` request)   [affects: agents/*/system_prompts/0-base_prompt.md]
+- `knowledge/memory.md` header gained a "what belongs here" block — episodic
+  events and facts only, procedural rules go to `1-agent.md` or a skill   [affects: agents/*/knowledge/memory.md]
+
 ## [0.8.19]
 
 ### Added
