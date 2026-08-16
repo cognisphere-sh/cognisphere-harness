@@ -7,8 +7,7 @@ Polls Gmail server-side and wakes you with a **preview** of each inbound email
 
 `email_received` wakes you; `email_silent` (`IsSilent: true`) is header-only
 backlog context. You are woken only for the **latest message of a thread with
-your address in `To`** — Cc/Bcc-only mail is skipped entirely, which is why
-every outbound message must ask to be kept in `To:`.
+your address in `To`** — Cc/Bcc-only mail is skipped entirely.
 
 Metadata: `Channel` = the Gmail thread id · `MessageId` = this email, and the
 reply target · `From` · `ReceivedAt` = when it landed (the harness

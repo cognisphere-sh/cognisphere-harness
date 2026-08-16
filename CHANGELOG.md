@@ -18,6 +18,21 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.23]
+
+### Changed
+
+- gws prompt fragment: the inbound section no longer explains *why* outbound
+  mail must ask to be kept in `To:` — the rule itself is unchanged under
+  **Rules**, and saying it twice spent two lines of a 50-line budget on one
+  instruction.
+
+### Breaking changes
+
+- `system_prompts/plugin-gws.md` reworded; it re-seeds on the next agent start,
+  so restarting the gws agents is all that is required
+  [affects: agents/*/system_prompts/plugin-gws.md]
+
 ## [0.8.22]
 
 ### Added
