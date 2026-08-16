@@ -1,6 +1,6 @@
 {
   "name": "@cognisphere-sh/cognisphere-harness",
-  "version": "0.8.23",
+  "version": "0.8.24",
   "type": "module",
   "repository": {
     "type": "git",

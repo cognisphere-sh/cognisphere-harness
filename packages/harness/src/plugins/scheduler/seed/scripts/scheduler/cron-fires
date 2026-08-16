@@ -1,0 +1,248 @@
+#!/usr/bin/env node
+// cron-fires — filter a schedules.json stream down to the schedules that fire
+// inside a date-time window, and list those fire times.
+//
+//   <json on stdin> | cron-fires --from <ISO> --to <ISO> [--tz Zone] [--max N]
+//   cron-fires --self-check          # runnable assertions, no stdin
+//
+// stdin  : {"schedules":[{name,cron,...}, ...]}   (the schedules.json shape)
+// stdout : {"tz":Z,"from":…,"to":…,"schedules":[{…, fires:[{iso,local}], truncated?}]}
+//
+// Schedules with no fire in the window are dropped; schedules whose cron we
+// cannot parse are kept with an `error` field, so nothing disappears silently.
+//
+// No imports, no deps: the seed tree is copied verbatim into the agent dir,
+// which has no node_modules of its own.
+
+// ponytail: brute-force minute scan over the window (croner isn't reachable
+// from the agent dir). Fine to ~1 year; window capped at 366 days. If that
+// ever bites, compute next-fire per field instead of scanning.
+const MAX_WINDOW_DAYS = 366;
+const MINUTE = 60_000;
+
+const NAMES = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
+};
+
+/** Expand one cron field into a Set of allowed numbers. Throws on bad syntax. */
+function expand(field, min, max, normalize = (n) => n) {
+  const out = new Set();
+  for (const part of String(field).split(",")) {
+    const m = /^(\*|\?|[^/]+?)(?:\/(\d+))?$/.exec(part.trim());
+    if (!m) throw new Error(`bad cron field: ${part}`);
+    const [, rangeSrc, stepSrc] = m;
+    const step = stepSrc ? Number(stepSrc) : 1;
+    if (step < 1) throw new Error(`bad step: ${part}`);
+    let lo, hi;
+    if (rangeSrc === "*" || rangeSrc === "?") {
+      lo = min; hi = max;
+    } else {
+      const bounds = rangeSrc.split("-").map((tok) => {
+        const t = tok.trim().toLowerCase();
+        const n = t in NAMES ? NAMES[t] : Number(t);
+        if (!Number.isInteger(n)) throw new Error(`bad cron value: ${tok}`);
+        return n;
+      });
+      if (bounds.length > 2) throw new Error(`bad cron range: ${rangeSrc}`);
+      lo = bounds[0];
+      hi = bounds.length === 2 ? bounds[1] : bounds[0];
+    }
+    // Wrapping ranges (e.g. dow 5-1) walk forward through the wrap point.
+    const span = hi >= lo ? hi - lo : max - min + 1 - (lo - hi);
+    for (let i = 0; i <= span; i += step) {
+      const v = normalize(min + ((lo - min + i) % (max - min + 1)));
+      if (v < min || v > max) throw new Error(`cron value out of range: ${v}`);
+      out.add(v);
+    }
+  }
+  return out;
+}
+
+/** Parse a 5-field (m h dom mon dow) or 6-field (s m h dom mon dow) cron. */
+function parseCron(expr) {
+  const f = String(expr).trim().split(/\s+/);
+  if (f.length === 6) f.shift(); // seconds — we scan at minute resolution
+  if (f.length !== 5) throw new Error(`expected 5 or 6 cron fields, got ${f.length}`);
+  const [mi, h, dom, mon, dow] = f;
+  return {
+    minute: expand(mi, 0, 59),
+    hour: expand(h, 0, 23),
+    dom: expand(dom, 1, 31),
+    month: expand(mon, 1, 12),
+    dow: expand(dow, 0, 7, (n) => n % 7), // 7 == Sunday
+    domRestricted: dom.trim() !== "*" && dom.trim() !== "?",
+    dowRestricted: dow.trim() !== "*" && dow.trim() !== "?",
+  };
+}
+
+const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+function makeParts(tz) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour12: false, weekday: "short",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  return (ms) => {
+    const p = {};
+    for (const { type, value } of fmt.formatToParts(new Date(ms))) p[type] = value;
+    return {
+      y: +p.year, mo: +p.month, d: +p.day,
+      // Intl renders midnight as "24" in some locales/zones.
+      h: +p.hour % 24, mi: +p.minute, s: +p.second,
+      dow: WD[p.weekday],
+    };
+  };
+}
+
+function matches(c, p) {
+  if (!c.minute.has(p.mi) || !c.hour.has(p.h) || !c.month.has(p.mo)) return false;
+  // Cron convention: when both dom and dow are restricted, either may match.
+  const dom = c.dom.has(p.d);
+  const dow = c.dow.has(p.dow);
+  if (c.domRestricted && c.dowRestricted) return dom || dow;
+  if (c.domRestricted) return dom;
+  if (c.dowRestricted) return dow;
+  return true;
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+const localStr = (p) => `${p.y}-${pad(p.mo)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}`;
+
+/** Interpret a timestamp string. Bare (offset-less) inputs mean wall clock in `tz`. */
+function parseWhen(s, tz, partsOf) {
+  const bare = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?$/.test(s.trim());
+  if (!bare) {
+    const t = Date.parse(s);
+    if (Number.isNaN(t)) throw new Error(`unparseable time: ${s}`);
+    return t;
+  }
+  const norm = s.trim().replace(" ", "T");
+  const withTime = norm.includes("T") ? norm : `${norm}T00:00`;
+  const target = Date.parse(`${withTime}Z`);
+  if (Number.isNaN(target)) throw new Error(`unparseable time: ${s}`);
+  // Solve `wallClock(t) === target` by subtracting the zone offset at the
+  // current guess; two passes so a DST boundary near the guess still lands right.
+  let t = target;
+  for (let i = 0; i < 2; i++) {
+    const p = partsOf(t);
+    t -= Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s) - target;
+  }
+  return t;
+}
+
+function occurrences(cronExpr, fromMs, toMs, partsOf, max) {
+  const c = parseCron(cronExpr);
+  const fires = [];
+  let truncated = false;
+  const start = Math.ceil(fromMs / MINUTE) * MINUTE;
+  for (let t = start; t <= toMs; t += MINUTE) {
+    const p = partsOf(t);
+    if (!matches(c, p)) continue;
+    if (fires.length >= max) { truncated = true; break; }
+    fires.push({ iso: new Date(t).toISOString(), local: localStr(p) });
+  }
+  return { fires, truncated };
+}
+
+// ---------------------------------------------------------------- self-check
+function selfCheck() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`FAIL: ${msg}`); };
+  const utc = makeParts("UTC");
+  const ist = makeParts("Asia/Kolkata");
+
+  // field expansion
+  assert(expand("*/15", 0, 59).size === 4, "*/15 → 4 minutes");
+  assert([...expand("1-5", 0, 59)].join() === "1,2,3,4,5", "range");
+  assert(expand("MON-FRI", 0, 7, (n) => n % 7).has(5), "named dow range");
+  assert(expand("7", 0, 7, (n) => n % 7).has(0), "dow 7 == sunday");
+  let threw = false;
+  try { parseCron("* * *"); } catch { threw = true; }
+  assert(threw, "too-few fields throws");
+
+  // 6-field form drops the leading seconds field
+  assert(parseCron("0 30 9 * * *").hour.has(9), "6-field seconds-first");
+
+  // daily 09:00 UTC over 3 days → 3 fires
+  const from = Date.parse("2026-08-17T00:00:00Z");
+  const to = Date.parse("2026-08-20T00:00:00Z");
+  const daily = occurrences("0 9 * * *", from, to, utc, 100);
+  assert(daily.fires.length === 3, `daily → 3 fires, got ${daily.fires.length}`);
+  assert(daily.fires[0].iso === "2026-08-17T09:00:00.000Z", "first daily fire");
+
+  // same cron in IST fires at 09:00 local = 03:30Z
+  const istDaily = occurrences("0 9 * * *", from, to, ist, 100);
+  assert(istDaily.fires[0].iso === "2026-08-17T03:30:00.000Z", "tz-aware fire");
+  assert(istDaily.fires[0].local === "2026-08-17 09:00", "local rendering");
+
+  // dom+dow both restricted → OR
+  const or = occurrences("0 9 1 * MON", from, to, utc, 100);
+  assert(or.fires.length === 1, "dom/dow OR (Mon 2026-08-17)");
+
+  // one-shot style cron outside the window → no fires
+  assert(occurrences("15 19 11 5 *", from, to, utc, 100).fires.length === 0, "outside window");
+
+  // truncation is reported, not silent
+  const flood = occurrences("* * * * *", from, to, utc, 5);
+  assert(flood.fires.length === 5 && flood.truncated, "truncation flagged");
+
+  // bare inputs are read as wall clock in the zone
+  assert(parseWhen("2026-08-17", "Asia/Kolkata", ist) === Date.parse("2026-08-16T18:30:00Z"), "bare date in tz");
+  assert(parseWhen("2026-08-17T00:00:00Z", "Asia/Kolkata", ist) === Date.parse("2026-08-17T00:00:00Z"), "explicit offset kept");
+
+  console.log("cron-fires self-check: OK");
+}
+
+// ---------------------------------------------------------------------- main
+function main(argv) {
+  if (argv.includes("--self-check")) { selfCheck(); return; }
+
+  const opt = {};
+  for (let i = 0; i < argv.length; i += 2) {
+    const k = argv[i];
+    if (!k.startsWith("--")) throw new Error(`unknown argument: ${k}`);
+    opt[k.slice(2)] = argv[i + 1];
+  }
+  const tz = opt.tz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const partsOf = makeParts(tz);
+  const max = opt.max ? Number(opt.max) : 50;
+
+  const fromMs = opt.from ? parseWhen(opt.from, tz, partsOf) : Date.now();
+  const toMs = opt.to ? parseWhen(opt.to, tz, partsOf) : fromMs + 7 * 86_400_000;
+  if (toMs < fromMs) throw new Error("--to is before --from");
+  if (toMs - fromMs > MAX_WINDOW_DAYS * 86_400_000) {
+    throw new Error(`window longer than ${MAX_WINDOW_DAYS} days`);
+  }
+
+  let raw = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (d) => { raw += d; });
+  process.stdin.on("end", () => {
+    const input = JSON.parse(raw || '{"schedules":[]}');
+    const out = [];
+    for (const s of input.schedules ?? []) {
+      try {
+        const { fires, truncated } = occurrences(s.cron, fromMs, toMs, partsOf, max);
+        if (fires.length === 0) continue;
+        out.push(truncated ? { ...s, fires, truncated } : { ...s, fires });
+      } catch (err) {
+        out.push({ ...s, error: String(err.message ?? err) });
+      }
+    }
+    console.log(JSON.stringify({
+      tz,
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+      schedules: out,
+    }, null, 2));
+  });
+}
+
+try {
+  main(process.argv.slice(2));
+} catch (err) {
+  console.error(`cron-fires: ${err.message ?? err}`);
+  process.exit(2);
+}

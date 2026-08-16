@@ -18,6 +18,42 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.24]
+
+### Added
+
+- **`scheduler-cli list` takes filters.** `--thread-id ID` narrows to the
+  schedules bound to one thread, `--active`/`--paused` split by state, and
+  `--from WHEN [--to WHEN]` keeps only the schedules that *fire* inside a
+  window, adding a `fires` array of the occurrences to each. `WHEN` is ISO
+  (`2026-08-17T09:00:00Z`) or bare (`2026-08-17`, `2026-08-17 09:00`); bare
+  means wall clock in the harness timezone, read from `harness.json`. Defaults
+  are `--from` now and `--to` +7 days, the window is capped at 366 days, and
+  `--max N` (default 50) caps the fires listed per schedule. Bare `list` is
+  unchanged. Until now an agent asking "what have I got scheduled this week?"
+  had to read every schedule and evaluate the crons in its head.
+- **`scripts/scheduler/cron-fires`** — the fire-time evaluator behind
+  `--from`/`--to`, seeded alongside `scheduler-cli`. jq cannot evaluate cron and
+  `croner` is not resolvable from an agent dir (no `node_modules` of its own),
+  so it is a dependency-free minute scan: timezone-aware via
+  `Intl.formatToParts`, 5- and 6-field expressions, names/ranges/steps/lists,
+  and the cron dom+dow OR convention. Unparseable crons come back with an
+  `error` field and over-long fire lists with `"truncated": true`, so nothing
+  is dropped silently. `node scripts/scheduler/cron-fires --self-check` runs
+  its assertions.
+
+### Breaking changes
+
+- New `scripts/scheduler/cron-fires` — `scheduler-cli list --from/--to` needs
+  it and exits non-zero without it. Plugin seeds re-copy on the next agent
+  start, so restarting each agent installs it
+  [affects: agents/*/scripts/scheduler/]
+- `scripts/scheduler/scheduler-cli` gained the `list` flags; it re-seeds on the
+  next agent start   [affects: agents/*/scripts/scheduler/scheduler-cli]
+- `system_prompts/plugin-scheduler.md` documents the new `list` flags (34 → 41
+  lines, still inside the 50-line budget); it re-seeds on the next agent start
+  [affects: agents/*/system_prompts/plugin-scheduler.md]
+
 ## [0.8.23]
 
 ### Changed

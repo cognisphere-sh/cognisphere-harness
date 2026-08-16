@@ -25,7 +25,14 @@ All operations are via `bash scripts/scheduler/scheduler-cli`:
     `--once`, a cron like `15 19 11 5 *` would re-fire next year on the
     same date. `resume` can re-arm a fired one-shot if needed.
 
-- `scheduler-cli list` → prints all schedules as JSON.
+- `scheduler-cli list [--thread-id ID] [--active|--paused] [--from WHEN] [--to WHEN]`
+  → prints matching schedules as JSON. No flags = all of them.
+  - `--thread-id "{{ThreadId}}"` narrows to this thread's schedules.
+  - `--from`/`--to` keep only schedules that FIRE in that window and add a
+    `fires` array of the occurrences. `WHEN` is ISO or bare
+    (`2026-08-17`, `2026-08-17 09:00`); bare = wall clock in the harness
+    timezone. Defaults: `--from` now, `--to` +7 days; max window 366 days.
+    Paused schedules still show up — add `--active` for what will really fire.
 - `scheduler-cli remove --name "<name>"`
 - `scheduler-cli pause --name "<name>"` — keeps the schedule but stops the timer.
 - `scheduler-cli resume --name "<name>"`

@@ -16,7 +16,7 @@ scheduler-cli — manage plugins/scheduler/state/schedules.json.
 
 USAGE
   scheduler-cli add --name N --cron C --text T --thread-id ID [--channel CH] [--once]
-  scheduler-cli list
+  scheduler-cli list [--thread-id ID] [--from WHEN] [--to WHEN] [--active|--paused] [--max N]
   scheduler-cli remove --name N
   scheduler-cli pause  --name N
   scheduler-cli resume --name N
@@ -26,7 +26,18 @@ SUBCOMMANDS
           --cron is a cron expression; --text is the message injected on
           thread --thread-id when it fires; --once deletes the schedule
           after its first firing.
-  list    Print the full schedules.json.
+  list    Print schedules.json, optionally filtered.
+            --thread-id  only schedules bound to that thread
+            --active     only schedules that are not paused
+            --paused     only paused schedules
+            --from/--to  only schedules that FIRE in that window; each one
+                         gains a `fires` array of the occurrences in range.
+                         WHEN is ISO (`2026-08-17T09:00:00Z`) or bare
+                         (`2026-08-17`, `2026-08-17 09:00`) — bare means wall
+                         clock in the harness timezone. --from defaults to
+                         now, --to to --from + 7 days. Max window 366 days.
+            --max        cap fires listed per schedule (default 50; a capped
+                         schedule is flagged `"truncated": true`).
   remove  Delete a schedule by name.
   pause   Keep the schedule but stop firing it (paused=true).
   resume  Un-pause (paused=false).
@@ -79,7 +90,36 @@ case "$cmd" in
     printf '%s\n' "$new"
     ;;
   list)
-    jq . "$state"
+    tid=""; from=""; to=""; only=""; max=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --thread-id) tid="$2"; shift 2 ;;
+        --from) from="$2"; shift 2 ;;
+        --to) to="$2"; shift 2 ;;
+        --max) max="$2"; shift 2 ;;
+        --active) only="active"; shift ;;
+        --paused) only="paused"; shift ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    body="$(jq -c --arg tid "$tid" --arg only "$only" '
+      .schedules |= map(
+        select($tid == "" or .threadId == $tid)
+        | select($only == "" or ($only == "paused") == (.paused == true))
+      )' "$state")"
+    if [ -n "$from" ] || [ -n "$to" ]; then
+      # Fire-time filtering needs cron evaluation, which jq can't do.
+      # Timezone comes from the harness settings (agent dir is
+      # <root>/<id>/agents/<agent>), falling back to the system zone.
+      tz="$(jq -r '.timezone // empty' ../../harness.json 2>/dev/null || true)"
+      set -- ; [ -n "$tz" ] && set -- --tz "$tz"
+      [ -n "$from" ] && set -- "$@" --from "$from"
+      [ -n "$to" ] && set -- "$@" --to "$to"
+      [ -n "$max" ] && set -- "$@" --max "$max"
+      printf '%s' "$body" | node scripts/scheduler/cron-fires "$@"
+    else
+      printf '%s' "$body" | jq .
+    fi
     ;;
   remove)
     name=""
