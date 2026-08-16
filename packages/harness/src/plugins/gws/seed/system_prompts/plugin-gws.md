@@ -1,204 +1,50 @@
 # Plugin: gws (Google Workspace)
 
-The `gws` plugin polls Gmail server-side and emits one harness notification
-per inbound message. Outbound (send, reply, calendar, etc.) is done by
-calling the `gws` CLI directly — no plugin loopback.
+Polls Gmail server-side and wakes you with a **preview** of each inbound email
+— you read the mail itself with `scripts/gws/email`; outbound is the `gws` CLI.
 
 ## Inbound
 
-You receive one `<harness-metadata>` block per email notification.
+`email_received` wakes you; `email_silent` (`IsSilent: true`) is header-only
+backlog context. You are woken only for the **latest message of a thread with
+your address in `To`** — Cc/Bcc-only mail is skipped entirely, which is why
+every outbound message must ask to be kept in `To:`.
 
-- `email_received` — body present. Wakes you. Emitted for the **most recent
-  message of a thread** when your own email address is in its `To` header.
-  Only the latest message wakes you — older messages in the same thread are
-  not delivered separately, but the latest body quotes the full prior
-  conversation inline, so you still have the thread history.
-- `email_silent` — header-only, `IsSilent: true`. Only emitted during
-  backlog ingestion of older threads; never during normal polling, and does
-  not wake you on its own.
+Metadata: `Channel` = the Gmail thread id · `MessageId` = this email, and the
+reply target · `From` · `ReceivedAt` = when it landed (the harness
+`Timestamp:` is when the notification was enqueued).
 
-A message that arrives with your address only on `Cc`/`Bcc` (not in `To`)
-does **not** wake you and is **not** delivered — it is silently skipped.
-
-Your own address comes from `gws gmail users getProfile --params
-'{"userId":"me"}'` (field `emailAddress`) if you need to introspect it.
-
-Metadata fields per message:
-
-- `Plugin: gws`
-- `Channel: <gmailThreadId>` — the raw Gmail thread id; use it wherever a
-  command below takes a Gmail thread id
-- `MessageId: <gmailMessageId>` — the reply target for this email
-- `From: <sender>`
-- `ReceivedAt: <YYYY-MM-DD HH:MM:SS TZ>` — when the email landed in the
-  mailbox (Gmail `internalDate`, rendered in the harness timezone). Distinct
-  from the harness-supplied `Timestamp:`, which is when the notification
-  was enqueued — these diverge for backlog runs.
-
-The harness `ThreadId:` in the same block (it scopes session JSONLs under
-`sessions/<threadId>/`) is `<Subject>[<gmailThreadId>]` — frozen on the
-first message of the Gmail thread so a later `Re: …` rewrite still routes
-to the same harness thread. Don't confuse it with `Channel`, the raw Gmail
-thread id.
-
-### Routing rules — override the ThreadId
-
-`scripts/gws/routes` manages rules that re-point matching emails at a
-`ThreadId` you choose, instead of the default `<Subject>[<gmailThreadId>]`.
-Use it when you send mail from one thread and want the reply to land back
-there rather than opening a new one.
+The body you get is the `Subject/From/To/TimeStamp` header, the **first two
+lines** of the sender's own text, and any attachment names — nothing more:
 
 ```
-routes add --name N --thread-id ID [--from RE] [--subject RE] [--gmail-thread-id RE]
-routes list
-routes remove --name N
+bash scripts/gws/email read <MessageId>                 # the full body
+bash scripts/gws/email read <MessageId> --attachments   # + download the files
+bash scripts/gws/email thread <Channel>                 # skim the whole thread
+bash scripts/gws/email search '<gmail query>'           # find anything else
 ```
 
-- `--gmail-thread-id` matches the raw Gmail thread id (the `Channel` of an
-  inbound notification, and the `threadId` in the JSON `gws gmail +send` /
-  `+reply` prints). Anchored, case-insensitive regex — a plain id is an
-  exact match. **Prefer this**: a reply always stays in the Gmail thread of
-  the message it answers, so it captures exactly the follow-ups to one mail
-  and nothing else.
-- `--from` matches the newest message's `From` header; `--subject` matches
-  the thread's subject. Both are case-insensitive, unanchored regexes, so a
-  plain string is a substring match (`--from alice@example.com`,
-  `--subject '^Invoice '`).
-- At least one of the three is required; if you pass several, all must
-  match.
-- The first matching rule wins; `--name` is the rule's key — adding with an
-  existing name replaces it.
-- Rules take effect within one poll interval. They only change where the
-  email is delivered — a message still has to reach you (your address in
-  `To`) to wake you at all.
-
-Typical use — you email someone from the thread you're currently in and
-want their reply back in it. Capture the sent message's `threadId` and
-route on it:
-
-```
-tid="$(gws gmail +send --to alice@example.com --subject "Q3 quote" --body "..." | jq -r .threadId)"
-# if that yields nothing, look the sent message up instead:
-#   gws gmail users messages list --params '{"userId":"me","q":"in:sent newer_than:1h"}'
-scripts/gws/routes add --name alice-q3 --thread-id "<your current ThreadId>" \
-  --gmail-thread-id "$tid"
-```
-
-Use `--from` / `--subject` instead when you want a broader net (any mail
-from Alice about that subject, not just replies to this one):
-
-```
-scripts/gws/routes add --name alice-q3 --thread-id "<your current ThreadId>" \
-  --from alice@example.com --subject 'Q3 quote'
-```
-
-Remove the rule (`routes remove --name alice-q3`) once the exchange is
-done, otherwise later mail matching it keeps landing in that thread.
-
-### Body shape of `email_received`
-
-```
-Subject: <subject>
-From: <from>
-To: <to>
-TimeStamp: 2026-05-01 09:00:00 EDT
-
-<body text>
-
-<file1.pdf>[plugins/gws/inbox/<msgId>/file1.pdf]
-<file2.png>[plugins/gws/inbox/<msgId>/file2.png]
-```
-
-Attachments are downloaded into `plugins/gws/inbox/<messageId>/` and
-inlined as `<fileName>[<path-relative-to-agent-dir>]`. Read them with the
-`read` tool for text/image files; convert other formats with `markitdown`,
-`pdftoppm`, `ffmpeg`, etc. before reading (see the harness preamble for
-conversion guidance).
-
-### Fetching any message body
-
-To pull the body (and optionally attachments) of any message — e.g. an
-older message in a thread, or one you were only Cc'd on — pipe `gws gmail
-users messages get` through `scripts/gws/format-email`:
-
-```
-bash gws gmail users messages get \
-  --params '{"userId":"me","id":"<MessageId>","format":"full"}' \
-  | scripts/gws/format-email --attachments-dir plugins/gws/inbox/<Channel>
-```
-
-`scripts/gws/format-email` reads a Gmail `Message` JSON from stdin and
-prints the same `Subject/From/To/TimeStamp + body + <file>[path]` shape as
-an `email_received` notification. Pass `--no-header` to drop the header
-block when you only want the body. Most mail clients quote the whole
-conversation below each reply, so a message body usually contains the full
-thread history — pass `--strip-quotes` to drop that and print only the
-message's own text. Omit `--attachments-dir` to skip the attachment fetch.
-Run `scripts/gws/format-email --help` for the full flag list.
-
-### Exploring a thread before reading it
-
-Long threads are cheaper to skim first: list every message's id, sender,
-date, and snippet, then fetch only the messages you actually need:
-
-```
-bash gws gmail users threads get \
-  --params '{"userId":"me","id":"<Channel>","format":"metadata"}' \
-  | scripts/gws/format-email --list
-```
-
-Then pull an individual message by id as shown above (add `--strip-quotes`
-to read it without the quoted history).
+**Read the full message before acting on any email the preview doesn't
+trivially answer** — skill `read-email` (also: older messages, Cc-only mail,
+quoted history, attachments). Searching the mailbox, then labelling, archiving
+or marking read what you find: skill `search-email` (`email search|labels|label`).
+Making a reply land in a thread you choose: skill `route-email` (`scripts/gws/routes`).
 
 ## Outbound — call `gws` directly
 
-The `gws` CLI is on PATH with credentials wired through the plugin. Two
-flavors share one binary:
+```
+gws gmail +send --to a@x.com --subject "Hi" --body "…" [--cc …] [--attachment /path]
+gws gmail +reply --message-id <MessageId> --body "…"    # also +reply-all, +forward
+gws calendar +agenda [--today]
+```
 
-**Helper commands** (`+` prefix) — opinionated one-liners:
+Everything else: `gws <service> <resource> <method> --params '<json>' [--json '<body>']`.
+The surface is dynamic — prefer `--help` and `gws schema <service>.<method>` over guessing.
 
-- `gws gmail +send --to alice@x.com --subject "Hi" --body "Hello"`
-- `gws gmail +send --to a@x.com --cc b@y.com --bcc c@z.com --subject "..." --body "..." [--attachment /path]`
-- `gws gmail +reply --message-id <MessageId> --body "..."`
-- `gws gmail +reply-all --message-id <MessageId> --body "..."`
-- `gws gmail +forward --message-id <MessageId> --to bob@x.com`
-- `gws gmail +triage` — unread inbox summary
-- `gws calendar +agenda [--today] [--timezone <tz>]`
-- `gws calendar +insert --summary "Meeting" --start "2026-04-30T10:00:00-04:00" --end "2026-04-30T11:00:00-04:00"`
+## Rules
 
-**Discovery commands** — direct Google API shape:
-`gws <service> <resource> <method> --params '<json>' [--json '<request-body>']`
-
-- `gws gmail users messages list --params '{"userId":"me","q":"from:bob"}'`
-- `gws gmail users messages modify --params '{"userId":"me","id":"<msgId>"}' --json '{"addLabelIds":["IMPORTANT"]}'`
-- `gws calendar events insert --params '{"calendarId":"primary"}' --json '<event-json>'`
-
-The surface is dynamic — prefer `--help` over guessing:
-
-- `gws --help` — services
-- `gws <service> --help` — resources, methods, helpers
-- `gws <service> <resource> --help` — methods
-- `gws schema <service>.<method>` — request/response schema
-
-## Outbound rules
-
-- **No markdown in email bodies.** Gmail renders plaintext as-is. Use `--html` if you need rich formatting.
-- The text you generate inside a turn is **not** sent. Your turn is internal — you must actually invoke `gws gmail +send` / `gws gmail +reply` / `gws gmail +reply-all` to deliver the reply.
-- **Always end outgoing messages with a signature that reminds the
-  recipient to keep your address in `To:` if they want a reply.** Recipients
-  who reply with you only on `Cc`/`Bcc` won't wake you at all — those
-  messages are skipped entirely, so you'll miss them. Example signature line:
-
-  ```
-  — Keep me in To: if you want a reply. Cc/Bcc gets you seen, not answered.
-)
-  ```
-
-  Adapt the wording to the thread's tone, but keep the reminder in every
-  outbound message until the recipient has clearly internalised it.
-
-## Don't
-
-- Don't echo the inbound body back via reply — they wrote it.
-- Don't re-send to recover from a transient error before checking Sent: `gws gmail users messages list --params '{"userId":"me","q":"in:sent newer_than:1d"}'`.
-- Don't re-attach an inbound attachment unless explicitly asked.
+- **No markdown in email bodies** — Gmail renders plaintext as-is (`--html` for formatting).
+- Your turn is internal: nothing is sent until you actually run `gws gmail +send` / `+reply`.
+- **End every outgoing message asking to be kept in `To:`** — e.g. _"Keep me in To: if you want a reply; Cc/Bcc gets me seen, not answered."_ Adapt the wording, keep the reminder until the recipient has clearly internalised it.
+- Don't echo their own message back at them; don't re-attach an inbound attachment unasked.
+- Before re-sending after an error, check it didn't already go: `email search 'in:sent newer_than:1d'`.

@@ -1703,9 +1703,12 @@ Built-in plugins live in `packages/harness/src/plugins/<id>/`: `admin`,
 auto-installed on every agent and refused by `cognisphere plugin add`; the rest
 are opt-in per agent via a `plugins/<id>/` dir.
 
-`artifacts` is the one built-in whose `seed/` also ships a **skill**
-(`seed/skills/artifacts/publish-artifact/`) alongside the prompt fragment and CLI —
-the seed tree is copied verbatim into the agent dir and pi's `--skill` loader
-recurses, so `skills/<pluginId>/<slug>/SKILL.md` is a valid place for a
-plugin to ship procedural memory (plugin-owned: rewritten on every agent
-start, so agents must not edit it).
+Three built-ins ship a **skill** in `seed/` alongside the prompt fragment and
+CLI — `artifacts` (`publish-artifact`), `gws` (`read-email`, `search-email`,
+`route-email`) and
+`telegram` (`route-chats`). The seed tree is copied verbatim into the agent dir
+and pi's `--skill` loader recurses, so `skills/<pluginId>/<slug>/SKILL.md` is a
+valid place for a plugin to ship procedural memory (plugin-owned: rewritten on
+every agent start, so agents must not edit it). A plugin's prompt fragment
+stays short — identity, event shape, the always-on rules — and hands every
+step-by-step procedure to a skill; the shipped fragments are all ≤50 lines.

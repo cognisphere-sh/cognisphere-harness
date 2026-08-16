@@ -18,6 +18,56 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.22]
+
+### Added
+
+- **`scripts/gws/email`** — the agent-facing Gmail CLI, seeded with the `gws`
+  plugin. `email read <messageId>` (full body, `--strip-quotes`,
+  `--attachments` → `plugins/gws/inbox/<messageId>/`), `email thread <threadId>`
+  (skim id/from/date/snippet, or `--full` for every body), `email search
+  '<gmail query>' [--max N]` (hits listed with subject/from/date/snippet — the
+  raw API returns bare ids), `email labels`, and `email label <id> --add NAME
+  --remove NAME --archive --read|--unread [--create] [--thread]`, which
+  resolves label names to Gmail's opaque label ids and refuses an unknown name
+  unless `--create`. It replaces the stdin-only `scripts/gws/format-email`.
+- **Plugin-shipped skills for `gws` and `telegram`**, seeded under
+  `skills/<plugin-id>/<slug>/` like the `artifacts` plugin's: `read-email`
+  (full bodies, quoted history, thread skimming, attachments), `search-email`
+  (Gmail query syntax, filing with labels/archive/read, and the standing
+  `settings.filters` rules), `route-email` (thread-routing rules) and
+  `route-chats` (Telegram chat routing).
+
+### Changed
+
+- **gws notifications are a preview, not the mail.** An `email_received` body
+  is now the `Subject/From/To/TimeStamp` header, the **first two lines** of the
+  sender's own text (quoted reply history stripped first), and the *names* of
+  any attachments. Attachments are no longer downloaded at poll time — the
+  agent fetches what it needs with `scripts/gws/email`, so a mailbox of long
+  quoted-history threads stops spending context on mail nobody reads.
+- **Plugin prompt fragments are capped at 50 lines**, with every step-by-step
+  procedure moved into a plugin-owned skill: `plugin-gws.md` 204 → 50 lines,
+  `plugin-telegram.md` 75 → 48. A fragment costs every turn of every thread; a
+  skill costs one description line until an agent needs it.
+- `docs/server.md`, `docs/base-harness/skills.md` and the `create-plugin` skill
+  (v1.3.0) document the 50-line budget and what belongs in a fragment
+  (identity, event shape, always-on rules) versus a skill. Both scaffold trees
+  are refreshed wholesale by the upgrade skill.
+
+### Breaking changes
+
+- `scripts/gws/format-email` is replaced by `scripts/gws/email`. Plugin seeds
+  are overwritten on every agent start but never pruned, so the stale script
+  has to be deleted by hand   [affects: agents/*/scripts/gws/format-email]
+- Email notifications no longer carry the full body: any agent instruction or
+  knowledge note that assumes one — or that pipes `gws gmail users messages get
+  … | format-email` — must be reworded to call `scripts/gws/email read
+  <MessageId>`   [affects: agents/*/system_prompts/1-*.md]
+- The gws/telegram prompt fragments, the new `email` CLI and the four new
+  skills re-seed themselves on the next agent start; restarting the affected
+  agents is all that is required   [affects: agents/*/skills/gws/]
+
 ## [0.8.21]
 
 ### Added

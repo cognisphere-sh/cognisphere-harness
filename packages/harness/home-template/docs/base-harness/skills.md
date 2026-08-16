@@ -61,7 +61,10 @@ A plugin may ship a skill in its `seed/` tree under
 `skills/<plugin-id>/<slug>/`; it is copied into the agent dir on every agent
 start and loaded like any other skill. Those directories are **plugin-owned** —
 overwritten on each start, so never hand-edit them; change the plugin's seed
-instead. The `artifacts` plugin ships `publish-artifact` this way.
+instead. Shipped this way: `artifacts` → `publish-artifact`, `gws` →
+`read-email` + `search-email` + `route-email`, `telegram` → `route-chats`. A plugin's system
+prompt fragment is kept short (identity, event shape, always-on rules) and
+delegates every step-by-step procedure to one of these skills.
 
 ## `cognisphere-upgrade`
 

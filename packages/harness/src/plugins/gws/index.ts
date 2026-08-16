@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access, appendFile, readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import type {
@@ -10,11 +10,13 @@ import type {
   PluginManifest,
 } from "../../core/types.js";
 import {
+  collectAttachments,
   collectHeaders,
-  formatEmail,
   formatTs,
+  pickTextBody,
+  previewBody,
   type GmailMessage,
-} from "./seed/scripts/gws/format-email.js";
+} from "./seed/scripts/gws/format-email-lib.mjs";
 
 const execFileP = promisify(execFile);
 const UNREAD_LABEL = "UNREAD";
@@ -63,10 +65,11 @@ interface CompiledRoute {
  * Polls Gmail through the `gws` CLI. Unread filtering lives in the poll
  * query itself (default `is:unread in:inbox`), not in code. For each
  * matching thread it looks only at the most recent message: if the agent's
- * own email is in that message's `To` header it delivers headers + body +
- * attachment paths and wakes the agent; otherwise nothing is emitted (set
- * `requireAgentInTo: false` to instead deliver such messages in full and
- * wake the agent regardless of the `To` header).
+ * own email is in that message's `To` header it wakes the agent with a
+ * preview — headers, the first two lines of the body, attachment names —
+ * and the agent reads the rest with `scripts/gws/email`; otherwise nothing
+ * is emitted (set `requireAgentInTo: false` to instead deliver such messages
+ * and wake the agent regardless of the `To` header).
  * Older messages in the thread are never re-emitted. Every unread message
  * in a handled thread is marked read so the poll query stops re-matching
  * it.
@@ -120,7 +123,7 @@ export default class GwsPlugin implements Plugin {
           type: "boolean",
           default: true,
           description:
-            "Only emit a thread's latest message when the agent's own address is in its `To` header. When false, messages not addressed to the agent (Cc/Bcc/none) are still delivered in full and wake the agent regardless. Ignored in backlog mode.",
+            "Only emit a thread's latest message when the agent's own address is in its `To` header. When false, messages not addressed to the agent (Cc/Bcc/none) are still delivered and wake the agent regardless. Ignored in backlog mode.",
         },
       },
       additionalProperties: false,
@@ -525,28 +528,35 @@ export default class GwsPlugin implements Plugin {
 
       // Backlog mode: only the first message of the thread wakes the agent;
       // every other message is silent context.
-      // Default mode: agent address in `To` → wake (full body). When
-      // requireAgentInTo is false, wake on every delivered message too (full
-      // body, not silent) — otherwise Cc/Bcc / not-addressed → silent.
+      // Default mode: agent address in `To` → wake (with a body preview).
+      // When requireAgentInTo is false, wake on every delivered message too
+      // — otherwise Cc/Bcc / not-addressed → silent.
       const invoked = this.firstOfThreadOnly
         ? m.id === threadId
         : !this.requireAgentInTo ||
           extractEmails(to).includes(this.agentEmail);
 
+      // Notifications carry a preview, not the mail: the first two lines of
+      // the message's own text, plus the names of its attachments. Full
+      // bodies (and attachment downloads) are one `scripts/gws/email read`
+      // away, so a thread of long quoted-history emails doesn't spend the
+      // agent's context on mail it may not need to read.
       let text = header;
       if (invoked) {
-        const formatted = await formatEmail(m, {
-          attachmentsDir: ctx.inboxDir,
-          runGws: (a) => this.runGws(a),
-        });
-        const body = formatted.body || "(no plain-text body)";
-        const attLines = formatted.attachments
-          .filter((a) => a.path)
-          .map((a) => `${a.filename}[${relative(ctx.agentDir, a.path!)}]`);
-        text =
-          attLines.length > 0
-            ? `${header}\n\n${body}\n\n${attLines.join("\n")}`
-            : `${header}\n\n${body}`;
+        const preview = previewBody(pickTextBody(m.payload));
+        const blocks = [preview.text || "(no plain-text body)"];
+        if (preview.truncated) {
+          blocks.push(`[preview — full body: bash scripts/gws/email read ${m.id}]`);
+        }
+        const names = collectAttachments(m.payload)
+          .map((p) => p.filename)
+          .filter((n): n is string => !!n);
+        if (names.length > 0) {
+          blocks.push(
+            `Attachments: ${names.join(", ")}\n[download: bash scripts/gws/email read ${m.id} --attachments]`,
+          );
+        }
+        text = `${header}\n\n${blocks.join("\n\n")}`;
       }
 
       pending.push({

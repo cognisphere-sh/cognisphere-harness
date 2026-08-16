@@ -1,5 +1,13 @@
 # create-plugin — changelog
 
+## 1.3.0
+
+- Prompt-fragment budget: **over ~50 lines is the signal to split** — a
+  fragment costs every turn of every thread, a skill costs one description
+  line until it's needed. §2 now says what stays in the fragment (event shape,
+  always-on rules, CLI) and what moves to a skill, and points at `gws` and
+  `telegram` as worked examples alongside `artifacts`.
+
 ## 1.2.0
 
 - Description now states what the skill covers and *when a plugin is the right

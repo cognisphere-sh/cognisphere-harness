@@ -84,6 +84,24 @@ export function stripQuotedHistory(body) {
   return stripped || body;
 }
 
+/** First `n` non-blank lines of a body, each clipped to `width` chars — the
+ *  preview the gws plugin puts in a notification instead of the whole email.
+ *  Quoted history is stripped first, so a reply previews its own text rather
+ *  than the conversation it quotes. `truncated` is true when anything at all
+ *  was left out, which is what tells the agent to go read the full message. */
+export function previewBody(body, n = 2, width = 200) {
+  const own = stripQuotedHistory(body).trim();
+  const lines = own.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const kept = lines.slice(0, n).map((l) =>
+    l.length > width ? l.slice(0, width) + "…" : l,
+  );
+  const truncated =
+    lines.length > n ||
+    kept.some((l, i) => l !== lines[i]) ||
+    own !== body.trim();
+  return { text: kept.join("\n"), truncated };
+}
+
 export async function fetchAttachment(runGws, messageId, attachmentId, target) {
   const params = JSON.stringify({ userId: "me", messageId, id: attachmentId });
   const { stdout } = await runGws([

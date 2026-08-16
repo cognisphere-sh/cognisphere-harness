@@ -38,6 +38,11 @@ export function pickTextBody(part: GmailPart): string;
 export function collectAttachments(part: GmailPart): GmailPart[];
 export function sanitizeFilename(name: string): string;
 export function stripQuotedHistory(body: string): string;
+export function previewBody(
+  body: string,
+  n?: number,
+  width?: number,
+): { text: string; truncated: boolean };
 export function formatTs(unixMs: number, timeZone: string): string;
 export function fetchAttachment(
   runGws: GwsRunner,

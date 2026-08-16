@@ -1,0 +1,386 @@
+#!/usr/bin/env node
+/**
+ * email — read Gmail messages and threads. Notifications carry only a
+ * two-line preview, so this is how the agent gets the actual mail.
+ *
+ *   email read <messageId> [--attachments] [--strip-quotes] [--no-header]
+ *   email thread <threadId> [--full] [--attachments] [--strip-quotes]
+ *   email search <gmail query> [--max N]
+ *   email labels
+ *   email label <id> [--add N]… [--remove N]… [--archive] [--read] [--unread]
+ *
+ * `read` prints one message: the Subject/From/To/TimeStamp header, the body,
+ * and its attachment names. `thread` without `--full` lists every message in
+ * the thread (id, from, date, snippet) so a long thread can be skimmed before
+ * fetching; with `--full` it prints every message's body in one go. `search`
+ * runs a Gmail query and lists the hits in that same shape — the raw API
+ * returns bare ids, which is never what the caller wanted. `label` applies
+ * label changes by *name* (resolving them to ids), which is how mail gets
+ * filed, archived or marked read once it has been dealt with.
+ *
+ * Shells out to the `gws` CLI (credentials come from the plugin's env) and
+ * shares its Gmail decoding with the plugin runtime via format-email-lib.mjs.
+ */
+import { execFile } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+import {
+  collectAttachments,
+  collectHeaders,
+  fetchAttachment,
+  formatTs,
+  pickTextBody,
+  sanitizeFilename,
+  stripQuotedHistory,
+} from "./format-email-lib.mjs";
+
+const execFileP = promisify(execFile);
+const runGws = (args) => execFileP("gws", args, { maxBuffer: 64 * 1024 * 1024 });
+
+const HELP = `email — read, search and file Gmail messages (gws plugin).
+
+USAGE
+  email read <messageId> [options]     one message: header + body + attachments
+  email thread <threadId> [options]    the thread's messages (list, or --full)
+  email search '<gmail query>' [--max N]   find mail: id, from, date, subject, snippet
+  email labels                         every label name in the mailbox
+  email label <id> [changes]           apply label changes to a message/thread
+
+READ OPTIONS
+  --full            thread: print every message's body, not just the listing
+  --attachments     download attachments into plugins/gws/inbox/<messageId>/
+                    and print each as <fileName>[<path>]
+  --strip-quotes    drop the quoted reply history most clients paste below a
+                    reply — prints only each message's own text
+  --no-header       drop the Subject/From/To/TimeStamp block
+  --timezone TZ     IANA tz for the TimeStamp line (default: host)
+
+SEARCH OPTIONS
+  --max N           how many of the most recent hits to detail (default 10;
+                    listed oldest-first, so the newest is last)
+
+LABEL CHANGES (at least one required)
+  --add NAME        add a label (repeatable; --create makes a missing one)
+  --remove NAME     remove a label (repeatable)
+  --archive         drop it out of the inbox (removes INBOX)
+  --read/--unread   mark read / unread (removes / adds UNREAD)
+  --thread          apply to every message of the thread, not just <id>
+
+The <messageId> is the MessageId of an email notification; <threadId> is its
+Channel. Run from the agent directory (attachment paths are relative to it).
+
+EXAMPLES
+  email read 19abc4def5678901 --strip-quotes
+  email thread 19abc0000000000                # skim: who wrote what, when
+  email search 'from:alice@x.com has:attachment newer_than:30d'
+  email search 'subject:invoice is:unread' --max 25
+  email label 19abc4def5678901 --add Invoices --archive --read --create
+`;
+
+function parseArgs(argv) {
+  const out = {
+    cmd: argv[0],
+    // The message id, the thread id, or the search query, per subcommand.
+    id: argv[1],
+    full: false,
+    attachments: false,
+    stripQuotes: false,
+    header: true,
+    timezone: null,
+    max: 10,
+    add: [],
+    remove: [],
+    archive: false,
+    read: false,
+    unread: false,
+    thread: false,
+    create: false,
+  };
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--full") out.full = true;
+    else if (a === "--attachments") out.attachments = true;
+    else if (a === "--strip-quotes") out.stripQuotes = true;
+    else if (a === "--no-header") out.header = false;
+    else if (a === "--timezone") out.timezone = argv[++i];
+    else if (a === "--max") out.max = Number(argv[++i]);
+    else if (a === "--add") out.add.push(argv[++i]);
+    else if (a === "--remove") out.remove.push(argv[++i]);
+    else if (a === "--archive") out.archive = true;
+    else if (a === "--read") out.read = true;
+    else if (a === "--unread") out.unread = true;
+    else if (a === "--thread") out.thread = true;
+    else if (a === "--create") out.create = true;
+    else die(`unknown arg '${a}'`);
+  }
+  if (!Number.isInteger(out.max) || out.max < 1) die("--max must be a positive integer");
+  return out;
+}
+
+function die(msg) {
+  process.stderr.write(`email: ${msg}\n`);
+  process.exit(2);
+}
+
+async function gwsJson(args) {
+  const { stdout } = await runGws(args);
+  return JSON.parse(stdout || "{}");
+}
+
+const getMessage = (id) =>
+  gwsJson([
+    "gmail",
+    "users",
+    "messages",
+    "get",
+    "--params",
+    JSON.stringify({ userId: "me", id, format: "full" }),
+  ]);
+
+const getThread = (id, format) =>
+  gwsJson([
+    "gmail",
+    "users",
+    "threads",
+    "get",
+    "--params",
+    JSON.stringify({ userId: "me", id, format }),
+  ]);
+
+const getMeta = (id) =>
+  gwsJson([
+    "gmail",
+    "users",
+    "messages",
+    "get",
+    "--params",
+    JSON.stringify({ userId: "me", id, format: "metadata" }),
+  ]);
+
+const listLabels = () =>
+  gwsJson([
+    "gmail",
+    "users",
+    "labels",
+    "list",
+    "--params",
+    JSON.stringify({ userId: "me" }),
+  ]);
+
+/** Run `fn` over `items` five at a time — each call is a `gws` subprocess, and
+ *  an unbounded Promise.all over a 200-hit search would fork 200 of them.
+ *  ponytail: fixed pool; make it a flag if a search ever needs to go faster. */
+async function mapPool(items, fn) {
+  const out = [];
+  for (let i = 0; i < items.length; i += 5) {
+    out.push(...(await Promise.all(items.slice(i, i + 5).map(fn))));
+  }
+  return out;
+}
+
+const byDate = (msgs) =>
+  [...msgs].sort((a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0));
+
+/** Attachment lines: downloaded to `plugins/gws/inbox/<msgId>/` with
+ *  `--attachments`, otherwise just named so the agent knows they exist. */
+async function attachmentLines(msg, parts, download) {
+  if (!download) {
+    return parts.map(
+      (p) => `${p.filename} (not downloaded — rerun with --attachments)`,
+    );
+  }
+  const dir = join("plugins", "gws", "inbox", msg.id);
+  mkdirSync(dir, { recursive: true });
+  const lines = [];
+  for (const part of parts) {
+    const filename = sanitizeFilename(part.filename ?? `attachment-${part.partId ?? "0"}`);
+    const target = join(dir, filename);
+    try {
+      await fetchAttachment(runGws, msg.id, part.body.attachmentId, target);
+      lines.push(`${filename}[${target}]`);
+    } catch (err) {
+      lines.push(`${filename} (fetch failed: ${err?.message ?? err})`);
+    }
+  }
+  return lines;
+}
+
+async function render(msg, args, tz) {
+  const h = collectHeaders(msg.payload ?? {});
+  const lines = [];
+  if (args.header) {
+    lines.push(
+      `Subject: ${h.get("subject") ?? "(no subject)"}`,
+      `From: ${h.get("from") ?? "(unknown sender)"}`,
+      `To: ${h.get("to") ?? "(unknown recipient)"}`,
+      `TimeStamp: ${
+        msg.internalDate
+          ? formatTs(Number(msg.internalDate), tz)
+          : (h.get("date") ?? "(unknown)")
+      }`,
+      `MessageId: ${msg.id}`,
+      "",
+    );
+  }
+  const raw = pickTextBody(msg.payload ?? {});
+  lines.push((args.stripQuotes ? stripQuotedHistory(raw) : raw) || "(no plain-text body)");
+
+  const parts = collectAttachments(msg.payload ?? {});
+  if (parts.length > 0) {
+    lines.push("", ...(await attachmentLines(msg, parts, args.attachments)));
+  }
+  return lines.join("\n");
+}
+
+/** One metadata block per message, oldest first — the cheap way to find the
+ *  message worth fetching in a long thread. */
+function renderList(msgs, tz, withSubject = false) {
+  return msgs
+    .map((m, i) => {
+      const h = collectHeaders(m.payload ?? {});
+      return [
+        `[${i + 1}/${msgs.length}] id: ${m.id}`,
+        ...(withSubject ? [`  subject: ${h.get("subject") ?? "(no subject)"}`] : []),
+        `  from: ${h.get("from") ?? "(unknown)"}`,
+        `  date: ${
+          m.internalDate
+            ? formatTs(Number(m.internalDate), tz)
+            : (h.get("date") ?? "(unknown)")
+        }`,
+        `  snippet: ${(m.snippet ?? "").replace(/\s+/g, " ").trim()}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+/** Gmail query in, one metadata block per hit out. The raw API returns bare
+ *  `{id, threadId}` pairs, so every hit is fetched at `format=metadata` — the
+ *  headers and snippet are what make a result list decidable without opening
+ *  each message. */
+async function search(query, max, tz) {
+  const list = await gwsJson([
+    "gmail",
+    "users",
+    "messages",
+    "list",
+    "--params",
+    JSON.stringify({ userId: "me", q: query, maxResults: max }),
+  ]);
+  const hits = list.messages ?? [];
+  if (hits.length === 0) return `no matches for: ${query}`;
+  const msgs = await mapPool(hits, (h) => getMeta(h.id));
+  return renderList([...msgs].reverse(), tz, true);
+}
+
+/** Label *names* → label ids. Gmail's modify API only takes ids, and the ids
+ *  of user labels are opaque (`Label_12`), so a caller that had to know them
+ *  would have to list labels first every single time. */
+async function resolveLabels(names, create) {
+  const { labels = [] } = await listLabels();
+  const byName = new Map(labels.map((l) => [l.name.toLowerCase(), l.id]));
+  const ids = [];
+  for (const name of names) {
+    const hit = byName.get(name.toLowerCase());
+    if (hit) {
+      ids.push(hit);
+      continue;
+    }
+    if (!create) {
+      die(`no label '${name}' — \`email labels\` lists them, --create makes it`);
+    }
+    const made = await gwsJson([
+      "gmail",
+      "users",
+      "labels",
+      "create",
+      "--params",
+      JSON.stringify({ userId: "me" }),
+      "--json",
+      JSON.stringify({ name }),
+    ]);
+    byName.set(name.toLowerCase(), made.id);
+    ids.push(made.id);
+  }
+  return ids;
+}
+
+/** Archive / mark read / file under a label — the actions that follow a
+ *  triage decision. `--thread` applies them to every message of the thread. */
+async function applyLabels(args) {
+  const add = [...args.add];
+  const remove = [...args.remove];
+  if (args.archive) remove.push("INBOX");
+  if (args.read) remove.push("UNREAD");
+  if (args.unread) add.push("UNREAD");
+  if (add.length === 0 && remove.length === 0) {
+    die("nothing to apply — pass --add/--remove/--archive/--read/--unread");
+  }
+  const body = {};
+  if (add.length > 0) body.addLabelIds = await resolveLabels(add, args.create);
+  if (remove.length > 0) body.removeLabelIds = await resolveLabels(remove, false);
+  await runGws([
+    "gmail",
+    "users",
+    args.thread ? "threads" : "messages",
+    "modify",
+    "--params",
+    JSON.stringify({ userId: "me", id: args.id }),
+    "--json",
+    JSON.stringify(body),
+  ]);
+  const changes = [
+    add.length > 0 ? `+${add.join(" +")}` : null,
+    remove.length > 0 ? `-${remove.join(" -")}` : null,
+  ].filter(Boolean);
+  return `${args.thread ? "thread" : "message"} ${args.id}: ${changes.join(" ")}`;
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0 || ["--help", "-h", "help"].includes(argv[0])) {
+    process.stdout.write(HELP);
+    return;
+  }
+  const args = parseArgs(argv);
+  const tz = args.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  if (args.cmd === "labels") {
+    const { labels = [] } = await listLabels();
+    const names = labels.map((l) => l.name).sort((a, b) => a.localeCompare(b));
+    process.stdout.write(names.join("\n") + "\n");
+    return;
+  }
+  if (!args.id) {
+    die(`${args.cmd} needs ${args.cmd === "search" ? "a query" : "an id"} — see \`email --help\``);
+  }
+
+  let out;
+  if (args.cmd === "search") {
+    out = await search(args.id, args.max, tz);
+  } else if (args.cmd === "label") {
+    out = await applyLabels(args);
+  } else if (args.cmd === "read") {
+    out = await render(await getMessage(args.id), args, tz);
+  } else if (args.cmd === "thread") {
+    const thread = await getThread(args.id, args.full ? "full" : "metadata");
+    const msgs = byDate(thread.messages ?? []);
+    if (msgs.length === 0) die(`thread ${args.id} has no messages`);
+    out = args.full
+      ? (await Promise.all(msgs.map((m) => render(m, args, tz)))).join(
+          "\n\n" + "-".repeat(60) + "\n\n",
+        )
+      : renderList(msgs, tz);
+  } else {
+    die(
+      `unknown command '${args.cmd}' — expected read, thread, search, labels or label`,
+    );
+  }
+  process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+}
+
+main().catch((err) => {
+  process.stderr.write(`email: ${err?.stderr?.toString().trim() || err?.message || err}\n`);
+  process.exit(1);
+});

@@ -1,75 +1,48 @@
 # Plugin: telegram
 
-The telegram plugin connects this agent to a Telegram bot. The plugin runs
-in long-poll mode server-side; you don't need a public webhook URL.
+Connects you to a Telegram bot. The plugin long-polls server-side, so no
+public webhook URL is needed.
 
 ## Inbound
 
-User messages and edits arrive as `<harness-metadata>` blocks with:
+Messages and edits arrive as `<harness-metadata>` blocks with `Plugin:
+telegram`, `Channel` (the chat id — pass it back when replying), `SenderId`,
+`SenderName`, `MessageId`, `EventType` (`message` | `edit`), plus
+`ReplyToMessageId` when the user replied to an earlier message and
+`MediaGroupId` on album / grouped media.
 
-- `Plugin: telegram`
-- `Channel: <chatId>` — the Telegram chat id; use this when replying
-- `SenderId`, `SenderName`, `MessageId`, `EventType` (`message` | `edit`)
-- `ReplyToMessageId` — present when the user replied to an earlier message
-- `MediaGroupId` — present on album / grouped media
-- `Attachments` — comma-separated paths (relative to the agent dir) to downloaded media files
+Photos, voice notes, videos and documents are downloaded into
+`plugins/telegram/inbox/` and inlined in the body as
+`<fileName>[plugins/telegram/inbox/<name>.<ext>]`. Read text and images with
+`read`; convert anything else with `markitdown` / `pdftoppm` / `ffmpeg` (see
+the harness preamble).
 
-A `/reset` message is handled by the plugin itself (it wipes the
-conversation's context — thread queue + session files) and never reaches
-you. If a user asks how to start over, tell them to send `/reset`.
+`/reset` is handled by the plugin itself — it wipes the conversation's context
+and never reaches you. If a user asks how to start over, tell them to send it.
 
-When the user sends a photo, voice note, video, document, etc., the plugin
-downloads it into `plugins/telegram/inbox/` and inlines a path relative to
-the agent dir in the message body as `<fileName>[plugins/telegram/inbox/<name>.<ext>]`.
-Read the path directly with `read` (for text/image) or convert with
-`markitdown` / `pdftoppm` / `ffmpeg` (see the harness preamble for
-conversion guidelines).
-
-### Routing rules — override the ThreadId
-
-`scripts/telegram/routes` manages rules that deliver a chat's messages to a
-`ThreadId` you choose, instead of the one this agent's thread strategy picks.
-Use it to park a group chat in its own thread, or to fold several chats into
-one shared thread.
-
-```
-routes add --name N --thread-id ID --chat RE
-routes list
-routes remove --name N
-```
-
-- `--chat` is an anchored, case-insensitive regex matched against the chat
-  id, so a plain id is an exact match. `.*` is a wildcard, `-100.*` matches
-  every supergroup, `123|456` a set.
-- The first matching rule wins; `--name` is the rule's key — adding with an
-  existing name replaces it.
-- Rules take effect on the next inbound message. `/reset` in a routed chat
-  resets the routed thread.
+To deliver a chat to a thread of your choosing — park a group chat on its own,
+or fold several chats into one — follow the `route-chats` skill
+(`scripts/telegram/routes`).
 
 ## Outbound — `scripts/telegram/telegram-cli`
 
-The CLI reads `TELEGRAM_BOT_TOKEN` from env (injected by the harness from
-`secrets.json`) and calls the Telegram Bot API directly. Always pass
-`--chat-id <Channel>` from the inbound metadata.
+Always pass `--chat-id <Channel>` from the inbound metadata.
 
 ```
-bash scripts/telegram/telegram-cli send-message   --chat-id <ID> --text "..."
-bash scripts/telegram/telegram-cli send-message   --chat-id <ID> --text "..." --reply-to <MessageId>
+bash scripts/telegram/telegram-cli send-message   --chat-id <ID> --text "..." [--reply-to <MessageId>]
 bash scripts/telegram/telegram-cli send-file      --chat-id <ID> --file <path> --type <photo|document|voice|video|audio> [--caption "..."] [--reply-to <ID>]
 bash scripts/telegram/telegram-cli edit-message   --chat-id <ID> --message-id <ID> --text "..."
 bash scripts/telegram/telegram-cli delete-message --chat-id <ID> --message-id <ID>
 bash scripts/telegram/telegram-cli send-reaction  --chat-id <ID> --message-id <ID> --emoji "👍"
 ```
 
-`send-message` and `send-file` print `{"message_id": <int>}` on success;
-the others print `ok`. Errors go to stderr and exit non-zero.
+`send-message` / `send-file` print `{"message_id": <int>}`; the rest print
+`ok`. Errors go to stderr with a non-zero exit.
 
-Write `--text` / `--caption` in standard markdown (`**bold**`, `` `code` ``,
-lists, links); the CLI converts it to Telegram formatting automatically.
-Do not pass `--parse-mode` unless you need raw Telegram Markdown/HTML.
-Markdown tables render as monospace blocks — Telegram has no real tables,
-so keep them to 2–3 narrow columns (phone screens) or prefer bullet lists.
-
-The text generated in your turn is **not** sent to the user — your turn is
-internal. Always invoke `telegram-cli send-message` to actually deliver a
-reply.
+- Write `--text` / `--caption` in standard markdown (`**bold**`, `` `code` ``,
+  lists, links) — the CLI converts it to Telegram formatting. Don't pass
+  `--parse-mode` unless you need raw Telegram Markdown/HTML.
+- Telegram has no real tables: markdown tables render as monospace blocks, so
+  keep them to 2–3 narrow columns (phone screens) or use bullet lists.
+- Your turn is internal — the text you generate is **not** delivered. Nothing
+  reaches the user until you actually run `telegram-cli send-message`.

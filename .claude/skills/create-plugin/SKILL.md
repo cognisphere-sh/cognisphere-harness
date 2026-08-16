@@ -1,9 +1,9 @@
 ---
 name: create-plugin
-description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Covers the duck-typed Plugin contract, the manifest (config/secrets schemas), the seed tree (prompt fragment, CLI scripts, plugin-owned skills), event/metadata conventions, enabling per agent, and the common load/start failures. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin" or "write a plugin for the harness" — and whenever a capability an agent needs lives outside its own filesystem: polling or receiving from an external service, exposing an HTTP/webhook endpoint, running something on a schedule, or handing agents a CLI backed by harness-side state. (v1.2.0)
+description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Covers the duck-typed Plugin contract, the manifest (config/secrets schemas), the seed tree (prompt fragment, CLI scripts, plugin-owned skills), event/metadata conventions, enabling per agent, and the common load/start failures. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin" or "write a plugin for the harness" — and whenever a capability an agent needs lives outside its own filesystem: polling or receiving from an external service, exposing an HTTP/webhook endpoint, running something on a schedule, or handing agents a CLI backed by harness-side state. (v1.3.0)
 metadata:
   author: cognisphere
-  version: "1.2.0"
+  version: "1.3.0"
   argument-hint: <plugin-id>
 ---
 
@@ -107,12 +107,21 @@ plugin-owned: overwritten on every start, so never hand-edit the copies in the
 agent dir.
 
 **Shipping a skill with a plugin.** Keep the *prompt fragment* short — what the
-plugin is, its events, its CLI — and put any multi-step procedure in a skill
-under `seed/skills/<id>/<slug>/` (pi's `--skill` loader recurses, so it is
+plugin is, its events, its always-on rules, its CLI — and put any multi-step
+procedure in a skill under `seed/skills/<id>/<slug>/` (pi's `--skill` loader recurses, so it is
 loaded like any other). Version it and give it a `CHANGELOG.md` exactly as
 `create-skill` describes; the scope dir `skills/<id>/` marks it plugin-owned,
 so agents must never edit it — change the seed instead. The bundled `artifacts`
-plugin is the worked example (`publish-artifact`).
+plugin is the worked example (`publish-artifact`); `gws` (`read-email`,
+`route-email`) and `telegram` (`route-chats`) are the same split applied to a
+larger surface.
+
+**A prompt fragment over ~50 lines is the signal to split.** It costs every
+turn of every thread, whether or not the plugin is in play; a skill costs one
+description line until the agent needs it. When a fragment grows past that,
+move the procedures out and leave behind the event shape, the rules that must
+always hold, and a pointer to the skill by name. Every shipped fragment is at
+or under 50 lines.
 
 ## 3. Scaffold
 
