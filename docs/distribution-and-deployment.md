@@ -74,7 +74,9 @@ init <name>` scaffolds it:
 ├── .claude/skills/            → agent skills (upgrade, create-plugin, create-skill), copied in by init
 ├── .agents/skills/               (same set — for non-Claude coding agents)
 ├── app/                       ← the user-facing app (placeholder README until you
-│                                 add one; a Next.js app is the convention)
+│   └── artifacts-routes/         add one; a Next.js app is the convention).
+│                                 artifacts-routes/ = drop-in public/protected
+│                                 routes for the `artifacts` plugin (§5)
 └── harness/                   ← the harness data dir — a workspace member that
     ├── package.json              depends on @cognisphere-sh/cognisphere-harness
     ├── harness.json            → { "version": "0.3.0", "timezone": "UTC" }
@@ -124,7 +126,7 @@ packages/
 │       │   └── main.ts       ← process entrypoint + HTTP route wiring
 │       ├── api/              ← HTTP route handlers (/api, /admin, /webhook)
 │       ├── cli/              ← the `cognisphere` CLI (init, agent, plugin, dev, serve, upgrade)
-│       ├── plugins/          ← admin, scheduler, agent-messaging (core) + telegram, gws (catalog)
+│       ├── plugins/          ← admin, scheduler, agent-messaging (core) + telegram, gws, artifacts (catalog)
 │       └── agents/
 │           ├── base-agent/   ← the single base template every agent forks from
 │           └── nova/         ← overlay for the developer agent (§4)
@@ -192,11 +194,24 @@ Two kinds of plugins, distinguished by whether the user is meant to fork them:
 | Kind | Plugins | Distribution | Editable |
 |---|---|---|---|
 | **Core** | `admin`, `scheduler`, `agent-messaging` | bundled in the package, resolved from `node_modules` | no — forking is a footgun |
-| **Catalog** | `telegram`, `gws`, future adapters | **forkable copies** | yes — copied into the harness |
+| **Catalog** | `telegram`, `gws`, `artifacts`, future adapters | **forkable copies** | yes — copied into the harness |
 
 - The **catalog** lives at `packages/harness/src/plugins/` in the monorepo. `cognisphere
   plugin add <id>` copies a plugin folder into `<harness>/plugins/<id>/`
   (git-tracked, forkable) — the same fork model as the base template.
+- **`artifacts` is wired by the deploy scripts, not by hand.** It is the one
+  plugin that spans both halves of a home: the agent publishes HTML, the app
+  serves it at `/{public,private}/artifacts/<slug>`, and a shared secret proves
+  to the plugin that the app authenticated the reader. `cognisphere init` lays
+  down the app-side reference routes at `app/artifacts-routes/`; setting
+  `ARTIFACTS_AGENT` (and `ARTIFACTS_SESSION_COOKIE`) in `config` makes
+  `scripts/server.sh secrets` do the rest on every deploy — generate
+  `ARTIFACTS_APP_SECRET` once, write it to both `harness/.secrets/secrets.json`
+  and `app/.env.local`, create `agents/<agent>/plugins/artifacts/config.json`
+  with `appBaseUrl: https://$DOMAIN`, and enable the plugin on that agent. Blank
+  `ARTIFACTS_AGENT` = nothing happens. The one manual step is copying
+  `app/artifacts-routes/` into the app and filling in its `signedIn()`; see that
+  directory's README.
 - **Override** is already supported by the runtime: user plugins under
   `<harness>/plugins/` shadow builtins on id collision. "Override a builtin" and
   "install a catalog plugin" are the same mechanism.

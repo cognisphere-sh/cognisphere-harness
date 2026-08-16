@@ -103,11 +103,29 @@ plugin+channel).
 
 - **Core** (`admin`, `scheduler`, `agent-messaging`) — bundled, auto-installed
   on every agent, not forkable.
-- **Catalog** (`telegram`, `gws`, …) — forked into
+- **Catalog** (`telegram`, `gws`, `artifacts`, …) — forked into
   `harness/plugins/<id>/` by `cognisphere plugin add`, then enabled per agent
   by creating `agents/<agent>/plugins/<id>/`. Forked copies are yours to edit
   and shadow the bundled ones.
 - Custom plugins: use the `create-plugin` skill (see skills.md).
+
+The **artifacts** plugin lets an agent publish a static HTML file and share
+the link: `scripts/artifacts/artifact publish <file.html>` prints a URL on the
+app's own domain. Each artifact carries a **public/private flag** that decides
+which of its two links works — `https://$DOMAIN/private/artifacts/<slug>` for
+signed-in app users, `https://$DOMAIN/public/artifacts/<slug>` for anyone. **No
+URL carries a token.**
+
+**The app owns authentication.** Copy the drop-in routes from the app template
+(`app/artifacts-routes/`, see its README) into your Next app: `/public/*` stays
+outside your auth gate, `/private/*` goes inside it and forwards to the harness
+with a shared secret. The protected page renders the artifact in a sandboxed
+iframe under a public/private toggle, so any signed-in reader can publish or
+unpublish it. Harness side: set the plugin's `appBaseUrl` config to your app
+origin and the `ARTIFACTS_APP_SECRET` secret to match the app's env — without
+that secret the private path is `401`, which is what keeps private artifacts off
+the open `/webhook/*` surface. Artifact HTML is always served with a CSP
+sandbox, so it can't reach the app's cookies or storage.
 
 The **telegram** plugin long-polls a bot; set
 `secrets.json → <agent>.telegram.TELEGRAM_BOT_TOKEN`. Sending `/reset` to the

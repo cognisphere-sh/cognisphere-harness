@@ -18,6 +18,15 @@ RUN_USER=            # OS user the services run as (blank = invoking sudo user)
 APP_USER=operator    # username to sign in with
 APP_PASS=            # password (blank = a random one is generated once and reused)
 
+# ---- artifacts: agent-published pages on $DOMAIN (blank agent = feature off) ----
+# Set ARTIFACTS_AGENT and `server.sh secrets` wires the whole feature: it
+# generates ARTIFACTS_APP_SECRET once, writes it to BOTH harness/.secrets/
+# secrets.json (the agent's plugin secret) and app/.env.local, enables the
+# plugin on that agent, and points it at https://$DOMAIN. The app still needs
+# the routes from app/artifacts-routes/ — see that dir's README.
+ARTIFACTS_AGENT=              # agent allowed to publish artifacts, e.g. lexi (blank = off)
+ARTIFACTS_SESSION_COOKIE=     # your app's session cookie name — the private routes gate on it
+
 # ---- backups: whole-dir zip → S3 on a cron (written by setup-server.sh) ----
 # Blank bucket = backups off. SQLite DBs are snapshotted consistently
 # (sqlite3 .backup) before zipping; node_modules/.next/.venv are excluded

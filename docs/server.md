@@ -1698,7 +1698,14 @@ Agent-runner subsystem (HTTP API surface omitted — see
 | **subtotal (agent-runner)** | **~3 200** | |
 
 Built-in plugins live in `packages/harness/src/plugins/<id>/`: `admin`,
-`scheduler`, `telegram`, `gws`, `agent-messaging`. `admin`, `scheduler` and
-`agent-messaging` are **core** (`CORE_PLUGIN_IDS`) — auto-installed on every
-agent and refused by `cognisphere plugin add`; the rest are opt-in per agent
-via a `plugins/<id>/` dir.
+`scheduler`, `telegram`, `gws`, `agent-messaging`, `artifacts`. `admin`,
+`scheduler` and `agent-messaging` are **core** (`CORE_PLUGIN_IDS`) —
+auto-installed on every agent and refused by `cognisphere plugin add`; the rest
+are opt-in per agent via a `plugins/<id>/` dir.
+
+`artifacts` is the one built-in whose `seed/` also ships a **skill**
+(`seed/skills/artifacts/publish-artifact/`) alongside the prompt fragment and CLI —
+the seed tree is copied verbatim into the agent dir and pi's `--skill` loader
+recurses, so `skills/<pluginId>/<slug>/SKILL.md` is a valid place for a
+plugin to ship procedural memory (plugin-owned: rewritten on every agent
+start, so agents must not edit it).

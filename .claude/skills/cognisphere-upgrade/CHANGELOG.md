@@ -1,5 +1,16 @@
 # cognisphere-upgrade — changelog
 
+## 1.3.0
+
+- `app/artifacts-routes/` joins the harness-owned scaffold refresh: it is the
+  one exception to "never refresh anything under `app/`", because it is
+  reference code for the `artifacts` plugin's public/protected routes.
+- New step 4b-i: after refreshing that template, diff the home's *copies* of it
+  (`app/lib/artifacts.ts`, `app/app/{public,private}/artifacts/`) against it and
+  report the drift instead of overwriting — the copies are user-owned (they
+  carry the home's real `signedIn()`), and a stale copy of a security-relevant
+  route is how a private artifact becomes readable.
+
 ## 1.2.0
 
 - Scaffold-refresh ownership: inside `scripts/app/` only `README.md` is

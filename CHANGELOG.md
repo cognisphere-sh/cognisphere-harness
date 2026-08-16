@@ -18,6 +18,72 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.21]
+
+### Added
+
+- **`artifacts` plugin** — agents publish self-contained static HTML (reports,
+  summaries, dashboards) and share a link on the app's own domain. Each
+  artifact carries a **public/private flag** that decides which of its two URLs
+  works: `<app>/public/artifacts/<slug>` for anyone, or
+  `<app>/private/artifacts/<slug>` behind the app's own login. **No URL carries
+  a token.** The plugin serves `public/<slug>` openly and `private/<slug>`,
+  `private/<slug>/meta`, `private/<slug>/share` only to callers presenting the
+  `ARTIFACTS_APP_SECRET` — which is what keeps private artifacts unreachable
+  from the open `/webhook/*` surface. Config: `appBaseUrl` (required). Catalog
+  scope, so it runs only on agents that opt in.
+- **Artifact HTML is sandboxed and responsive by construction.** Every response
+  carries `Content-Security-Policy: sandbox` without `allow-same-origin` (agent
+  HTML on the app's origin can never touch its cookies or storage), plus
+  `Referrer-Policy: no-referrer`, `nosniff`, and an injected
+  `<meta name="viewport">` when the author omitted one.
+- **`app/artifacts-routes/`** in the home template — drop-in Next.js routes for
+  the two paths above: a pass-through public route, and a protected page that
+  renders the artifact in a sandboxed iframe under the app's own public/private
+  toggle (the toggle is app chrome because a sandboxed page has an opaque
+  origin and could never authenticate). Includes `lib/artifacts.ts` with a
+  fail-closed `signedIn()` for the home to replace.
+- **The `artifacts` seed ships a skill** — `publish-artifact` (authoring rules
+  for one self-contained, mobile-and-desktop-readable file; the starter
+  template; publishing, sharing, updating, taking down). First use of
+  `seed/skills/<plugin-id>/<slug>/`, now documented in `create-plugin`.
+
+### Changed
+
+- **Deploy-time wiring for `artifacts`.** New `config` keys `ARTIFACTS_AGENT`
+  and `ARTIFACTS_SESSION_COOKIE` (both blank = feature off). When the agent is
+  set, `scripts/server.sh secrets` generates `ARTIFACTS_APP_SECRET` once and
+  writes it to **both** `harness/.secrets/secrets.json` and `app/.env.local`,
+  creates `agents/<agent>/plugins/artifacts/config.json` with
+  `appBaseUrl: https://$DOMAIN`, and thereby enables the plugin on that agent.
+  Existing homes get the refreshed `server.sh` + `config.example` from the
+  upgrade, but must add the keys to their own `config` for anything to happen.
+- **`cognisphere-upgrade` 1.3.0** — `app/artifacts-routes/` joins the
+  harness-owned scaffold refresh (the one exception to "never refresh under
+  `app/`"), plus a new step 4b-i that diffs the home's *copies* of those routes
+  and reports drift instead of overwriting them.
+- **`create-plugin` 1.2.0** — documents shipping a skill inside a plugin seed
+  (`seed/skills/<id>/<slug>/`), and its description now says when a plugin is
+  the right answer.
+- **`create-skill` 1.2.0**, **`publish-harness` 1.1.0** — descriptions gained
+  situational triggers; `publish-harness` also covers the new-plugin case of
+  the shipped-artifact rule and deploy-time wiring notes.
+- Docs: `docs/api.md` §10 (artifact routes + header contract),
+  `docs/server.md` (plugin list, plugin-shipped skills),
+  `docs/distribution-and-deployment.md` §5 (deploy-time wiring),
+  `docs/base-harness/README.md`, `app/README.md`.
+
+### Breaking changes
+
+- New `artifacts` plugin — opt in per agent by creating the dir; it needs
+  `config.json` with `appBaseUrl` and the `ARTIFACTS_APP_SECRET` secret, or set
+  `ARTIFACTS_AGENT` in `config` and let `scripts/server.sh secrets` write all
+  three   [affects: agents/*/plugins/artifacts/]
+- Agents with the plugin enabled gain the seeded `scripts/artifacts/artifact`
+  CLI, the `plugin-artifacts.md` prompt fragment and the `publish-artifact`
+  skill on next start; all three are plugin-owned and must not be hand-edited
+  in the agent dir   [affects: agents/*/scripts/artifacts/, agents/*/system_prompts/plugin-artifacts.md, agents/*/skills/artifacts/]
+
 ## [0.8.20]
 
 ### Changed

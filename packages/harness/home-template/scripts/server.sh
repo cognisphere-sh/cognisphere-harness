@@ -29,11 +29,17 @@ $HAS_APP && UNITS+=("$NAME-app.service")
 # Blank APP_PASS = generated once, then REUSED from the existing users.json so a
 # blank config doesn't churn the password across restarts. A tiny node writer
 # does the JSON (safe escaping); node is a hard dependency of the harness.
+#
+# When ARTIFACTS_AGENT is set it also wires the `artifacts` plugin end to end —
+# the shared secret has to exist in two places at once (the agent's plugin
+# secret and the app's env), so generating it here is the only way a fresh
+# deploy comes up working. See scripts/../app/artifacts-routes/README.md.
 gen_secrets() {
   install -d "$ROOT/harness/.secrets"
   ROOT="$ROOT" APP_USER="$APP_USER" APP_PASS="${APP_PASS:-}" \
   DOMAIN="${DOMAIN:-}" APP_PORT="$APP_PORT" HARNESS_PORT="$HARNESS_PORT" \
-  HAS_APP="$HAS_APP" \
+  HAS_APP="$HAS_APP" ARTIFACTS_AGENT="${ARTIFACTS_AGENT:-}" \
+  ARTIFACTS_SESSION_COOKIE="${ARTIFACTS_SESSION_COOKIE:-}" \
   node <<'NODE'
 const fs = require("node:fs"), crypto = require("node:crypto"), path = require("node:path");
 const E = process.env;
@@ -43,11 +49,41 @@ const user = E.APP_USER;
 const pass = E.APP_PASS || old?.users?.[0]?.password || crypto.randomBytes(12).toString("hex");
 const write600 = (p, s) => { fs.writeFileSync(p, s); fs.chmodSync(p, 0o600); };
 write600(usersPath, JSON.stringify({ users: [{ username: user, password: pass }] }, null, 2) + "\n");
+
+// ---- artifacts plugin (opt-in: blank ARTIFACTS_AGENT = not wired) ----------
+// The app serves /public/artifacts/* and /private/artifacts/* and proves a
+// reader is signed in by presenting ARTIFACTS_APP_SECRET to the plugin, so the
+// same secret must reach harness/.secrets/secrets.json AND app/.env.local.
+// Generated once here, then REUSED from secrets.json (like APP_PASS) so links
+// and sessions survive a restart.
+const agent = (E.ARTIFACTS_AGENT || "").trim();
+let artifactsEnv = "";
+if (agent) {
+  const secretsPath = path.join(E.ROOT, "harness/.secrets/secrets.json");
+  let secrets = {}; try { secrets = JSON.parse(fs.readFileSync(secretsPath, "utf8")); } catch {}
+  const bucket = { ...(secrets[agent]?.artifacts ?? {}) };
+  bucket.ARTIFACTS_APP_SECRET ||= crypto.randomBytes(24).toString("hex");
+  secrets[agent] = { ...(secrets[agent] ?? {}), artifacts: bucket };
+  write600(secretsPath, JSON.stringify(secrets, null, 2) + "\n");
+
+  // The plugin needs the app origin to build shareable links, and only runs on
+  // an agent that has the dir — creating it here is what enables the feature.
+  const pluginDir = path.join(E.ROOT, "harness/agents", agent, "plugins/artifacts");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, "config.json"),
+    JSON.stringify({ appBaseUrl: `https://${E.DOMAIN}` }, null, 2) + "\n");
+
+  artifactsEnv =
+    `ARTIFACTS_AGENT=${agent}\nARTIFACTS_APP_SECRET=${bucket.ARTIFACTS_APP_SECRET}\n` +
+    `ARTIFACTS_SESSION_COOKIE=${E.ARTIFACTS_SESSION_COOKIE}\n`;
+  console.error(`>> artifacts: wired for agent '${agent}' at https://${E.DOMAIN}/{public,private}/artifacts/<slug>`);
+}
+
 if (E.HAS_APP === "true") {
   write600(path.join(E.ROOT, "app/.env.local"),
     "# Generated from ../config by scripts/server.sh — do not hand-edit.\n" +
     `HARNESS_USER=${user}\nHARNESS_PASS=${pass}\nDOMAIN=${E.DOMAIN}\nPORT=${E.APP_PORT}\n` +
-    `HARNESS_URL=http://127.0.0.1:${E.HARNESS_PORT}\n`);
+    `HARNESS_URL=http://127.0.0.1:${E.HARNESS_PORT}\n` + artifactsEnv);
 }
 console.error(`>> operator login: ${user} / ${pass}`);
 NODE

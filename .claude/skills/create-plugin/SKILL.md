@@ -1,9 +1,9 @@
 ---
 name: create-plugin
-description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin", or "write a plugin for the harness". (v1.1.0)
+description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Covers the duck-typed Plugin contract, the manifest (config/secrets schemas), the seed tree (prompt fragment, CLI scripts, plugin-owned skills), event/metadata conventions, enabling per agent, and the common load/start failures. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin" or "write a plugin for the harness" — and whenever a capability an agent needs lives outside its own filesystem: polling or receiving from an external service, exposing an HTTP/webhook endpoint, running something on a schedule, or handing agents a CLI backed by harness-side state. (v1.2.0)
 metadata:
   author: cognisphere
-  version: "1.1.0"
+  version: "1.2.0"
   argument-hint: <plugin-id>
 ---
 
@@ -96,7 +96,8 @@ start**, so it must mirror the agent layout **exactly**:
 ```
 plugins/<id>/seed/
 ├── system_prompts/plugin-<id>.md   ← concatenated into the agent's system prompt (lex order)
-└── scripts/<id>/<your-cli>         ← exec bit re-asserted after copy
+├── scripts/<id>/<your-cli>         ← exec bit re-asserted after copy
+└── skills/<id>/<slug>/SKILL.md     ← optional: a procedure the plugin ships
 ```
 
 Anything placed elsewhere (e.g. a root `system_prompt.md`) is copied but
@@ -104,6 +105,14 @@ Anything placed elsewhere (e.g. a root `system_prompt.md`) is copied but
 Namespace scripts under `scripts/<id>/` to avoid collisions. Seed files are
 plugin-owned: overwritten on every start, so never hand-edit the copies in the
 agent dir.
+
+**Shipping a skill with a plugin.** Keep the *prompt fragment* short — what the
+plugin is, its events, its CLI — and put any multi-step procedure in a skill
+under `seed/skills/<id>/<slug>/` (pi's `--skill` loader recurses, so it is
+loaded like any other). Version it and give it a `CHANGELOG.md` exactly as
+`create-skill` describes; the scope dir `skills/<id>/` marks it plugin-owned,
+so agents must never edit it — change the seed instead. The bundled `artifacts`
+plugin is the worked example (`publish-artifact`).
 
 ## 3. Scaffold
 

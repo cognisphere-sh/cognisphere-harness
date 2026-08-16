@@ -1,9 +1,9 @@
 ---
 name: cognisphere-upgrade
-description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere-sh/cognisphere-harness dependency. (v1.2.0)
+description: Migrate a CogniSphere harness data dir to a newer harness version. Use when asked to "upgrade the harness", "run cognisphere upgrade", "migrate my agents to the new version", or after bumping the @cognisphere-sh/cognisphere-harness dependency. Covers the version window, breaking-change edits, refreshing the harness-owned scaffold (scripts, config.example, docs/base-harness, .claude/skills, app/artifacts-routes) and reporting drift in the copies a home made from it. (v1.3.0)
 metadata:
   author: cognisphere
-  version: "1.2.0"
+  version: "1.3.0"
   argument-hint: <target-version (optional)>
 ---
 
@@ -120,6 +120,7 @@ diff -ru scripts/ "$PKG/home-template/scripts/"
 diff -u  config.example "$PKG/home-template/config.example"
 diff -ru docs/base-harness/ "$PKG/home-template/docs/base-harness/"
 diff -ru .claude/skills/ "$PKG/skills/"
+[ -d app/artifacts-routes ] && diff -ru app/artifacts-routes/ "$PKG/home-template/app/artifacts-routes/"
 ```
 
 Separate the differences into **upstream changes** (the refresh should bring
@@ -138,7 +139,29 @@ cp "$PKG/home-template/config.example" config.example
 cp -R "$PKG/home-template/docs/base-harness/." docs/base-harness/
 cp "$PKG/CHANGELOG.md" docs/base-harness/CHANGELOG.md
 cp -R "$PKG/skills/." .claude/skills/
+# Reference routes for the `artifacts` plugin. Harness-owned even though it
+# lives under app/ — refresh it whenever the home has it (or the plugin is
+# enabled on any agent), then do the drift check below.
+[ -d app/artifacts-routes ] && cp -R "$PKG/home-template/app/artifacts-routes/." app/artifacts-routes/
 ```
+
+**4b-i. `app/artifacts-routes/` drift check.** That directory is a *template*:
+a home using the `artifacts` plugin has copied it into the app proper (typically
+`app/lib/artifacts.ts` + `app/app/{public,private}/artifacts/`) and edited
+`signedIn()` there. Those copies are **user-owned — never overwrite them.**
+After refreshing the template, diff each copy against it and, for every
+upstream change that hasn't reached the copy, list the file and the change in
+your step-5 summary and offer to apply it:
+
+```bash
+diff -u app/lib/artifacts.ts app/artifacts-routes/lib/artifacts.ts
+diff -ru app/app/public/artifacts/ app/artifacts-routes/public/artifacts/
+diff -ru app/app/private/artifacts/ app/artifacts-routes/private/artifacts/
+```
+
+A route that gained a security-relevant change upstream (auth checks, forwarded
+headers, the CSP pass-through) must be called out explicitly — a stale copy is
+how a private artifact ends up readable.
 
 **4c. Re-apply every local edit from 4a on top** of the fresh copies, so the
 step-5 diff shows only genuine upstream changes plus intact local edits. A
@@ -146,7 +169,9 @@ local edit is dropped only when the operator explicitly approves dropping it.
 
 **User-owned files are never refreshed:** `app/`, `docs/harness/`,
 `docs/app/`, `CLAUDE.md`, `config`, and everything under the harness data dir
-(that's what the breaking-change entries scope). Inside `scripts/app/` only
+(that's what the breaking-change entries scope). The single exception inside
+`app/` is `app/artifacts-routes/`, which is harness-owned reference code — the
+home's *copies* of it stay user-owned (step 4b-i). Inside `scripts/app/` only
 `README.md` is harness-owned (the `cp -R` refreshes it); the deployment's
 hook scripts and `config.example` there are user-owned and survive the copy
 untouched — a deployment customization found edited into a harness-owned

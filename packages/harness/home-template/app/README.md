@@ -20,3 +20,12 @@ Contract with the deploy scripts:
 
 In production, nginx serves the app on `$DOMAIN` and the harness operator
 console on `$CONSOLE_DOMAIN` (see `scripts/setup-server.sh`).
+
+## `artifacts-routes/` — public and protected artifact pages
+
+Drop-in routes for the harness's `artifacts` plugin: `/public/artifacts/<slug>`
+(open to anyone) and `/private/artifacts/<slug>` (behind this app's auth gate,
+carrying the public/private toggle). They are reference code, not part of the
+build — copy the tree into your app and set the env, as described in
+[`artifacts-routes/README.md`](artifacts-routes/README.md). Not using the
+`artifacts` plugin? Delete the directory.

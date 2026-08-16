@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# artifacts/artifact — publish a static HTML artifact on the app's domain and
+# get a link you can share. Seeded by the `artifacts` plugin.
+#
+#   artifact publish <file.html> [--slug <slug>] [--public]
+#   artifact share <slug> --public|--private
+#   artifact list
+#   artifact url <slug> [--private]
+#   artifact rm <slug>
+#
+# Every artifact carries a public/private flag. It decides which link works:
+#
+#   public   →  <app>/public/artifacts/<slug>    anyone
+#   private  →  <app>/private/artifacts/<slug>   signed-in app users only
+#
+# The private link always works for signed-in users, whatever the flag says —
+# and that page carries a toggle, so a signed-in reader can publish or unpublish
+# the artifact themselves. There are no tokens in artifact URLs.
+#
+# Publishing the same slug again replaces the artifact in place, keeping its
+# flag, so links you already shared keep working.
+set -euo pipefail
+
+AGENT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+STATE="$AGENT_DIR/plugins/artifacts/state"   # <slug>.<visibility>.html
+
+usage() {
+  cat <<'EOF'
+artifact — publish and share static HTML artifacts hosted on the app's domain.
+Seeded by the `artifacts` plugin.
+
+USAGE
+  scripts/artifacts/artifact publish <file.html> [--slug <slug>] [--public]
+  scripts/artifacts/artifact share <slug> --public|--private
+  scripts/artifacts/artifact list
+  scripts/artifacts/artifact url <slug> [--private]
+  scripts/artifacts/artifact rm <slug>
+  scripts/artifacts/artifact --self-check
+
+PUBLISH
+  <file.html>       the artifact to publish (one self-contained HTML file)
+  --slug <slug>     URL slug; default: derived from the filename
+  --public          publish it open to anyone (default: private).
+                    Republishing an existing slug keeps its current flag unless
+                    you pass --public/--private.
+
+LINKS
+  public flag   → <app>/public/artifacts/<slug>    anyone
+  private flag  → <app>/private/artifacts/<slug>   signed-in app users only
+
+  `url <slug>` prints the link to hand out (the public one while public);
+  `--private` always prints the signed-in link, which also carries the
+  public/private toggle. No tokens are ever part of a URL.
+EOF
+}
+
+slugify() { # <text> → url slug
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/\.html$//' -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-*//' -e 's/-*$//' \
+    | cut -c1-64 | sed -e 's/-*$//'
+}
+
+find_file() { # <slug> → existing artifact file (empty if none)
+  find "$STATE" -maxdepth 1 \( -name "$1.public.html" -o -name "$1.private.html" \) 2>/dev/null | head -1
+}
+
+visibility_of() { # <file> → public|private
+  local b; b="$(basename "$1" .html)"; printf '%s' "${b##*.}"
+}
+
+api() { # GET the plugin's listing
+  curl -sS -H "x-webhook-secret: ${COGNISPHERE_WEBHOOK_SECRET:-}" \
+    "${PI_WEBHOOK_BASE:?PI_WEBHOOK_BASE not set — run this from inside an agent}/artifacts/api/list"
+}
+
+url_for() { # <slug> [--private]
+  local key=url; [ "${2:-}" = "--private" ] && key=privateUrl
+  api | jq -r --arg s "$1" --arg k "$key" '.[] | select(.slug == $s) | .[$k]'
+}
+
+self_check() {
+  local ok=0
+  [ "$(slugify 'Q3 Roadmap.html')" = "q3-roadmap" ] || { echo "slugify basic FAILED" >&2; ok=1; }
+  [ "$(slugify '  --Weird__Name!! ')" = "weird-name" ] || { echo "slugify trim FAILED" >&2; ok=1; }
+  [ "$(visibility_of "/x/report.private.html")" = "private" ] || { echo "visibility parse FAILED" >&2; ok=1; }
+  [ "$(visibility_of "/x/multi.part.name.public.html")" = "public" ] || { echo "visibility parse 2 FAILED" >&2; ok=1; }
+  [ $ok -eq 0 ] && echo "self-check OK" || { echo "self-check FAILED" >&2; exit 1; }
+}
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift || true
+case "$cmd" in
+  -h|--help|"") usage; exit 0 ;;
+  --self-check) self_check; exit 0 ;;
+
+  publish)
+    file="" slug="" vis=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --slug)    slug="$2"; shift 2 ;;
+        --public)  vis=public; shift ;;
+        --private) vis=private; shift ;;
+        -*) echo "unknown flag: $1" >&2; exit 2 ;;
+        *) file="$1"; shift ;;
+      esac
+    done
+    [ -n "$file" ] || { echo "usage: artifact publish <file.html> [--slug s] [--public]" >&2; exit 2; }
+    [ -f "$file" ] || { echo "no such file: $file" >&2; exit 1; }
+    [ -n "$slug" ] || slug="$(slugify "$(basename "$file")")"
+    slug="$(slugify "$slug")"
+    printf '%s' "$slug" | grep -Eq '^[a-z0-9][a-z0-9-]{0,63}$' \
+      || { echo "bad slug '$slug' — use lowercase letters, digits and dashes" >&2; exit 2; }
+
+    mkdir -p "$STATE"
+    existing="$(find_file "$slug")"
+    # Republish: keep the current flag unless this call names one, so links
+    # already shared keep working.
+    [ -n "$existing" ] && { [ -n "$vis" ] || vis="$(visibility_of "$existing")"; rm -f "$existing"; }
+    [ -n "$vis" ] || vis=private
+    cp "$file" "$STATE/$slug.$vis.html"
+    url="$(url_for "$slug")"
+    [ -n "$url" ] || { echo "published, but the plugin didn't return a URL (is it running?)" >&2; exit 1; }
+    echo "$url"
+    ;;
+
+  share)
+    slug="${1:?usage: artifact share <slug> --public|--private}"; shift
+    case "${1:-}" in
+      --public)  vis=public ;;
+      --private) vis=private ;;
+      *) echo "usage: artifact share <slug> --public|--private" >&2; exit 2 ;;
+    esac
+    f="$(find_file "$slug")"
+    [ -n "$f" ] || { echo "no artifact '$slug'" >&2; exit 1; }
+    mv "$f" "$STATE/$slug.$vis.html"
+    url_for "$slug"
+    ;;
+
+  list)
+    api | jq -r '.[] | "\(.visibility)\t\(.slug)\t\(.modified)\t\(.url)"'
+    ;;
+
+  url)
+    slug="${1:?usage: artifact url <slug> [--private]}"
+    url="$(url_for "$slug" "${2:-}")"
+    [ -n "$url" ] || { echo "no artifact '$slug'" >&2; exit 1; }
+    echo "$url"
+    ;;
+
+  rm)
+    slug="${1:?usage: artifact rm <slug>}"
+    f="$(find_file "$slug")"
+    [ -n "$f" ] || { echo "no artifact '$slug'" >&2; exit 1; }
+    rm -f "$f"
+    echo "removed $slug"
+    ;;
+
+  *) echo "unknown command: $cmd" >&2; usage >&2; exit 2 ;;
+esac

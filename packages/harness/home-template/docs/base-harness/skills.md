@@ -55,6 +55,14 @@ dirs (so running agents load them natively): every agent gets `create-skill`
 — procedural memory always lands as a new or updated skill — and the
 developer agent gets the full set.
 
+## Plugin-shipped skills
+
+A plugin may ship a skill in its `seed/` tree under
+`skills/<plugin-id>/<slug>/`; it is copied into the agent dir on every agent
+start and loaded like any other skill. Those directories are **plugin-owned** —
+overwritten on each start, so never hand-edit them; change the plugin's seed
+instead. The `artifacts` plugin ships `publish-artifact` this way.
+
 ## `cognisphere-upgrade`
 
 Migrates this harness data dir after a version bump of

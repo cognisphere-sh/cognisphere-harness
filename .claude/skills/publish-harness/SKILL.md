@@ -1,9 +1,9 @@
 ---
 name: publish-harness
-description: Publish a new version of the @cognisphere-sh/cognisphere-harness library to GitHub Packages. Use when asked to "publish the harness", "release a new version", "cut a release", "bump and publish", or "ship the library".
+description: Publish a new version of the @cognisphere-sh/cognisphere-harness library to GitHub Packages. Covers the bump, the CHANGELOG section (including the shipped-artifact rule for agent/plugin seeds and deploy-time wiring), preflight, tag and release. Use when asked to "publish the harness", "release a new version", "cut a release", "bump and publish" or "ship the library" — and whenever merged changes need to reach existing homes, since agent/plugin seeds, home-template and .claude/skills only travel to a home through a published version. (v1.1.0)
 metadata:
   author: cognisphere
-  version: "1.0.0"
+  version: "1.1.0"
   argument-hint: <new-version e.g. 0.3.0>
 ---
 
@@ -57,7 +57,15 @@ hit in the section:
   (files forked into agent dirs at create time) → each change needs a
   `### Breaking changes` entry with an `[affects:]` glob — that's the only way
   the upgrade skill reaches existing forks. **Preflight fails without the
-  block.**
+  block.** A *brand-new* plugin has no existing forks to migrate, but preflight
+  can't tell one from a changed seed: still write the block, and make the entry
+  say how to opt in (e.g. `- New \`artifacts\` plugin — enable per agent
+  [affects: agents/*/plugins/artifacts/]`), so an operator reading the upgrade
+  sees the new capability rather than a no-op.
+- Deploy-time wiring (`home-template/scripts/server.sh`,
+  `home-template/config.example`) → note the new `config` keys under
+  `### Changed`; the upgrade skill refreshes both files wholesale, but an
+  operator has to add the keys to their own `config` for anything to happen.
 - `packages/harness/home-template/**` or `.claude/skills/**` → note under
   `### Changed`; the upgrade skill refreshes these wholesale from the
   installed package, so the note is for the operator reviewing the upgrade

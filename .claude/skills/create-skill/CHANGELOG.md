@@ -1,5 +1,11 @@
 # create-skill — changelog
 
+## 1.2.0
+
+- Description gained the situational triggers (a procedure written down for
+  reuse, re-derived a second time, or found inlined in a prompt file /
+  knowledge/) alongside the literal phrases.
+
 ## 1.1.0
 
 - Description spec expanded to four required parts: summary, what's included

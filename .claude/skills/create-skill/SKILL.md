@@ -1,9 +1,9 @@
 ---
 name: create-skill
-description: Author or update a versioned skill for a CogniSphere agent — capture a procedure (SOP, runbook, workflow) as skills/agent/<slug>/ with SKILL.md, version, changelog, scripts and artifacts. Covers the skill layout, the description spec (summary + contents + when-to-use + version), creating, updating/bumping, and verification. Use when asked to "create a skill", "add a skill to <agent>", "turn this SOP into a skill", "migrate this procedure to a skill", or "update/bump a skill". (v1.1.0)
+description: Author or update a versioned skill for a CogniSphere agent — capture a procedure (SOP, runbook, workflow) as skills/agent/<slug>/ with SKILL.md, version, changelog, scripts and artifacts. Covers the skill layout, the description spec (summary + contents + when-to-use + version), creating, updating/bumping, and verification. Use when asked to "create a skill", "add a skill to <agent>", "turn this SOP into a skill", "migrate this procedure to a skill" or "update/bump a skill" — and whenever a multi-step procedure is being written down for reuse, re-derived from scratch a second time, or found inlined in a prompt file or knowledge/ where it doesn't belong. (v1.2.0)
 metadata:
   author: cognisphere
-  version: "1.1.0"
+  version: "1.2.0"
   argument-hint: <agent-id> <skill-slug>
 ---
 

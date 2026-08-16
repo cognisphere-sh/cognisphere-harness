@@ -932,6 +932,39 @@ sender not on the list gets `403`. The secret authenticates "in-harness
 caller", not "which agent"; `from_agent` remains advisory (a co-resident
 agent shares the secret).
 
+**artifacts routes.** The `artifacts` plugin serves agent-published static HTML
+on this surface, but it is the **front-end app**, not the harness, that decides
+who may read a private one. The app fronts two paths of its own —
+`<app>/public/artifacts/<slug>` (open) and `<app>/private/artifacts/<slug>`
+(behind the app's login) — and forwards them here:
+
+- `GET /webhook/<agent>/artifacts/public/<slug>` — no auth; serves the artifact
+  only while it is flagged `public`, else `404`.
+- `GET /webhook/<agent>/artifacts/private/<slug>` — requires the plugin secret
+  `ARTIFACTS_APP_SECRET` as `X-Artifacts-Secret` (`401` without it), which only
+  the app's server-side route attaches, and only after its own session check.
+  Serves any artifact regardless of flag: reaching this path means the app
+  vouched for the reader. This is what keeps private artifacts unreachable from
+  the open `/webhook/*` surface on either domain.
+- `GET  …/private/<slug>/meta` — same secret; the flag plus both links, read by
+  the app's protected page to render its share toggle.
+- `POST …/private/<slug>/share` — same secret; `{public: bool}` flips the flag.
+- `GET  …/api/list` — every artifact with its links, for the seeded
+  `scripts/artifacts/artifact` CLI. Insider-only: same `X-Webhook-Secret` check
+  as agent-messaging.
+
+Slugs are `[a-z0-9-]{1,64}`; anything else is `404` before touching the
+filesystem. **No artifact URL carries a token** — the slug is the whole path and
+the flag alone decides access. Artifact responses carry
+`Content-Security-Policy: sandbox …` **without** `allow-same-origin` (the
+content is agent-authored HTML on the app's own origin — the sandbox denies it
+the app's cookies, storage and same-origin APIs), `Referrer-Policy:
+no-referrer`, `X-Content-Type-Options: nosniff`, an injected
+`<meta name="viewport">` when the author omitted one, and `Cache-Control:
+private, no-store` on the private path (`public, max-age=60` on the public one).
+The app must relay those headers when it proxies — see the app template's
+`artifacts-routes/README.md`.
+
 Responses (the dispatcher's, before the plugin runs):
 
 - `404 missing agentId/pluginId` — URL had too few segments.
