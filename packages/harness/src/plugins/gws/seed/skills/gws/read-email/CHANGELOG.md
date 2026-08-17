@@ -1,5 +1,11 @@
 # read-email — changelog
 
+## 1.1.1
+
+- Wording: delivery is governed by the agent-owned gws settings
+  (`scripts/gws/settings`), not a fixed you-in-`To` rule — Cc/Bcc-only mail is
+  skipped only when `requireAgentInTo` is on.
+
 ## 1.1.0
 
 - §4 now points at `scripts/gws/email search` instead of raw

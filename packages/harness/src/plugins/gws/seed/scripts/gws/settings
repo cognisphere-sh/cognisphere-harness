@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# settings — read/write plugins/gws/state/settings.json
+#
+# Subcommands: show, set, reset
+#
+# State writes are atomic (jq | mv). The plugin re-reads the file on every
+# poll tick, so a change takes effect within one poll interval.
+set -euo pipefail
+
+case "${1:-}" in
+  help|-h|--help)
+    cat <<'EOF'
+settings — control your own gws notifications (plugins/gws/state/settings.json).
+
+USAGE
+  settings show
+  settings set [--poll-interval-sec N] [--query Q] [--allowed-senders LIST]
+               [--require-agent-in-to true|false]
+  settings reset
+
+Keys you set here override the operator's plugins/gws/config.json; unset keys
+fall back to it, then to the defaults. `show` prints the effective merge.
+
+  --poll-interval-sec    seconds between Gmail polls (min 10; default 900).
+                         -1 = passive: no polling, no email notifications at
+                         all — your mailbox stays unread and untouched, and
+                         you read mail only when you choose to search
+  --query                Gmail search query the poll runs (default 'is:unread in:inbox')
+  --allowed-senders      comma-separated allow-list, `*` wildcard (default '*')
+  --require-agent-in-to  only wake when your address is in `To` (default false)
+
+Changes apply within one poll interval — after lowering a long interval, the
+old interval still governs the next tick. `reset` drops every override.
+
+EXAMPLES
+  settings set --poll-interval-sec 120 --allowed-senders '*@example.com'
+  settings set --poll-interval-sec -1   # go quiet
+  settings set --poll-interval-sec 900  # resume; pending unread arrives next poll
+EOF
+    exit 0
+    ;;
+esac
+
+state="plugins/gws/state/settings.json"
+config="plugins/gws/config.json"
+[ -f "$state" ] || echo '{}' > "$state"
+
+cmd="${1:-}"; shift || true
+
+write() {
+  local body="$1"
+  local tmp
+  tmp="$(mktemp "${state}.XXXXXX")"
+  printf '%s' "$body" > "$tmp"
+  mv -f "$tmp" "$state"
+}
+
+case "$cmd" in
+  show)
+    cfg='{}'
+    [ -f "$config" ] && cfg="$(cat "$config")"
+    jq -n --argjson cfg "$cfg" --slurpfile s "$state" \
+      '{pollIntervalSec:900, gmailQuery:"is:unread in:inbox", allowedSenders:"*",
+        requireAgentInTo:false} + $cfg + $s[0]
+       | del(.firstOfThreadOnly)'
+    ;;
+  set)
+    patch='{}'
+    bool() { case "$1" in true|false) ;; *) echo "$2 must be true|false" >&2; exit 2 ;; esac; }
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --poll-interval-sec)
+          case "$2" in -1) ;; ''|*[!0-9]*) echo "--poll-interval-sec must be an integer >= 10, or -1 (passive)" >&2; exit 2 ;; esac
+          patch="$(jq -c --argjson v "$2" '. + {pollIntervalSec:$v}' <<<"$patch")"; shift 2 ;;
+        --query)
+          patch="$(jq -c --arg v "$2" '. + {gmailQuery:$v}' <<<"$patch")"; shift 2 ;;
+        --allowed-senders)
+          patch="$(jq -c --arg v "$2" '. + {allowedSenders:$v}' <<<"$patch")"; shift 2 ;;
+        --require-agent-in-to)
+          bool "$2" --require-agent-in-to
+          patch="$(jq -c --argjson v "$2" '. + {requireAgentInTo:$v}' <<<"$patch")"; shift 2 ;;
+        *) echo "unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ "$patch" != '{}' ] || { echo "nothing to set (see: settings --help)" >&2; exit 2; }
+    body="$(jq -c --argjson p "$patch" '. + $p' "$state")"
+    write "$body"
+    printf '%s\n' "$patch"
+    ;;
+  reset)
+    write '{}'
+    echo '{}'
+    ;;
+  *)
+    echo "usage: settings {show|set|reset} ... (see: settings --help)" >&2
+    exit 2
+    ;;
+esac

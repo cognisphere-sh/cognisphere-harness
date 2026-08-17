@@ -1,5 +1,10 @@
 # route-email — changelog
 
+## 1.0.1
+
+- Wording: "what a rule does not do" now points at the agent-owned gws
+  settings (`scripts/gws/settings`) instead of a fixed you-in-`To` rule.
+
 ## 1.0.0
 
 - Initial version: the default `<Subject>[<gmailThreadId>]` thread id, the

@@ -1,9 +1,9 @@
 ---
 name: route-email
-description: Make inbound email land in a harness thread you choose, using `scripts/gws/routes`. Covers the default thread id (`<Subject>[<gmailThreadId>]`), the three match patterns (--gmail-thread-id, --from, --subject) and which to prefer, the send-then-route recipe that brings a reply back to the thread you sent from, listing and removing rules, and when a rule takes effect. Use when you email someone from a thread and want their answer back in it, when parking a sender or subject in a dedicated thread, or when asked why a reply opened a new thread. (v1.0.0)
+description: Make inbound email land in a harness thread you choose, using `scripts/gws/routes`. Covers the default thread id (`<Subject>[<gmailThreadId>]`), the three match patterns (--gmail-thread-id, --from, --subject) and which to prefer, the send-then-route recipe that brings a reply back to the thread you sent from, listing and removing rules, and when a rule takes effect. Use when you email someone from a thread and want their answer back in it, when parking a sender or subject in a dedicated thread, or when asked why a reply opened a new thread. (v1.0.1)
 metadata:
   author: cognisphere
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Route inbound email to a thread
@@ -75,9 +75,9 @@ pulling that sender's unrelated mail into a thread where it makes no sense.
 
 ## What a rule does not do
 
-- It changes *where* an email is delivered, never *whether*. A message still
-  has to reach you — your address in `To` — to wake you at all. A rule cannot
-  rescue mail that only has you on `Cc`/`Bcc`.
+- It changes *where* an email is delivered, never *whether*. Delivery is
+  decided by your gws settings (`scripts/gws/settings`); a rule cannot rescue
+  mail those filters drop.
 - Rules take effect within one poll interval, not instantly.
 - A rule with a bad regex, or with no pattern at all, is skipped with a warning
   in the plugin log rather than applied — check `routes list` if a rule seems

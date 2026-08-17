@@ -18,6 +18,56 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0]
+
+### Added
+
+- **The agent owns her gws notification settings.** New agent-writable overlay
+  `plugins/gws/state/settings.json`, managed by the seeded
+  `scripts/gws/settings` CLI (`show|set|reset`) and re-read by the plugin on
+  every poll tick — the same live-reload pattern as `routes.json`, so a change
+  applies within one poll. Per-key precedence: `settings.json` →
+  operator `config.json` → defaults. Overridable keys: `pollIntervalSec`,
+  `gmailQuery`, `allowedSenders`, `requireAgentInTo` (`firstOfThreadOnly`
+  stays operator-only).
+- **Passive mailbox.** `pollIntervalSec: -1` disables polling entirely: no
+  notifications, nothing marked read — the agent reads mail only when she
+  chooses to search. While passive the loop still re-reads settings every
+  60s, so setting a real interval again resumes within a minute (pending
+  unread arrives on the next poll).
+- **Settings announced on start.** Each plugin start posts one `gws_settings`
+  message on the plugin's `main` channel — mailbox address, effective
+  settings, routing-rule count, and how to change them — so the agent can
+  re-assert her preferences after every harness restart.
+
+### Changed
+
+- **gws defaults: notify on all unread inbox, poll every 15 minutes.**
+  `pollIntervalSec` 60 → 900 and `requireAgentInTo` true → false — by default
+  the latest message of *every* unread inbox thread now wakes the agent,
+  routed to its per-thread id as before; Cc/Bcc-only mail is skipped only
+  when `requireAgentInTo` is switched back on. Operators who want the old
+  behavior set both keys explicitly in `plugins/gws/config.json`.
+
+### Breaking changes
+
+- New seeded `scripts/gws/settings` — the settings overlay's CLI. Plugin seeds
+  re-copy on the next agent start, so restarting each agent installs it
+  [affects: agents/*/scripts/gws/]
+- `system_prompts/plugin-gws.md` rewritten (still 50 lines): new inbound
+  default, the Settings section, and the "ask to be kept in `To:`" outbound
+  rule dropped (it existed only for the old `requireAgentInTo: true` default);
+  it re-seeds on the next agent start
+  [affects: agents/*/system_prompts/plugin-gws.md]
+- gws skills `read-email` (1.1.1), `search-email` (1.0.1), `route-email`
+  (1.0.1): wording that hardcoded the old you-in-`To` delivery rule now points
+  at the agent-owned settings; they re-seed on the next agent start
+  [affects: agents/*/skills/gws/]
+- The default flip means an existing `plugins/gws/config.json` that never set
+  `pollIntervalSec` / `requireAgentInTo` changes behavior on upgrade — set
+  them explicitly to keep the old 60s / To-only behavior
+  [affects: agents/*/plugins/gws/config.json]
+
 ## [0.8.25]
 
 ### Changed

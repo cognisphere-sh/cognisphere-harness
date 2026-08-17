@@ -1,5 +1,10 @@
 # search-email — changelog
 
+## 1.0.1
+
+- Wording: what wakes you is decided by the agent-owned gws settings
+  (`scripts/gws/settings`), not a fixed addressed-to-you rule.
+
 ## 1.0.0
 
 - Initial version: Gmail query syntax and how to narrow a search, the

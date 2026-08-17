@@ -6,15 +6,13 @@ Polls Gmail server-side and wakes you with a **preview** of each inbound email
 ## Inbound
 
 `email_received` wakes you; `email_silent` (`IsSilent: true`) is header-only
-backlog context. You are woken only for the **latest message of a thread with
-your address in `To`** — Cc/Bcc-only mail is skipped entirely.
+context. By default you are woken for the **latest message of every unread
+inbox thread**, routed to its own thread — your settings (below) decide what
+actually reaches you, and when.
 
 Metadata: `Channel` = the Gmail thread id · `MessageId` = this email, and the
-reply target · `From` · `ReceivedAt` = when it landed (the harness
-`Timestamp:` is when the notification was enqueued).
-
-The body you get is the `Subject/From/To/TimeStamp` header, the **first two
-lines** of the sender's own text, and any attachment names — nothing more:
+reply target · `From` · `ReceivedAt`. The body you get is the header, the
+**first two lines** of the sender's own text, and attachment names — no more:
 
 ```
 bash scripts/gws/email read <MessageId>                 # the full body
@@ -24,10 +22,17 @@ bash scripts/gws/email search '<gmail query>'           # find anything else
 ```
 
 **Read the full message before acting on any email the preview doesn't
-trivially answer** — skill `read-email` (also: older messages, Cc-only mail,
-quoted history, attachments). Searching the mailbox, then labelling, archiving
-or marking read what you find: skill `search-email` (`email search|labels|label`).
-Making a reply land in a thread you choose: skill `route-email` (`scripts/gws/routes`).
+trivially answer** — skill `read-email`. Searching/labelling/archiving: skill
+`search-email`. Landing replies in a thread you choose: skill `route-email`.
+
+## Settings — you own your notifications
+
+`bash scripts/gws/settings show|set|reset` (state: `plugins/gws/state/settings.json`).
+Keys: `pollIntervalSec` (default 900; `-1` silences email entirely — no
+polling, no notifications, mailbox left unread, search when *you* want),
+`gmailQuery` (`is:unread in:inbox`), `allowedSenders` (`*`),
+`requireAgentInTo` (false). Changes apply within one poll; a `gws_settings`
+message with the effective settings arrives each harness start — re-assert yours then.
 
 ## Outbound — call `gws` directly
 
@@ -37,13 +42,9 @@ gws gmail +reply --message-id <MessageId> --body "…"    # also +reply-all, +fo
 gws calendar +agenda [--today]
 ```
 
-Everything else: `gws <service> <resource> <method> --params '<json>' [--json '<body>']`.
-The surface is dynamic — prefer `--help` and `gws schema <service>.<method>` over guessing.
-
-## Rules
+Everything else: `gws <service> <resource> <method> --params '<json>' [--json '<body>']`
+— prefer `--help` and `gws schema <service>.<method>` over guessing.
 
 - **No markdown in email bodies** — Gmail renders plaintext as-is (`--html` for formatting).
-- Your turn is internal: nothing is sent until you actually run `gws gmail +send` / `+reply`.
-- **End every outgoing message asking to be kept in `To:`** — e.g. _"Keep me in To: if you want a reply; Cc/Bcc gets me seen, not answered."_ Adapt the wording, keep the reminder until the recipient has clearly internalised it.
-- Don't echo their own message back at them; don't re-attach an inbound attachment unasked.
-- Before re-sending after an error, check it didn't already go: `email search 'in:sent newer_than:1d'`.
+- Nothing is sent until you actually run `gws gmail +send` / `+reply`; before re-sending after an error, check `email search 'in:sent newer_than:1d'`.
+- Don't echo their message back; don't re-attach an inbound attachment unasked.

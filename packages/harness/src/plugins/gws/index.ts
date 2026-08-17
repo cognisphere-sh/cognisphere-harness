@@ -22,6 +22,7 @@ const execFileP = promisify(execFile);
 const UNREAD_LABEL = "UNREAD";
 const LEDGER_FILE = "ingested-threads.jsonl";
 const ROUTES_FILE = "routes.json";
+const SETTINGS_FILE = "settings.json";
 
 interface GwsConfig {
   pollIntervalSec?: number;
@@ -30,6 +31,13 @@ interface GwsConfig {
   allowedSenders?: string;
   requireAgentInTo?: boolean;
 }
+
+/** Agent-writable overlay in `state/settings.json` (managed by
+ *  `scripts/gws/settings`). Same keys as the operator config; a key present
+ *  here wins over `config.json`. Re-read every poll tick, so a change takes
+ *  effect within one poll interval. `pollIntervalSec: -1` = passive: no
+ *  polling, no notifications. */
+type GwsSettings = GwsConfig;
 
 interface GwsSecrets {
   GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE?: string;
@@ -64,12 +72,11 @@ interface CompiledRoute {
 /**
  * Polls Gmail through the `gws` CLI. Unread filtering lives in the poll
  * query itself (default `is:unread in:inbox`), not in code. For each
- * matching thread it looks only at the most recent message: if the agent's
- * own email is in that message's `To` header it wakes the agent with a
- * preview — headers, the first two lines of the body, attachment names —
- * and the agent reads the rest with `scripts/gws/email`; otherwise nothing
- * is emitted (set `requireAgentInTo: false` to instead deliver such messages
- * and wake the agent regardless of the `To` header).
+ * matching thread it looks only at the most recent message and wakes the
+ * agent with a preview — headers, the first two lines of the body,
+ * attachment names — and the agent reads the rest with `scripts/gws/email`
+ * (set `requireAgentInTo: true` to only wake when the agent's own email is
+ * in the message's `To` header; anything else is then skipped entirely).
  * Older messages in the thread are never re-emitted. Every unread message
  * in a handled thread is marked read so the poll query stops re-matching
  * it.
@@ -86,6 +93,14 @@ interface CompiledRoute {
  * matching on the Gmail thread id is the exact form, since a reply stays in
  * the same Gmail thread as the message that provoked it. The agent
  * calls `gws` directly for send / reply-all; no helper CLI is shipped.
+ *
+ * Settings: the agent owns its own notification behavior. Everything in
+ * `configSchema` except `firstOfThreadOnly` can be overridden per-key by
+ * `state/settings.json` (written by `scripts/gws/settings`). A
+ * `pollIntervalSec` of -1 goes passive: the loop only re-reads settings,
+ * never touches Gmail, so no notifications fire and the mailbox stays
+ * unread. On start the plugin posts the effective settings to the agent's
+ * `main` channel so she can re-assert her preferences.
  */
 export default class GwsPlugin implements Plugin {
   manifest: PluginManifest = {
@@ -97,9 +112,10 @@ export default class GwsPlugin implements Plugin {
       properties: {
         pollIntervalSec: {
           type: "integer",
-          default: 60,
-          minimum: 10,
-          description: "Seconds between Gmail polls.",
+          default: 900,
+          minimum: -1,
+          description:
+            "Seconds between Gmail polls (min 10); -1 = passive: no polling, no notifications. Like every key here except firstOfThreadOnly, overridable by the agent via state/settings.json.",
         },
         gmailQuery: {
           type: "string",
@@ -121,9 +137,9 @@ export default class GwsPlugin implements Plugin {
         },
         requireAgentInTo: {
           type: "boolean",
-          default: true,
+          default: false,
           description:
-            "Only emit a thread's latest message when the agent's own address is in its `To` header. When false, messages not addressed to the agent (Cc/Bcc/none) are still delivered and wake the agent regardless. Ignored in backlog mode.",
+            "Only emit a thread's latest message when the agent's own address is in its `To` header. When false (the default), every message matching the poll query is delivered and wakes the agent. Ignored in backlog mode.",
         },
       },
       additionalProperties: false,
@@ -140,34 +156,44 @@ export default class GwsPlugin implements Plugin {
 
   private ctx?: PluginInstanceContext;
   private timer: NodeJS.Timeout | null = null;
+  private announceTimer: NodeJS.Timeout | null = null;
   private stopped = false;
-  private pollIntervalMs = 60_000;
+  private baseCfg: GwsConfig = {};
+  private pollIntervalSec = 900;
+  private pollIntervalMs = 900_000;
   private gmailQuery = "is:unread in:inbox";
   private firstOfThreadOnly = false;
-  private requireAgentInTo = true;
+  private requireAgentInTo = false;
+  private allowedSenders = "*";
+  private passive = false;
   private allowedSenderPatterns: RegExp[] = [];
   private agentEmail = "";
   private routes: CompiledRoute[] = [];
 
   async start(ctx: PluginInstanceContext): Promise<void> {
     this.ctx = ctx;
-    const cfg = (ctx.config as GwsConfig | undefined) ?? {};
-    this.pollIntervalMs = (cfg.pollIntervalSec ?? 60) * 1000;
-    this.gmailQuery = cfg.gmailQuery ?? "is:unread in:inbox";
-    this.firstOfThreadOnly = cfg.firstOfThreadOnly === true;
-    this.requireAgentInTo = cfg.requireAgentInTo !== false;
-    this.allowedSenderPatterns = parseSenderPatterns(cfg.allowedSenders ?? "*");
+    this.baseCfg = (ctx.config as GwsConfig | undefined) ?? {};
+    this.firstOfThreadOnly = this.baseCfg.firstOfThreadOnly === true;
+    await this.loadSettings();
 
     await this.verifyAuth();
     await this.loadAgentEmail();
     this.stopped = false;
 
+    // Tell the agent what her mailbox looks like right now. Delayed a few
+    // seconds because plugins start before the runner does — a notify fired
+    // straight from start() would be dropped.
+    this.announceTimer = setTimeout(() => void this.announceSettings(), 5000);
+
     // Self-rescheduling poll: schedules the next tick only after the
     // current one settles, so a slow poll never queues up overlapping ticks.
+    // Settings are re-read every tick, so an interval change (or passive
+    // toggle) takes effect within one poll interval.
     const tick = async () => {
       if (this.stopped) return;
       try {
-        await this.pollOnce();
+        await this.loadSettings();
+        if (!this.passive) await this.pollOnce();
       } catch (err) {
         ctx.log.error({ err }, "gws poll tick failed; will retry next interval");
       } finally {
@@ -183,7 +209,65 @@ export default class GwsPlugin implements Plugin {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.announceTimer) clearTimeout(this.announceTimer);
+    this.announceTimer = null;
     this.ctx = undefined;
+  }
+
+  /** Merge the agent's `state/settings.json` overlay onto the operator
+   *  config and apply the result. Missing file or bad JSON → base config
+   *  only (bad JSON is logged; the file is agent-edited, so tolerate it). */
+  private async loadSettings(): Promise<void> {
+    const ctx = this.ctx!;
+    let overlay: GwsSettings = {};
+    try {
+      overlay = JSON.parse(
+        await readFile(join(ctx.stateDir, SETTINGS_FILE), "utf8"),
+      ) as GwsSettings;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        ctx.log.warn({ err }, "settings.json unreadable; using config defaults");
+      }
+    }
+    const cfg = this.baseCfg;
+    this.pollIntervalSec = overlay.pollIntervalSec ?? cfg.pollIntervalSec ?? 900;
+    this.passive = this.pollIntervalSec === -1;
+    // Passive still ticks (cheap: a settings-file read, no Gmail) so setting
+    // a real interval again is noticed within a minute.
+    this.pollIntervalMs = this.passive
+      ? 60_000
+      : Math.max(10, this.pollIntervalSec) * 1000;
+    this.gmailQuery = overlay.gmailQuery ?? cfg.gmailQuery ?? "is:unread in:inbox";
+    this.requireAgentInTo =
+      overlay.requireAgentInTo ?? cfg.requireAgentInTo ?? false;
+    this.allowedSenders = overlay.allowedSenders ?? cfg.allowedSenders ?? "*";
+    this.allowedSenderPatterns = parseSenderPatterns(this.allowedSenders);
+  }
+
+  /** One `gws_settings` message on the plugin's `main` channel per start:
+   *  the effective settings and how to change them, so the agent can
+   *  re-assert her notification preferences after every harness restart. */
+  private async announceSettings(): Promise<void> {
+    const ctx = this.ctx;
+    if (!ctx || this.stopped) return;
+    try {
+      await this.loadRoutes();
+    } catch {
+      // routes are informational here; the poll loop reports real errors
+    }
+    const effective = {
+      pollIntervalSec: this.pollIntervalSec,
+      gmailQuery: this.gmailQuery,
+      allowedSenders: this.allowedSenders,
+      requireAgentInTo: this.requireAgentInTo,
+    };
+    const text = [
+      `Gmail is up for ${this.agentEmail}. Effective notification settings:`,
+      JSON.stringify(effective, null, 2),
+      `Routing rules: ${this.routes.length} (plugins/gws/state/routes.json).`,
+      "You own these settings — change them with `bash scripts/gws/settings show|set|reset` (changes apply within one poll). `set --poll-interval-sec -1` goes passive: no email notifications, the mailbox is left untouched, and you read it only when you choose to search.",
+    ].join("\n");
+    ctx.notify("gws_settings", { text, channelId: "main" });
   }
 
   private async runGws(

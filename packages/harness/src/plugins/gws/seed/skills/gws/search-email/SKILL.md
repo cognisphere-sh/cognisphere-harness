@@ -1,16 +1,16 @@
 ---
 name: search-email
-description: Find mail in the mailbox and file it, with `scripts/gws/email search|labels|label`. Covers Gmail query syntax (sender, subject, dates, attachments, labels, negation, OR), narrowing a search that returns too much, checking whether something you sent went out, applying and creating labels, archiving, marking read/unread, doing it per-thread, and the standing Gmail filters that change what wakes you. Use when asked "did X ever email about…", "find that invoice", "what's still unanswered", "file/archive/label these", or whenever you need mail that never arrived as a notification. (v1.0.0)
+description: Find mail in the mailbox and file it, with `scripts/gws/email search|labels|label`. Covers Gmail query syntax (sender, subject, dates, attachments, labels, negation, OR), narrowing a search that returns too much, checking whether something you sent went out, applying and creating labels, archiving, marking read/unread, doing it per-thread, and the standing Gmail filters that change what wakes you. Use when asked "did X ever email about…", "find that invoice", "what's still unanswered", "file/archive/label these", or whenever you need mail that never arrived as a notification. (v1.0.1)
 metadata:
   author: cognisphere
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Search and file email
 
-Provided by the `gws` plugin. You are woken only for the newest message of a
-thread addressed to you — everything else in the mailbox is reachable only by
-searching for it.
+Provided by the `gws` plugin. You are woken only for the newest message of
+each thread your gws settings let through — everything else in the mailbox is
+reachable only by searching for it.
 
 ```bash
 bash scripts/gws/email search 'from:alice@x.com newer_than:30d'   # id, subject, from, date, snippet
