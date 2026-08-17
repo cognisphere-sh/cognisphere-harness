@@ -18,6 +18,18 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.25]
+
+### Changed
+
+- **The web UI's thread list renders task threads as a tree.** A thread spawned
+  as a task (`<parent>-§-[TASK]-§-<slug>`) now nests under its parent to any
+  depth, so a task thread that itself spawns tasks shows up where it belongs
+  instead of as a top-level row. Each child is labeled by its task slug, rows
+  indent per level with a collapse chevron, and search keeps the matching
+  subtree. Replaces the flat two-level "tasks (n)" dropdown. Web-only — no
+  harness artifacts change.
+
 ## [0.8.24]
 
 ### Added

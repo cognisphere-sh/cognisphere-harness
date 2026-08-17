@@ -1044,27 +1044,61 @@ function parseTaskThread(
   return { parent: threadId.slice(0, i), slug };
 }
 
-/** Split threads into top-level threads and task threads grouped by parent.
- *  A task thread whose parent row is missing (deleted parent, nested task
- *  thread) falls back to the top-level list so it stays reachable. */
-function groupTaskThreads(threads: ThreadRow[]): {
-  mains: ThreadRow[];
-  tasksByParent: Map<string, ThreadRow[]>;
-} {
-  const mains: ThreadRow[] = [];
-  const tasksByParent = new Map<string, ThreadRow[]>();
-  const ids = new Set(threads.map((t) => t.threadId));
-  for (const t of threads) {
-    const p = parseTaskThread(t.threadId);
-    if (p && ids.has(p.parent) && !parseTaskThread(p.parent)) {
-      const arr = tasksByParent.get(p.parent);
-      if (arr) arr.push(t);
-      else tasksByParent.set(p.parent, [t]);
+interface ThreadNode {
+  row: ThreadRow;
+  /** Task slug for nested threads, full id for roots. */
+  label: string;
+  children: ThreadNode[];
+}
+
+/** Build the thread forest: a task thread hangs off the thread its id
+ *  prefixes, to any depth (a task of a task nests two levels). A task
+ *  thread whose parent row is missing stays a root so it's reachable. */
+function buildThreadTree(threads: ThreadRow[]): ThreadNode[] {
+  const byId = new Map<string, ThreadNode>(
+    threads.map((t) => [
+      t.threadId,
+      { row: t, label: t.threadId, children: [] as ThreadNode[] },
+    ]),
+  );
+  const roots: ThreadNode[] = [];
+  for (const node of byId.values()) {
+    const p = parseTaskThread(node.row.threadId);
+    const parent = p ? byId.get(p.parent) : undefined;
+    if (p && parent) {
+      node.label = p.slug;
+      parent.children.push(node);
     } else {
-      mains.push(t);
+      roots.push(node);
     }
   }
-  return { mains, tasksByParent };
+  return roots;
+}
+
+/** Prune the forest to subtrees matching `q` (a match keeps the whole
+ *  subtree under it). */
+function filterThreadTree(nodes: ThreadNode[], q: string): ThreadNode[] {
+  const out: ThreadNode[] = [];
+  for (const n of nodes) {
+    if (n.row.threadId.toLowerCase().includes(q)) {
+      out.push(n);
+      continue;
+    }
+    const children = filterThreadTree(n.children, q);
+    if (children.length > 0) out.push({ ...n, children });
+  }
+  return out;
+}
+
+/** Depth-first flatten, for the flat `<select>` on mobile. */
+function flattenThreadTree(
+  nodes: ThreadNode[],
+  depth = 0,
+): { node: ThreadNode; depth: number }[] {
+  return nodes.flatMap((node) => [
+    { node, depth },
+    ...flattenThreadTree(node.children, depth + 1),
+  ]);
 }
 
 const THINKING_LEVELS = [
@@ -1276,10 +1310,7 @@ function MobileThreadPicker({
   selected: { threadId: string; sessionId: string } | null;
   onSelect: (s: { threadId: string; sessionId: string }) => void;
 }) {
-  const { mains, tasksByParent } = useMemo(
-    () => groupTaskThreads(threads),
-    [threads],
-  );
+  const tree = useMemo(() => buildThreadTree(threads), [threads]);
   if (threads.length === 0) return null;
   const value = selected ? selected.threadId : "";
   return (
@@ -1297,16 +1328,13 @@ function MobileThreadPicker({
         aria-label="select thread"
       >
         {!selected && <option value="">— pick a thread —</option>}
-        {mains.map((t) => [
-          <option key={t.threadId} value={t.threadId}>
-            {t.threadId}
-          </option>,
-          ...(tasksByParent.get(t.threadId) ?? []).map((tt) => (
-            <option key={tt.threadId} value={tt.threadId}>
-              {`↳ ${parseTaskThread(tt.threadId)?.slug ?? tt.threadId}`}
-            </option>
-          )),
-        ])}
+        {flattenThreadTree(tree).map(({ node, depth }) => (
+          <option key={node.row.threadId} value={node.row.threadId}>
+            {depth > 0
+              ? `${"\u00a0".repeat(depth * 2)}↳ ${node.label}`
+              : node.label}
+          </option>
+        ))}
       </select>
     </label>
   );
@@ -1339,22 +1367,18 @@ function ThreadList({
     !threads.some((t) => t.threadId === selected.threadId)
       ? selected.threadId
       : null;
-  const { mains, tasksByParent } = useMemo(
-    () => groupTaskThreads(threads),
-    [threads],
-  );
-  const filteredThreads = useMemo(() => {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (threadId: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(threadId)) next.add(threadId);
+      return next;
+    });
+  const tree = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return mains;
-    // A parent also matches when one of its task threads does.
-    return mains.filter(
-      (t) =>
-        t.threadId.toLowerCase().includes(q) ||
-        (tasksByParent.get(t.threadId) ?? []).some((tt) =>
-          tt.threadId.toLowerCase().includes(q),
-        ),
-    );
-  }, [mains, tasksByParent, query]);
+    const all = buildThreadTree(threads);
+    return q ? filterThreadTree(all, q) : all;
+  }, [threads, query]);
   return (
     <div className="hidden h-full min-h-0 flex-col lg:flex">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
@@ -1400,43 +1424,25 @@ function ThreadList({
             deleting={false}
           />
         )}
-        {filteredThreads.map((t) => {
-          const sid = pickThreadSession(t);
-          const isSel = !!sid && selected?.threadId === t.threadId;
-          const tasks = tasksByParent.get(t.threadId) ?? [];
-          return (
-            <div key={t.threadId}>
-              <ThreadRow
-                label={t.threadId}
-                sublabel={sid ? `${sid.slice(0, 18)}…` : null}
-                lastContext={t.lastContext}
-                totalCost={t.totalCost}
-                selected={isSel}
-                onSelect={
-                  sid
-                    ? () => onSelect({ threadId: t.threadId, sessionId: sid })
-                    : null
-                }
-                onDelete={() => onDeleteThread(t.threadId)}
-                deleting={deletingThreadId === t.threadId}
-              />
-              {tasks.length > 0 && (
-                <TaskThreadsDropdown
-                  tasks={tasks}
-                  selectedThreadId={selected?.threadId ?? null}
-                  onSelect={onSelect}
-                  onDeleteThread={onDeleteThread}
-                />
-              )}
-            </div>
-          );
-        })}
+        {tree.map((node) => (
+          <ThreadTreeNode
+            key={node.row.threadId}
+            node={node}
+            depth={0}
+            selectedThreadId={selected?.threadId ?? null}
+            onSelect={onSelect}
+            onDeleteThread={onDeleteThread}
+            deletingThreadId={deletingThreadId}
+            collapsed={collapsed}
+            onToggle={toggle}
+          />
+        ))}
         {!loading && threads.length === 0 && !pendingNew && (
           <div className="px-3 py-2 text-xs text-muted-foreground">
             No threads yet. Send a message below to start one.
           </div>
         )}
-        {!loading && threads.length > 0 && filteredThreads.length === 0 && (
+        {!loading && threads.length > 0 && tree.length === 0 && (
           <div className="px-3 py-2 text-xs text-muted-foreground">
             No threads match “{query.trim()}”.
           </div>
@@ -1446,79 +1452,60 @@ function ThreadList({
   );
 }
 
-/** Dropdown under a parent thread row listing its task threads by task
- *  slug. Selecting an item opens that task thread in the chat panel. */
-function TaskThreadsDropdown({
-  tasks,
+/** One thread row plus, indented under it, the rows of its task threads. */
+function ThreadTreeNode({
+  node,
+  depth,
   selectedThreadId,
   onSelect,
   onDeleteThread,
+  deletingThreadId,
+  collapsed,
+  onToggle,
 }: {
-  tasks: ThreadRow[];
+  node: ThreadNode;
+  depth: number;
   selectedThreadId: string | null;
   onSelect: (s: { threadId: string; sessionId: string }) => void;
   onDeleteThread: (threadId: string) => void;
+  deletingThreadId: string | null;
+  collapsed: ReadonlySet<string>;
+  onToggle: (threadId: string) => void;
 }) {
-  const hasSelected = tasks.some((t) => t.threadId === selectedThreadId);
+  const { row, children } = node;
+  const sid = pickThreadSession(row);
+  const isCollapsed = collapsed.has(row.threadId);
   return (
-    <div className="mb-1 pl-6">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
-              hasSelected
-                ? "bg-primary/10 text-primary"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            )}
-            aria-label="task threads"
-          >
-            <ChevronDown className="size-3" />
-            tasks ({tasks.length})
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="max-w-[min(20rem,90vw)]">
-          {tasks.map((t) => {
-            const slug = parseTaskThread(t.threadId)?.slug ?? t.threadId;
-            const sid = pickThreadSession(t);
-            const isSel = t.threadId === selectedThreadId;
-            return (
-              <DropdownMenuItem
-                key={t.threadId}
-                disabled={!sid}
-                onSelect={() =>
-                  sid && onSelect({ threadId: t.threadId, sessionId: sid })
-                }
-                className="flex items-center gap-2"
-              >
-                <Check
-                  className={cn(
-                    "size-3.5 shrink-0",
-                    isSel ? "opacity-100" : "opacity-0",
-                  )}
-                />
-                <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                  {slug}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteThread(t.threadId);
-                  }}
-                  aria-label={`delete task thread ${slug}`}
-                  title="Delete task thread"
-                  className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <Trash2 className="size-3" />
-                </button>
-              </DropdownMenuItem>
-            );
-          })}
-        </DropdownMenuContent>
-      </DropdownMenu>
+    <div>
+      <ThreadRow
+        label={node.label}
+        sublabel={sid ? `${sid.slice(0, 18)}…` : null}
+        lastContext={row.lastContext}
+        totalCost={row.totalCost}
+        selected={!!sid && selectedThreadId === row.threadId}
+        onSelect={
+          sid ? () => onSelect({ threadId: row.threadId, sessionId: sid }) : null
+        }
+        onDelete={() => onDeleteThread(row.threadId)}
+        deleting={deletingThreadId === row.threadId}
+        depth={depth}
+        collapsed={isCollapsed}
+        onToggle={children.length > 0 ? () => onToggle(row.threadId) : null}
+      />
+      {!isCollapsed &&
+        children.map((child) => (
+          <ThreadTreeNode
+            key={child.row.threadId}
+            node={child}
+            depth={depth + 1}
+            selectedThreadId={selectedThreadId}
+            onSelect={onSelect}
+            onDeleteThread={onDeleteThread}
+            deletingThreadId={deletingThreadId}
+            collapsed={collapsed}
+            onToggle={onToggle}
+          />
+        ))}
     </div>
   );
 }
@@ -1532,6 +1519,9 @@ function ThreadRow({
   onSelect,
   onDelete,
   deleting,
+  depth = 0,
+  collapsed = false,
+  onToggle = null,
 }: {
   label: string;
   sublabel: string | null;
@@ -1543,22 +1533,44 @@ function ThreadRow({
   onSelect: (() => void) | null;
   onDelete: () => void;
   deleting: boolean;
+  /** Nesting level in the thread tree; indents the row. */
+  depth?: number;
+  collapsed?: boolean;
+  /** `null` when the row has no task threads under it. */
+  onToggle?: (() => void) | null;
 }) {
   return (
     <div
       className={cn(
         "group relative mb-1 flex items-center gap-1 rounded-md transition-colors",
+        depth > 0 && "border-l border-border",
         selected
           ? "bg-primary/10 text-primary"
           : "text-muted-foreground hover:bg-accent",
       )}
+      style={depth > 0 ? { marginLeft: depth * 12 } : undefined}
     >
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={collapsed ? "expand task threads" : "collapse task threads"}
+          aria-expanded={!collapsed}
+          className="ml-1 grid size-4 shrink-0 place-items-center rounded text-muted-foreground/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ChevronDown
+            className={cn("size-3 transition-transform", collapsed && "-rotate-90")}
+          />
+        </button>
+      ) : (
+        <span className="ml-1 size-4 shrink-0" />
+      )}
       <button
         type="button"
         onClick={onSelect ?? undefined}
         disabled={!onSelect}
         className={cn(
-          "min-w-0 flex-1 truncate px-3 py-1.5 text-left",
+          "min-w-0 flex-1 truncate py-1.5 pl-1 pr-3 text-left",
           !onSelect && "cursor-default",
         )}
         title={sublabel ?? "no active session"}
