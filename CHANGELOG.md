@@ -18,6 +18,25 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.1]
+
+### Fixed
+
+- **Memory leaks in the harness execution path.** Three long-running-process
+  leaks closed:
+  - The per-file session-cost cache (`api/agents.ts`) never evicted — entries
+    for deleted threads lived for the life of the process. A failed stat now
+    evicts, and past 4096 entries a sweep drops entries whose file is gone.
+  - The shared Ajv singleton pinned a compiled validator per agent restart
+    (its cache is keyed by schema object identity and `agent.json` is
+    re-parsed on every start). Validation now uses a throwaway Ajv per call.
+  - A wedged `pi` child that never acked its prompt frame held its worker
+    slot, batch state, and OS process forever. `sendPrompt` now times out
+    after 60 s; the batch fails and the child is torn down.
+- **Async EPIPE on the pi child's stdin no longer crashes the server.** The
+  stdin stream had no `error` listener, so a child dying mid-write raised an
+  unhandled `'error'` event; it now logs at debug.
+
 ## [0.9.0]
 
 ### Added

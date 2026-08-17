@@ -76,6 +76,12 @@ export class PiRpcClient {
       throw new Error("PiRpcClient: child must have piped stdin/stdout");
     }
     child.stdout.on("data", (c: Buffer | string) => this.onStdout(c));
+    // Without a listener, an async EPIPE on stdin (child died between the
+    // writability guard and the flush) is an unhandled 'error' event and
+    // crashes the whole harness process.
+    child.stdin.on("error", (err) => {
+      this.log.debug({ err }, "pi stdin error");
+    });
     child.stdout.on("end", () => this.flushStdout());
     child.stderr?.on("data", (c: Buffer | string) => {
       const s = typeof c === "string" ? c : c.toString("utf8");
@@ -130,7 +136,15 @@ export class PiRpcClient {
 
   async sendPrompt(text: string): Promise<void> {
     const id = `p${this.nextId++}`;
-    const r = await this.writeAndAwait(id, { id, type: "prompt", message: text });
+    // Pi acks a prompt frame immediately (the agent loop runs after), so a
+    // missing ack means the child is wedged. Without the timeout, the runner
+    // would await this forever — leaking the worker slot, the batch state,
+    // and the child process until an operator abort.
+    const r = await this.writeAndAwait(
+      id,
+      { id, type: "prompt", message: text },
+      60_000,
+    );
     if (!r.success) throw new Error(`pi rejected prompt: ${r.error ?? "unknown"}`);
   }
 
@@ -174,12 +188,30 @@ export class PiRpcClient {
     sin.write(`${JSON.stringify(obj)}\n`);
   }
 
-  private writeAndAwait(id: string, frame: unknown): Promise<RpcResponse> {
+  private writeAndAwait(
+    id: string,
+    frame: unknown,
+    timeoutMs: number,
+  ): Promise<RpcResponse> {
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`pi did not ack rpc frame within ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (r) => {
+          clearTimeout(timer);
+          resolve(r);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       try {
         this.writeFrame(frame);
       } catch (err) {
+        clearTimeout(timer);
         this.pending.delete(id);
         reject(err as Error);
       }

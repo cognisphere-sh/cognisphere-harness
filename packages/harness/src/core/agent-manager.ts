@@ -25,13 +25,6 @@ import type {
   PluginState,
 } from "./types.js";
 
-const ajv = new Ajv({
-  useDefaults: true,
-  coerceTypes: false,
-  allErrors: true,
-  strict: false,
-});
-
 export interface PluginEntry {
   state: PluginState;
   /** Live instance — non-null only when state === "running". */
@@ -924,6 +917,16 @@ function validateWithSchema(
   data: Record<string, unknown>,
   label: string,
 ): void {
+  // Throwaway Ajv per call: a shared instance caches compiled validators by
+  // schema OBJECT identity, and agent.json is re-parsed on every start — each
+  // restart would pin a new validator in the singleton forever. Validation
+  // only runs at agent/plugin start, so the per-call compile cost is fine.
+  const ajv = new Ajv({
+    useDefaults: true,
+    coerceTypes: false,
+    allErrors: true,
+    strict: false,
+  });
   const validate = ajv.compile(schema);
   if (!validate(data)) {
     const msgs =

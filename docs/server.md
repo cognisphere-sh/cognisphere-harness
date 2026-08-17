@@ -665,7 +665,10 @@ newline-delimited.
   the batch indefinitely. `setStatus` requests keyed `"cognisphere"` are
   intercepted for `onHarnessEntry` instead of being treated as UI.
 - Pending RPC promises are rejected if the child exits or errors before
-  responding.
+  responding. `sendPrompt` additionally times out after 60 s if pi never
+  acks the prompt frame (pi acks immediately; a missing ack means a wedged
+  child) — the batch then fails and the runner tears the child down instead
+  of holding the worker slot forever.
 
 ### 4.8 AgentRunner — `runner.ts`
 

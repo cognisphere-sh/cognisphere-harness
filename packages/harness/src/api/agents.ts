@@ -781,16 +781,29 @@ function sumThreadTotalCost(threadDir: string): number {
 // by absolute path + mtime so any append invalidates the entry.
 const fileTotalCostCache = new Map<string, { mtimeMs: number; cost: number }>();
 
+/** Entries for deleted threads are never re-stat'd (readdir won't list them),
+ *  so without eviction the cache grows for the life of the process. Once it
+ *  crosses the cap, drop every entry whose file is gone. */
+const COST_CACHE_SWEEP_AT = 4096;
+
+function sweepCostCache(): void {
+  for (const path of fileTotalCostCache.keys()) {
+    if (!existsSync(path)) fileTotalCostCache.delete(path);
+  }
+}
+
 function sumFileTotalCostCached(filePath: string): number {
   let mtimeMs: number;
   try {
     mtimeMs = statSync(filePath).mtimeMs;
   } catch {
+    fileTotalCostCache.delete(filePath);
     return 0;
   }
   const hit = fileTotalCostCache.get(filePath);
   if (hit && hit.mtimeMs === mtimeMs) return hit.cost;
   const cost = sumFileTotalCost(filePath);
+  if (fileTotalCostCache.size >= COST_CACHE_SWEEP_AT) sweepCostCache();
   fileTotalCostCache.set(filePath, { mtimeMs, cost });
   return cost;
 }
