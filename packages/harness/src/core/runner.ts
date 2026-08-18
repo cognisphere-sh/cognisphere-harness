@@ -637,14 +637,19 @@ export class AgentRunner extends EventEmitter {
   private async ensureChildExited(rpc: PiRpcClient, log: Logger): Promise<void> {
     rpc.endStdin();
     const exitTimer = setTimeout(() => {
-      log.warn("pi did not exit within 5s; sending SIGKILL");
-      rpc.kill("SIGKILL");
+      log.warn("pi did not exit within 5s; sending SIGKILL to process group");
+      rpc.killGroup();
     }, 5000);
     try {
       await rpc.waitExit();
     } finally {
       clearTimeout(exitTimer);
     }
+    // Pi is gone; sweep whatever it left behind in its process group.
+    // ponytail: batch-scoped processes only — an agent cannot keep a daemon
+    // running across batches. Lift by skipping the sweep behind an agent.json
+    // flag if a legit long-runner ever needs it.
+    rpc.killGroup();
   }
 
   /**
@@ -884,6 +889,11 @@ export class AgentRunner extends EventEmitter {
       cwd: agentDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      // Own process group, so batch teardown can sweep pi's whole descendant
+      // tree (ensureChildExited → killGroup). Without this, anything the
+      // agent's bash tool left running — headless browsers, dev servers —
+      // outlived the batch and accumulated on the server.
+      detached: true,
     });
     return new PiRpcClient(child, log.child({ rpc: threadId }));
   }

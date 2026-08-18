@@ -18,6 +18,30 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.2]
+
+### Fixed
+
+- **Batch teardown now reaps the pi child's entire process tree.** Pi is
+  spawned in its own process group (`detached: true`) and, once it exits,
+  the group is SIGKILL-swept — so headless browsers, dev servers, and
+  anything else the agent's bash tool left running die with the batch
+  instead of accumulating on the server. The 5s no-exit escalation also
+  kills the group, not just pi.
+- **/tmp no longer fills up.** A janitor sweeps known agent debris from the
+  OS temp dir at boot and every 6h (age > 24h): pi's `pi-bash-*.log`
+  output-spill files (pi writes them for any oversized command output and
+  never deletes them) and browser profile dirs
+  (`.org.chromium.*`, `puppeteer_dev_chrome_profile-*`, `playwright*`).
+
+### Changed
+
+- **Agent-spawned processes are now strictly batch-scoped.** A background
+  process started during one turn no longer survives to the next — the
+  group sweep at batch end kills it. No shipped plugin or seed relied on
+  cross-batch daemons; if a future workload needs one, run it outside the
+  agent (e.g. a plugin) or ask for a skip-sweep flag.
+
 ## [0.9.1]
 
 ### Fixed

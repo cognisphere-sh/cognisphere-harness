@@ -2,9 +2,11 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Logger } from "./logger.js";
 import { adminRouter } from "../api/admin.js";
 import { agentsRouter } from "../api/agents.js";
 import {
@@ -67,6 +69,10 @@ async function main(): Promise<void> {
 
   const am = new AgentManager(cfg, registry, childLogger("agent-manager"));
   await am.boot();
+
+  const jlog = childLogger("tmp-janitor");
+  sweepTmpDebris(jlog);
+  setInterval(() => sweepTmpDebris(jlog), 6 * 60 * 60 * 1000).unref();
 
   await ensureCredentials(cfg, childLogger("auth"));
   const auth = makeAuthStore(cfg, childLogger("auth"));
@@ -158,6 +164,46 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+}
+
+/**
+ * Age-based sweep of known agent debris in the OS temp dir. Two producers
+ * fill it up on a long-running server:
+ *  - pi's bash tool spills any oversized command output to
+ *    `$TMPDIR/pi-bash-<id>.log` and never deletes it (the path is handed to
+ *    the agent as "full output saved to…", then abandoned);
+ *  - browsers launched via the bash tool leave their profile dirs behind,
+ *    especially when the batch teardown SIGKILLs them.
+ * The spill files must outlive their bash call (the agent may read the path
+ * later in the turn), so deletion is age-based: anything matching a known
+ * pattern and older than 24h is fair game. Runs at boot and every 6h.
+ */
+const TMP_DEBRIS =
+  /^(pi-bash-[0-9a-f]+\.log|\.org\.chromium\..*|puppeteer_dev_chrome_profile-.*|playwright.*)$/;
+const TMP_DEBRIS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function sweepTmpDebris(log: Logger): void {
+  const dir = tmpdir();
+  const cutoff = Date.now() - TMP_DEBRIS_MAX_AGE_MS;
+  let removed = 0;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!TMP_DEBRIS.test(name)) continue;
+    const p = join(dir, name);
+    try {
+      if (statSync(p).mtimeMs >= cutoff) continue;
+      rmSync(p, { recursive: true, force: true });
+      removed++;
+    } catch {
+      /* vanished or not ours (EPERM) — skip */
+    }
+  }
+  if (removed > 0) log.info({ removed, dir }, "swept tmp debris");
 }
 
 function relativeToCwd(abs: string): string {

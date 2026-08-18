@@ -180,6 +180,21 @@ export class PiRpcClient {
     }
   }
 
+  /** SIGKILL the child's entire process group (the child is spawned
+   *  `detached: true`, so its pid is the pgid). Sweeps descendants the batch
+   *  left running — bash-spawned browsers, servers — which a pid-only kill
+   *  (or a clean pi exit) would orphan onto the server. No-op once the
+   *  group is empty (ESRCH). */
+  killGroup(): void {
+    const pid = this.child.pid;
+    if (!pid) return;
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      /* group already empty */
+    }
+  }
+
   private writeFrame(obj: unknown): void {
     const sin = this.child.stdin;
     if (!sin || sin.destroyed || sin.writableEnded) {

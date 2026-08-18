@@ -778,6 +778,13 @@ on an already-dead child). Without it the thread could be freed while a zombie
 pi kept appending to the session JSONL — and a worker could spawn a second pi
 against the same `--session` file, corrupting it.
 
+Pi is spawned `detached: true` (its own process group), and once it has
+exited `ensureChildExited` SIGKILLs the whole group (`killGroup`). This
+sweeps every descendant the batch left running — bash-spawned headless
+browsers, dev servers — which a pid-only kill (or a clean pi exit) would
+orphan onto the host. Consequence: agent-spawned processes are strictly
+batch-scoped; a daemon started during one turn does not survive to the next.
+
 `<harness-metadata>` is built by `buildHarnessMetadata` in `runner.ts`:
 a fenced block with `Timestamp`, `Plugin`, `Channel`, `ThreadId`, optional
 `IsSilent` / `Retry`, then pascal-cased keys from `payload.metadata`
@@ -1245,6 +1252,10 @@ failure).
 5. `main.ts` mounts the HTTP routes (`/api/*`, `/admin/*`, `/healthz`,
    `/webhook/*`) and listens on `cfg.port`. The HTTP surface is
    documented separately.
+6. `main.ts` runs the tmp janitor (`sweepTmpDebris`) at boot and every
+   6h: age-based (>24h) deletion of known agent debris in the OS temp
+   dir — pi's `pi-bash-*.log` output-spill files (pi never deletes
+   them) and browser profile dirs left by bash-spawned browsers.
 
 A `SIGINT`/`SIGTERM` triggers `am.shutdown()` → stop every running
 agent (which stops every plugin via timeout-guarded
