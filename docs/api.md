@@ -635,6 +635,87 @@ swaps in a fresh runner once active batches drain (see [`server.md`
 remained) running after the reload. Per-agent reload errors are
 logged but don't fail the save — the file write already succeeded.
 
+### 6.1 Google Workspace sign-in — `/api/gws/oauth/*`
+
+Implemented in `packages/harness/src/api/gws-oauth.ts`. Browser-driven
+Google OAuth for agents with the `gws` plugin — replaces the manual
+`gws auth login` + `gws auth export` dance. All routes require auth;
+the callback works because Google's redirect is a top-level GET
+navigation, so the SameSite=Lax session cookie rides along.
+
+Prerequisite: the operator creates a "Web application" OAuth client in
+their own GCP project (Gmail API enabled) and registers
+`<console origin>/api/gws/oauth/callback` as a redirect URI. The
+client id/secret are stored once per harness at
+`.secrets/gws/oauth-client.json` and shared by every agent.
+
+#### `GET /api/gws/oauth`
+
+```json
+{
+  "client": { "clientId": "…", "clientSecret": "********" },
+  "agents": [
+    {
+      "agentId": "dr-renu",
+      "name": "Dr. Renu",
+      "signedIn": true,
+      "managed": true,
+      "email": "renu@example.com",
+      "scopes": ["https://www.googleapis.com/auth/gmail.modify", "…"]
+    }
+  ],
+  "mask": "********"
+}
+```
+
+`agents` lists only agents with the `gws` plugin installed. `managed`
+is true when the agent's `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`
+secret points at the harness-managed file (i.e. sign-in happened via
+this flow, not a hand-set path); `email` and `scopes` (what Google
+actually granted at sign-in) are only known for managed sign-ins.
+
+#### `PUT /api/gws/oauth/client`
+
+Body `{ "clientId": "…", "clientSecret": "…" }`. The mask sentinel
+for `clientSecret` leaves the stored secret untouched. Returns
+`{ "ok": true }`.
+
+#### `POST /api/gws/oauth/:agentId/start`
+
+Body `{ "redirectUri": "<origin>/api/gws/oauth/callback" }` (the web
+UI passes its own origin, so dev-proxy and deployed origins both
+work). Returns `{ "url": "https://accounts.google.com/…" }` for the
+browser to navigate to. The requested scope set is the union of the
+baseline (`gmail.modify`, which the plugin needs, + `openid email`
+for the account display) and the agent's gws plugin config key
+`oauthScopes` (comma-separated scope URLs — a developer decision made
+in config, not at sign-in time; read from the live plugin entry, or
+from `plugins/gws/config.json` on disk when the plugin isn't
+running). `access_type=offline&prompt=consent` forces a refresh
+token. 404 if the agent has no `gws` plugin, 409 if no OAuth client
+is saved yet.
+
+#### `GET /api/gws/oauth/callback?code=&state=`
+
+Google's redirect target. Validates `state` against the pending
+sign-in (10-minute TTL, in-memory), exchanges the code, writes the
+standard `authorized_user` JSON (the exact shape
+`gws auth export --unmasked` produces) to
+`.secrets/gws/<agentId>/credentials.json` (0600), records the account
+email and granted scopes in a sibling `account.json`, sets the agent's
+`gws.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` secret to that path, and
+soft-reloads the agent. Redirects to `/settings?gws=signed-in` on
+success or `/settings?gwsError=<message>` on failure.
+
+#### `DELETE /api/gws/oauth/:agentId`
+
+Sign out: best-effort revokes the refresh token with Google, deletes
+`.secrets/gws/<agentId>/`, clears the agent's
+`GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` secret, and soft-reloads the
+agent (the gws plugin will then fail to start until the next sign-in
+— expected). For an operator-managed credentials path it only clears
+the secret; the file is untouched. Returns `{ "ok": true }`.
+
 ---
 
 ## 7. Models — `/api/models`

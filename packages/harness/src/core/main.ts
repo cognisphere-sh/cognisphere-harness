@@ -17,6 +17,7 @@ import {
   requireAuth,
 } from "../api/auth.js";
 import { filesRouter } from "../api/files.js";
+import { gwsOauthRouter } from "../api/gws-oauth.js";
 import { harnessRouter } from "../api/harness.js";
 import { modelsRouter } from "../api/models.js";
 import { secretsRouter } from "../api/secrets.js";
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
   api.route("/secrets", secretsRouter(am, cfg, childLogger("secrets-api")));
   api.route("/models", modelsRouter(am, cfg, childLogger("models-api")));
   api.route("/harness", harnessRouter(am, cfg, childLogger("harness-api")));
+  api.route("/gws/oauth", gwsOauthRouter(am, cfg, childLogger("gws-oauth")));
   app.route("/api", api);
 
   // /admin/* (predates web UI) — also gated by auth.

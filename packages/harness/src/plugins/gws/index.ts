@@ -30,6 +30,9 @@ interface GwsConfig {
   firstOfThreadOnly?: boolean;
   allowedSenders?: string;
   requireAgentInTo?: boolean;
+  /** Read by the console's web sign-in flow (api/gws-oauth.ts), not by the
+   *  plugin itself. */
+  oauthScopes?: string;
 }
 
 /** Agent-writable overlay in `state/settings.json` (managed by
@@ -140,6 +143,12 @@ export default class GwsPlugin implements Plugin {
           default: false,
           description:
             "Only emit a thread's latest message when the agent's own address is in its `To` header. When false (the default), every message matching the poll query is delivered and wakes the agent. Ignored in backlog mode.",
+        },
+        oauthScopes: {
+          type: "string",
+          default: "",
+          description:
+            "Comma-separated extra Google OAuth scopes requested at web sign-in (e.g. `https://www.googleapis.com/auth/calendar`). gmail.modify, openid and email are always included. Operator config only — read by the console's sign-in flow, not by the plugin; changing it requires signing in again.",
         },
       },
       additionalProperties: false,
@@ -329,7 +338,7 @@ export default class GwsPlugin implements Plugin {
       .GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE;
     if (!creds) {
       throw new Error(
-        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE is not set. Run `gws auth login` on a host with a browser, then `gws auth export --unmasked > /path/to/credentials.json` and point this secret at the file.",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE is not set. Sign in with Google from the web console's Settings page, or run `gws auth login` on a host with a browser, then `gws auth export --unmasked > /path/to/credentials.json` and point this secret at the file.",
       );
     }
     try {
@@ -354,7 +363,7 @@ export default class GwsPlugin implements Plugin {
       }
       const stderr = (e.stderr ?? "").toString().trim();
       throw new Error(
-        `gws auth verification failed (exit ${e.code ?? "?"}) using credentials file '${creds}'. The file may be expired or invalid — re-export it. Stderr: ${stderr || "(empty)"}`,
+        `gws auth verification failed (exit ${e.code ?? "?"}) using credentials file '${creds}'. The file may be expired or invalid — sign in again from the web console's Settings page, or re-export it. Stderr: ${stderr || "(empty)"}`,
       );
     }
   }

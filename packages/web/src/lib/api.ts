@@ -359,6 +359,24 @@ export interface PutModelsBody {
   providers: Record<string, PutModelsProvider>;
 }
 
+export interface GwsOauthAgent {
+  agentId: string;
+  name: string;
+  signedIn: boolean;
+  /** Secret points at the harness-managed credentials file (web sign-in),
+   *  not an operator-managed path. */
+  managed: boolean;
+  email: string | null;
+  /** Scopes Google actually granted at sign-in (managed sign-ins only). */
+  scopes: string[];
+}
+
+export interface GwsOauthView {
+  client: { clientId: string; clientSecret: string };
+  agents: GwsOauthAgent[];
+  mask: string;
+}
+
 export const endpoints = {
   me: () => api.get<{ user: string | null }>("/api/auth/me"),
   login: (username: string, password: string) =>
@@ -506,6 +524,16 @@ export const endpoints = {
     api.get<OAuthLoginState>(`/api/models/oauth/${provider}/status`),
   oauthLogout: (provider: string) =>
     api.delete<{ ok: true; restarted: string[] }>(`/api/models/oauth/${provider}`),
+
+  getGwsOauth: () => api.get<GwsOauthView>("/api/gws/oauth"),
+  putGwsOauthClient: (body: { clientId: string; clientSecret: string }) =>
+    api.put<{ ok: true }>("/api/gws/oauth/client", body),
+  startGwsSignIn: (agentId: string) =>
+    api.post<{ url: string }>(`/api/gws/oauth/${agentId}/start`, {
+      redirectUri: `${window.location.origin}/api/gws/oauth/callback`,
+    }),
+  gwsSignOut: (agentId: string) =>
+    api.delete<{ ok: true }>(`/api/gws/oauth/${agentId}`),
 
   getHarness: () => api.get<HarnessSettings>("/api/harness"),
   putHarness: (body: { timezone: string }) =>

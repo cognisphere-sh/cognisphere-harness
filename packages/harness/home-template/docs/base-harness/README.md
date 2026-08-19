@@ -141,6 +141,14 @@ Both under `harness/.secrets/` (0600, gitignored, editable via the console):
 - `models.json` — per-provider credentials + the allowlist of enabled model
   ids. Subscription OAuth logins (Claude Pro/Max, Codex) are connected from
   the console's Models page instead of pasting keys.
+- `gws/` — Google sign-in for agents with the **gws** plugin, done from the
+  console's Settings page: save a "Web application" OAuth client (from your
+  GCP project, with `<console origin>/api/gws/oauth/callback` as a redirect
+  URI), then Sign in with Google per agent. Gmail access is always
+  requested; extra scopes (Calendar, Drive, … including read-only variants)
+  are picked per agent with the row's Scopes checkboxes — stored in the gws
+  plugin config key `oauthScopes` — before signing in. Sign-out is one
+  click there too.
 
 Hand edits need an agent restart; console edits hot-reload.
 

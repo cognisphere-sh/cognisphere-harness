@@ -152,7 +152,12 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 │   ├── secrets.json                  plaintext, agent + plugin secret buckets
 │   ├── models.json                   per-provider credentials + enabled models
 │   ├── users.json                    plaintext login credentials
-│   └── session-key                   32-byte HMAC key for signed session cookies
+│   ├── session-key                   32-byte HMAC key for signed session cookies
+│   └── gws/                          web Google sign-in (api/gws-oauth.ts)
+│       ├── oauth-client.json             operator's Google OAuth client id/secret
+│       └── <agent-id>/
+│           ├── credentials.json          authorized_user JSON the gws CLI reads
+│           └── account.json              signed-in email + granted scopes (display only)
 ├── plugins/                      ← (optional) user-space plugins; user
 │   └── <plugin-id>/index.ts          plugins shadow built-ins on id collision
 └── agents/

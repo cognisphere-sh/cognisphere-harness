@@ -6,6 +6,9 @@ import {
   Clock,
   KeyRound,
   Loader2,
+  LogIn,
+  LogOut,
+  Mail,
   Palette,
   Save,
   ShieldAlert,
@@ -13,7 +16,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { endpoints } from "@/lib/api";
+import { endpoints, type GwsOauthAgent } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
 import {
   Card,
@@ -93,6 +96,8 @@ export function SettingsPage() {
             </Card>
           </Link>
 
+          <GoogleWorkspaceCard />
+
           <Card className="lg:col-span-2 border-warning/40 bg-warning/5">
             <CardHeader className="flex-row items-start gap-3">
               <ShieldAlert className="mt-0.5 size-4 text-warning" />
@@ -146,6 +151,439 @@ export function SettingsPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** "https://www.googleapis.com/auth/gmail.modify" → "gmail.modify". */
+function scopeShortName(scope: string): string {
+  return scope.split("/").pop() ?? scope;
+}
+
+/** Scope picker for the per-agent `oauthScopes` gws config key, grouped by
+ *  Google service. `always: true` marks the baseline the sign-in flow
+ *  requests regardless (not stored in config). */
+const GWS_SCOPE_GROUPS: {
+  service: string;
+  scopes: { scope: string; always?: boolean }[];
+}[] = [
+  {
+    service: "Gmail",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/gmail.modify", always: true },
+    ],
+  },
+  {
+    service: "Calendar",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/calendar" },
+      { scope: "https://www.googleapis.com/auth/calendar.readonly" },
+      { scope: "https://www.googleapis.com/auth/calendar.events" },
+      { scope: "https://www.googleapis.com/auth/calendar.events.readonly" },
+    ],
+  },
+  {
+    service: "Drive",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/drive" },
+      { scope: "https://www.googleapis.com/auth/drive.file" },
+      { scope: "https://www.googleapis.com/auth/drive.readonly" },
+      { scope: "https://www.googleapis.com/auth/drive.metadata.readonly" },
+    ],
+  },
+  {
+    service: "Docs",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/documents" },
+      { scope: "https://www.googleapis.com/auth/documents.readonly" },
+    ],
+  },
+  {
+    service: "Sheets",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/spreadsheets" },
+      { scope: "https://www.googleapis.com/auth/spreadsheets.readonly" },
+    ],
+  },
+  {
+    service: "Slides",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/presentations" },
+      { scope: "https://www.googleapis.com/auth/presentations.readonly" },
+    ],
+  },
+  {
+    service: "Contacts",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/contacts" },
+      { scope: "https://www.googleapis.com/auth/contacts.readonly" },
+      { scope: "https://www.googleapis.com/auth/contacts.other.readonly" },
+    ],
+  },
+  {
+    service: "Tasks",
+    scopes: [
+      { scope: "https://www.googleapis.com/auth/tasks" },
+      { scope: "https://www.googleapis.com/auth/tasks.readonly" },
+    ],
+  },
+];
+
+const GWS_KNOWN_SCOPES = new Set(
+  GWS_SCOPE_GROUPS.flatMap((g) =>
+    g.scopes.filter((s) => !s.always).map((s) => s.scope),
+  ),
+);
+
+/**
+ * Google sign-in/sign-out for agents running the gws plugin. Hidden when no
+ * agent has the plugin installed. The OAuth client (id + secret from the
+ * operator's own GCP project, with `<origin>/api/gws/oauth/callback`
+ * registered as a redirect URI) is saved once and shared by every agent.
+ */
+function GoogleWorkspaceCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["gws-oauth"],
+    queryFn: endpoints.getGwsOauth,
+  });
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+
+  useEffect(() => {
+    if (!data) return;
+    setClientId(data.client.clientId);
+    setClientSecret(data.client.clientSecret);
+  }, [data]);
+
+  // Callback lands back on /settings?gws=… — surface the outcome once.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ok = params.get("gws");
+    const err = params.get("gwsError");
+    if (!ok && !err) return;
+    if (ok) toast.success("Google sign-in complete");
+    if (err) toast.error(`Google sign-in failed: ${err}`);
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
+
+  const saveClient = useMutation({
+    mutationFn: () =>
+      endpoints.putGwsOauthClient({ clientId: clientId.trim(), clientSecret }),
+    onSuccess: () => {
+      toast.success("OAuth client saved");
+      qc.invalidateQueries({ queryKey: ["gws-oauth"] });
+    },
+    onError: (e: Error) => toast.error(`save failed: ${e.message}`),
+  });
+
+  const signIn = useMutation({
+    mutationFn: (agentId: string) => endpoints.startGwsSignIn(agentId),
+    onSuccess: ({ url }) => {
+      window.location.href = url;
+    },
+    onError: (e: Error) => toast.error(`sign-in failed: ${e.message}`),
+  });
+
+  const signOut = useMutation({
+    mutationFn: (agentId: string) => endpoints.gwsSignOut(agentId),
+    onSuccess: () => {
+      toast.success("Signed out of Google");
+      qc.invalidateQueries({ queryKey: ["gws-oauth"] });
+    },
+    onError: (e: Error) => toast.error(`sign-out failed: ${e.message}`),
+  });
+
+  if (!data || data.agents.length === 0) return null;
+
+  const clientConfigured =
+    data.client.clientId.length > 0 && data.client.clientSecret.length > 0;
+  const clientDirty =
+    clientId.trim() !== data.client.clientId ||
+    clientSecret !== data.client.clientSecret;
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Mail className="size-4 text-primary/80" />
+          <CardTitle>Google Workspace</CardTitle>
+        </div>
+        <CardDescription>
+          Sign each gws-enabled agent into its Google account. Needs a
+          &ldquo;Web application&rdquo; OAuth client from your GCP project
+          with <code>{window.location.origin}/api/gws/oauth/callback</code>{" "}
+          registered as a redirect URI. Gmail access is always requested;
+          pick extra scopes per agent with the Scopes button (stored as
+          <code>oauthScopes</code> in the agent&rsquo;s gws plugin config)
+          before signing in.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="flex min-w-[16rem] flex-1 flex-col gap-1.5">
+            <Label className="font-mono text-xs" htmlFor="gws-client-id">
+              client id
+            </Label>
+            <Input
+              id="gws-client-id"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="…apps.googleusercontent.com"
+              autoComplete="off"
+              className="font-mono text-xs"
+            />
+          </div>
+          <div className="flex min-w-[12rem] flex-1 flex-col gap-1.5">
+            <Label className="font-mono text-xs" htmlFor="gws-client-secret">
+              client secret
+            </Label>
+            <Input
+              id="gws-client-secret"
+              type="password"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              autoComplete="off"
+              className="font-mono text-xs"
+            />
+          </div>
+          <Button
+            size="sm"
+            disabled={!clientDirty || clientId.trim() === "" || saveClient.isPending}
+            onClick={() => saveClient.mutate()}
+          >
+            {saveClient.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
+            Save
+          </Button>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          {data.agents.map((a) => (
+            <GwsAgentRow
+              key={a.agentId}
+              agent={a}
+              clientConfigured={clientConfigured}
+              signIn={signIn}
+              signOut={signOut}
+            />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface GwsRowMutation {
+  mutate: (agentId: string) => void;
+  isPending: boolean;
+  variables: string | undefined;
+}
+
+/** One gws-enabled agent: sign-in/out plus a collapsible per-service scope
+ *  picker that edits `oauthScopes` in the agent's gws plugin config. */
+function GwsAgentRow({
+  agent: a,
+  clientConfigured,
+  signIn,
+  signOut,
+}: {
+  agent: GwsOauthAgent;
+  clientConfigured: boolean;
+  signIn: GwsRowMutation;
+  signOut: GwsRowMutation;
+}) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  /** Known-scope selection being edited; null = untouched (mirror config). */
+  const [draft, setDraft] = useState<Set<string> | null>(null);
+  const { data: plugins } = useQuery({
+    queryKey: ["agent-plugins", a.agentId],
+    queryFn: () => endpoints.listPlugins(a.agentId),
+    enabled: open,
+  });
+  const gwsConfig = (plugins?.plugins.find((p) => p.pluginId === "gws")
+    ?.config ?? null) as { oauthScopes?: string } | null;
+  const configured = useMemo(
+    () =>
+      new Set(
+        (gwsConfig?.oauthScopes ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    [gwsConfig?.oauthScopes],
+  );
+  const knownConfigured = [...configured].filter((s) =>
+    GWS_KNOWN_SCOPES.has(s),
+  );
+  // hand-edited scopes outside the checkbox list — preserved on save
+  const unknown = [...configured].filter((s) => !GWS_KNOWN_SCOPES.has(s));
+  const selected = draft ?? configured;
+  const dirty =
+    draft !== null &&
+    [...draft].sort().join(",") !== [...knownConfigured].sort().join(",");
+
+  const toggle = (scope: string, checked: boolean) => {
+    setDraft((prev) => {
+      const next = new Set(prev ?? knownConfigured);
+      if (checked) next.add(scope);
+      else next.delete(scope);
+      return next;
+    });
+  };
+
+  const saveScopes = useMutation({
+    mutationFn: () =>
+      endpoints.putPluginConfig(a.agentId, "gws", {
+        ...(gwsConfig ?? {}),
+        oauthScopes: [...unknown, ...(draft ?? [])].join(", "),
+      }),
+    onSuccess: () => {
+      toast.success(
+        a.signedIn ? "Scopes saved — sign in again to apply" : "Scopes saved",
+      );
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ["agent-plugins", a.agentId] });
+    },
+    onError: (e: Error) => toast.error(`save failed: ${e.message}`),
+  });
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border p-3">
+      <div className="flex items-center gap-2">
+        <Bot className="size-4 text-primary/80" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{a.name}</div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {a.signedIn
+              ? a.email
+                ? `Signed in as ${a.email}`
+                : a.managed
+                  ? "Signed in"
+                  : "Using an operator-managed credentials file"
+              : "Not signed in"}
+            {a.scopes.length > 0 && (
+              <>
+                {" · "}
+                {a.scopes
+                  .filter(
+                    // hide the identity scopes (openid / userinfo.*) —
+                    // only the workspace grants are interesting here
+                    (s) =>
+                      s.includes("googleapis.com/auth/") &&
+                      !s.includes("/userinfo."),
+                  )
+                  .map(scopeShortName)
+                  .join(", ")}
+              </>
+            )}
+          </div>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setOpen((o) => !o)}
+        >
+          <ChevronRight
+            className={`size-4 transition-transform ${open ? "rotate-90" : ""}`}
+          />
+          Scopes
+        </Button>
+        {a.signedIn ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={signOut.isPending}
+            onClick={() => signOut.mutate(a.agentId)}
+          >
+            {signOut.isPending && signOut.variables === a.agentId ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <LogOut className="size-4" />
+            )}
+            Sign out
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            disabled={!clientConfigured || signIn.isPending}
+            onClick={() => signIn.mutate(a.agentId)}
+            title={
+              clientConfigured
+                ? undefined
+                : "Save the OAuth client id and secret first"
+            }
+          >
+            {signIn.isPending && signIn.variables === a.agentId ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <LogIn className="size-4" />
+            )}
+            Sign in with Google
+          </Button>
+        )}
+      </div>
+
+      {open && (
+        <div className="flex flex-col gap-3 border-t pt-3">
+          <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-4">
+            {GWS_SCOPE_GROUPS.map((g) => (
+              <div key={g.service} className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  {g.service}
+                </span>
+                {g.scopes.map((s) => (
+                  <label
+                    key={s.scope}
+                    className="flex cursor-pointer items-center gap-1.5 font-mono text-[11px]"
+                    title={s.scope}
+                  >
+                    <input
+                      type="checkbox"
+                      className="accent-primary"
+                      checked={s.always || selected.has(s.scope)}
+                      // no toggling until the current config has loaded —
+                      // a save from a half-loaded draft would drop scopes
+                      disabled={s.always || !plugins}
+                      onChange={(e) => toggle(s.scope, e.target.checked)}
+                    />
+                    {scopeShortName(s.scope)}
+                    {s.always && (
+                      <span className="font-sans text-[10px] text-muted-foreground">
+                        (always)
+                      </span>
+                    )}
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+          {unknown.length > 0 && (
+            <div className="text-[11px] text-muted-foreground">
+              Also configured: {unknown.map(scopeShortName).join(", ")} (kept
+              on save)
+            </div>
+          )}
+          <div>
+            <Button
+              size="sm"
+              disabled={!dirty || saveScopes.isPending}
+              onClick={() => saveScopes.mutate()}
+            >
+              {saveScopes.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Save className="size-4" />
+              )}
+              Save scopes
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

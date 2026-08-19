@@ -149,7 +149,26 @@ export function secretsRouter(am: AgentManager, cfg: ServerConfig, log: Logger):
   return r;
 }
 
-function readSecrets(path: string): Secrets {
+/** Programmatic single-key write (used by the gws OAuth flow): read-merge-
+ *  write the same file this router serves, preserving the `_*` doc header.
+ *  `null` deletes the key. Caller is responsible for reloading the agent. */
+export function setSecretValue(
+  path: string,
+  agentId: string,
+  bucketId: string,
+  key: string,
+  value: string | null,
+): void {
+  const merged = readSecrets(path);
+  const bucket = ((merged[agentId] ??= {})[bucketId] ??= {});
+  if (value === null) delete bucket[key];
+  else bucket[key] = value;
+  const out: Record<string, unknown> = { ...readDocHeader(path), ...merged };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 });
+}
+
+export function readSecrets(path: string): Secrets {
   if (!existsSync(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
