@@ -18,6 +18,22 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.1]
+
+### Breaking changes
+
+- Skill description spec tightened (`create-skill` v1.3.0): "what's
+  included" is a brief sketch of the main procedures, not an exhaustive
+  contents list; partial applicability moves under "use when"; the whole
+  description stays under 1000 characters. During upgrade, audit every
+  skill and rephrase any description that doesn't conform, with a
+  patch bump and changelog entry per rephrased skill   [affects: agents/*/skills/*/*/SKILL.md]
+
+### Changed
+
+- `docs/base-harness/skills.md` and the `create-skill` skill restate the
+  new description spec (both refreshed wholesale by the upgrade skill).
+
 ## [0.10.0]
 
 ### Added

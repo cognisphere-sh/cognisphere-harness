@@ -17,10 +17,11 @@ location into the system prompt, so the agent discovers procedures by
 description and reads the full `SKILL.md` only when a task matches.
 
 The description therefore carries four things: a **summary**, **what's
-included** (the procedures, topics, scripts and artifacts the skill covers —
-a skill is often only partially relevant to a task, and the contents list is
-how the agent spots that one section applies), **when to use it** (trigger
-phrases), and the **version**. `metadata` carries `author` and `version`.
+included** (a brief sketch of the main procedures and any
+scripts/artifacts — not an exhaustive table of contents), **when to use
+it** (trigger phrases, including tasks where only one section of the skill
+applies), and the **version** — all within 1000 characters. `metadata`
+carries `author` and `version`.
 
 **Every skill is versioned:**
 

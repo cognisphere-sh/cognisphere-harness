@@ -1,9 +1,9 @@
 ---
 name: create-skill
-description: Author or update a versioned skill for a CogniSphere agent — capture a procedure (SOP, runbook, workflow) as skills/agent/<slug>/ with SKILL.md, version, changelog, scripts and artifacts. Covers the skill layout, the description spec (summary + contents + when-to-use + version), creating, updating/bumping, and verification. Use when asked to "create a skill", "add a skill to <agent>", "turn this SOP into a skill", "migrate this procedure to a skill" or "update/bump a skill" — and whenever a multi-step procedure is being written down for reuse, re-derived from scratch a second time, or found inlined in a prompt file or knowledge/ where it doesn't belong. (v1.2.0)
+description: Author or update a versioned skill for a CogniSphere agent — capture a procedure (SOP, runbook, workflow) as skills/agent/<slug>/ with SKILL.md, version, changelog, scripts and artifacts. Covers the skill layout, the description spec (summary + contents + when-to-use + version), creating, updating/bumping, and verification. Use when asked to "create a skill", "add a skill to <agent>", "turn this SOP into a skill", "migrate this procedure to a skill" or "update/bump a skill" — and whenever a multi-step procedure is being written down for reuse, re-derived from scratch a second time, or found inlined in a prompt file or knowledge/ where it doesn't belong. (v1.3.0)
 metadata:
   author: cognisphere
-  version: "1.2.0"
+  version: "1.3.0"
   argument-hint: <agent-id> <skill-slug>
 ---
 
@@ -56,14 +56,15 @@ metadata:
    `SKILL.md`, so it must carry four things:
 
    - **Summary** — what the skill does, one line.
-   - **What's included** — the procedures, topics, scripts and artifacts it
-     covers. A skill is often only *partially* relevant to a task; listing
-     its contents is how the agent knows one section applies.
-   - **When to use it** — trigger phrases / task shapes to match against.
+   - **What's included** — a brief sketch of the main procedures and any
+     scripts/artifacts. Not an exhaustive table of contents.
+   - **When to use it** — trigger phrases / task shapes to match against,
+     including tasks where only one section of the skill applies.
    - **Version** — `(vX.Y.Z)`, matching `metadata.version`; the description
      version is what makes updates visible to a running agent.
 
-   `metadata` carries `author` and `version`.
+   Keep the whole description under 1000 characters (pi drops anything
+   over 1024). `metadata` carries `author` and `version`.
 3. Move helper scripts into `scripts/` (keep them executable) and
    templates/reference files into `artifacts/`; reference both by
    skill-relative path from `SKILL.md`.
