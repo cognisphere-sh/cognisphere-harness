@@ -363,11 +363,8 @@ export interface GwsOauthAgent {
   agentId: string;
   name: string;
   signedIn: boolean;
-  /** Secret points at the harness-managed credentials file (web sign-in),
-   *  not an operator-managed path. */
-  managed: boolean;
   email: string | null;
-  /** Scopes Google actually granted at sign-in (managed sign-ins only). */
+  /** Scopes Google actually granted at sign-in. */
   scopes: string[];
 }
 

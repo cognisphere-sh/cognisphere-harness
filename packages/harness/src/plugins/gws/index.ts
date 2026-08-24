@@ -148,7 +148,7 @@ export default class GwsPlugin implements Plugin {
           type: "string",
           default: "",
           description:
-            "Comma-separated extra Google OAuth scopes requested at web sign-in (e.g. `https://www.googleapis.com/auth/calendar`). gmail.modify, openid and email are always included. Operator config only — read by the console's sign-in flow, not by the plugin; changing it requires signing in again.",
+            "Comma-separated extra Google OAuth scopes requested at web sign-in (e.g. `https://www.googleapis.com/auth/calendar`). openid, email and `gmail.modify` are always included — modify is Google's read/write Gmail tier (read, drafts, send, labels, mark-read) and the poll loop needs it; the narrower Gmail scopes are subsets of it, so none is offered. Operator config only — read by the console's sign-in flow, not by the plugin; changing it requires signing in again.",
         },
       },
       additionalProperties: false,
@@ -338,7 +338,7 @@ export default class GwsPlugin implements Plugin {
       .GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE;
     if (!creds) {
       throw new Error(
-        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE is not set. Sign in with Google from the web console's Settings page, or run `gws auth login` on a host with a browser, then `gws auth export --unmasked > /path/to/credentials.json` and point this secret at the file.",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE is not set. Sign in with Google from the gws plugin card on this agent's Settings tab in the web console.",
       );
     }
     try {

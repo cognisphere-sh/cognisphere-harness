@@ -83,6 +83,11 @@ async function main(): Promise<void> {
   // Public surface — no auth needed.
   app.get("/healthz", (c) => c.json({ ok: true, agents: am.list().length }));
   app.route("/api/auth", authRouter(auth));
+  // Google's OAuth redirect: no session on app-origin sign-ins, so the
+  // callback authenticates via the single-use `state` nonce issued by the
+  // (authenticated) start route. Registered before the authed /api mount.
+  const gws = gwsOauthRouter(am, cfg, childLogger("gws-oauth"));
+  app.route("/api/gws/oauth", gws.callback);
 
   // Authenticated API.
   const api = new Hono();
@@ -92,7 +97,7 @@ async function main(): Promise<void> {
   api.route("/secrets", secretsRouter(am, cfg, childLogger("secrets-api")));
   api.route("/models", modelsRouter(am, cfg, childLogger("models-api")));
   api.route("/harness", harnessRouter(am, cfg, childLogger("harness-api")));
-  api.route("/gws/oauth", gwsOauthRouter(am, cfg, childLogger("gws-oauth")));
+  api.route("/gws/oauth", gws.api);
   app.route("/api", api);
 
   // /admin/* (predates web UI) — also gated by auth.

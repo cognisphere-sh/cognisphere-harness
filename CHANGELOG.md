@@ -18,6 +18,45 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0]
+
+### Changed
+
+- **gws sign-in moved to the agent's Settings tab.** Per-agent Google
+  sign-in/sign-out and the scope picker now live on the gws plugin card
+  in each agent's Settings tab (`GwsSignInBlock`); the console's
+  app-level Settings page keeps only the shared OAuth client id/secret.
+  The OAuth callback redirects back to `/agents/<agentId>/settings`.
+- **Frontend apps can host the sign-in button.** The OAuth callback
+  (`GET /api/gws/oauth/callback`) is now mounted outside the auth wall —
+  the single-use `state` nonce issued by the authenticated start route is
+  the auth — and `POST /api/gws/oauth/:agentId/start` accepts an optional
+  `returnTo` for where the browser lands afterwards. Recipe (Next.js
+  route handler using `HARNESS_USER`/`HARNESS_PASS` + the `/api/*`
+  proxy) added to `home-template/app/README.md`; register the app
+  origin's `/api/gws/oauth/callback` as an extra redirect URI on the
+  Google client.
+- **Gmail scope rationalized.** `gmail.modify` is always requested — it
+  is Google's read/write Gmail tier (read, drafts, send, labels,
+  mark-read; everything except permanent deletion) and the poll loop's
+  mark-read needs it; the narrower Gmail scopes (`readonly`, `compose`,
+  `send`, `labels`) are strict subsets of it, so no granular Gmail
+  choice is offered. Optional per-service scopes (Calendar, Drive, …)
+  unchanged, still stored in the gws config key `oauthScopes`.
+- `home-template/app/README.md` and `docs/base-harness/README.md`
+  updated accordingly (both refreshed wholesale by the upgrade skill).
+
+### Removed
+
+- **Legacy gws authentication.** The manual `gws auth login` +
+  `gws auth export` path is no longer supported or surfaced: the
+  `managed` field is gone from `GET /api/gws/oauth` (`signedIn` now
+  means "signed in via the web flow"), the "operator-managed
+  credentials file" labeling is gone from the console, and the plugin's
+  not-signed-in error points only at the web console. A hand-set
+  `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` secret still functions at the
+  plugin level but shows as not signed in.
+
 ## [0.10.2]
 
 ### Breaking changes

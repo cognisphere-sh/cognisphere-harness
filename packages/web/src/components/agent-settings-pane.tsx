@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { SchemaForm, type JsonSchema } from "@/components/schema-form";
+import { GwsSignInBlock } from "@/components/gws-signin-block";
 
 const CLEAR_SENTINEL = "__CLEAR__";
 
@@ -317,6 +318,12 @@ function PluginCard({
       </CardHeader>
       <Separator />
       <div className="grid gap-5 p-4">
+        {plugin.pluginId === "gws" && (
+          <>
+            <GwsSignInBlock agentId={agentId} plugin={plugin} />
+            <Separator />
+          </>
+        )}
         <ConfigBlock
           subtitle={`plugins/${plugin.pluginId}/config.json`}
           schema={configSchema}

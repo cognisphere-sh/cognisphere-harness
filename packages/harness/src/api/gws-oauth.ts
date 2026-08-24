@@ -17,28 +17,39 @@ import { readSecrets, setSecretValue } from "./secrets.js";
 
 /**
  * /api/gws/oauth — browser-driven Google sign-in/sign-out for agents with
- * the `gws` plugin, replacing the manual `gws auth login` + `gws auth
- * export` dance.
+ * the `gws` plugin. This is the only supported sign-in path; agents are
+ * signed in from the gws plugin card on their own Settings tab (the shared
+ * OAuth client lives on the app-level Settings page), or from an external
+ * frontend app via `returnTo` (see below).
  *
+ * Authenticated (`api` router):
  *   GET    /                  → { client, agents } — OAuth client (masked) + per-agent status
  *   PUT    /client            → save the operator's Google OAuth client id/secret
  *   POST   /:agentId/start    → { url } — Google consent URL; browser navigates there
- *   GET    /callback          → Google redirects here; exchanges the code,
- *                               writes the credentials file, sets the agent's
- *                               gws secret, reloads the agent, → /settings
  *   DELETE /:agentId          → sign out: revoke token, delete file, clear secret
  *
- * The operator creates a "Web application" OAuth client in their own GCP
- * project (with the Gmail API enabled) and registers
- * `<console origin>/api/gws/oauth/callback` as a redirect URI; the client
- * id/secret are stored once per harness in `.secrets/gws/oauth-client.json`
- * and shared by every agent. Sign-in writes the standard Google
- * `authorized_user` JSON — the exact shape `gws auth export --unmasked`
- * produces — to `.secrets/gws/<agentId>/credentials.json` and points the
- * agent's `gws.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` secret at it.
+ * Public (`callback` router, mounted outside the auth wall):
+ *   GET    /callback          → Google redirects here; exchanges the code,
+ *                               writes the credentials file, sets the agent's
+ *                               gws secret, reloads the agent, then redirects
+ *                               to the pending sign-in's `returnTo` (default:
+ *                               the agent's settings page).
  *
- * The callback is under authenticated /api: the Google redirect is a
- * top-level GET navigation, so the SameSite=Lax session cookie rides along.
+ * The operator creates a "Web application" OAuth client in their own GCP
+ * project (with the Gmail API enabled) and registers each sign-in origin's
+ * `<origin>/api/gws/oauth/callback` as a redirect URI; the client id/secret
+ * are stored once per harness in `.secrets/gws/oauth-client.json` and shared
+ * by every agent. Sign-in writes the standard Google `authorized_user` JSON
+ * to `.secrets/gws/<agentId>/credentials.json` and points the agent's
+ * `gws.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` secret at it.
+ *
+ * The callback needs no session: `start` (authenticated) issues a random
+ * single-use `state` nonce with a 10-minute TTL, and the callback only acts
+ * on a valid nonce. That lets a frontend app on another origin host the same
+ * sign-in button — its backend calls `start` (after `POST /api/auth/login`
+ * with its harness credentials) passing its own proxied
+ * `<app origin>/api/gws/oauth/callback` as `redirectUri` and an app path as
+ * `returnTo`.
  */
 
 const PLUGIN_ID = "gws";
@@ -46,10 +57,14 @@ const SECRET_KEY = "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
-// Always requested: gmail.modify covers everything the gws plugin and its
-// seed scripts do (read, send, mark-read); openid+email label the account.
-// Extra scopes (calendar, drive, …) are picked in the Settings card and
-// arrive via the start route's `scopes` body field.
+// Always requested: openid+email label the account, and gmail.modify —
+// Google's read/write Gmail tier (read, drafts, send, labels, mark-read;
+// everything except permanent deletion, which only `https://mail.google.com/`
+// grants and we never request). The poll loop marks messages read, which
+// needs modify, and Google's narrower Gmail scopes (readonly, compose,
+// send, labels) are strict subsets of it — so no granular Gmail choice is
+// offered. Extra scopes (calendar, drive, …) come from the agent's gws
+// plugin config (`oauthScopes`), picked on the agent's settings page.
 const BASE_SCOPES = [
   "openid",
   "email",
@@ -65,6 +80,8 @@ interface OauthClient {
 interface PendingSignIn {
   agentId: string;
   redirectUri: string;
+  /** Where the browser lands after the callback; set by app-origin sign-ins. */
+  returnTo?: string;
   expiresAt: number;
 }
 
@@ -72,8 +89,9 @@ export function gwsOauthRouter(
   am: AgentManager,
   cfg: ServerConfig,
   log: Logger,
-): Hono {
+): { api: Hono; callback: Hono } {
   const r = new Hono();
+  const cb = new Hono();
   const gwsDir = join(secretsRoot(cfg), "gws");
   const clientPath = join(gwsDir, "oauth-client.json");
   const secretsPath = join(secretsRoot(cfg), "secrets.json");
@@ -103,10 +121,10 @@ export function gwsOauthRouter(
     const secrets = readSecrets(secretsPath);
     const agents = gwsAgents().map((a) => {
       const secretValue = secrets[a.id]?.[PLUGIN_ID]?.[SECRET_KEY] ?? "";
-      const managed = secretValue === credsPath(a.id);
+      const signedIn = secretValue === credsPath(a.id);
       let email: string | null = null;
       let scopes: string[] = [];
-      if (managed) {
+      if (signedIn) {
         try {
           const account = JSON.parse(
             readFileSync(accountPath(a.id), "utf8"),
@@ -117,14 +135,7 @@ export function gwsOauthRouter(
           // account.json is display-only; absence is fine
         }
       }
-      return {
-        agentId: a.id,
-        name: a.name,
-        signedIn: secretValue.length > 0,
-        managed,
-        email,
-        scopes,
-      };
+      return { agentId: a.id, name: a.name, signedIn, email, scopes };
     });
     return c.json({
       client: {
@@ -166,6 +177,7 @@ export function gwsOauthRouter(
     }
     const body = (await c.req.json().catch(() => null)) as {
       redirectUri?: string;
+      returnTo?: string;
     } | null;
     if (!body?.redirectUri) {
       return c.json({ error: "expected { redirectUri }" }, 400);
@@ -188,6 +200,7 @@ export function gwsOauthRouter(
     pending.set(nonce, {
       agentId,
       redirectUri: body.redirectUri,
+      returnTo: typeof body.returnTo === "string" ? body.returnTo : undefined,
       expiresAt: now + PENDING_TTL_MS,
     });
     const url =
@@ -205,16 +218,22 @@ export function gwsOauthRouter(
     return c.json({ url });
   });
 
-  r.get("/callback", async (c) => {
-    const fail = (msg: string) => {
-      log.warn({ msg }, "gws oauth sign-in failed");
-      return c.redirect(`/settings?gwsError=${encodeURIComponent(msg)}`);
-    };
+  const withParam = (base: string, key: string, value: string) =>
+    `${base}${base.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(value)}`;
+  const landing = (entry: PendingSignIn | undefined) =>
+    entry?.returnTo ??
+    (entry ? `/agents/${entry.agentId}/settings` : "/settings");
+
+  cb.get("/callback", async (c) => {
     const state = c.req.query("state") ?? "";
     const entry = pending.get(state);
     pending.delete(state);
+    const fail = (msg: string) => {
+      log.warn({ msg }, "gws oauth sign-in failed");
+      return c.redirect(withParam(landing(entry), "gwsError", msg));
+    };
     if (!entry || entry.expiresAt < Date.now()) {
-      return fail("sign-in expired or unknown — start again from Settings");
+      return fail("sign-in expired or unknown — start again from the agent's settings");
     }
     const oauthError = c.req.query("error");
     if (oauthError) return fail(`Google returned: ${oauthError}`);
@@ -251,8 +270,8 @@ export function gwsOauthRouter(
       );
     }
 
-    // The exact shape `gws auth export --unmasked` produces — what the gws
-    // CLI accepts via GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE.
+    // The standard Google `authorized_user` shape the gws CLI accepts via
+    // GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE.
     const credentials = {
       client_id: client.clientId,
       client_secret: client.clientSecret,
@@ -281,7 +300,7 @@ export function gwsOauthRouter(
     setSecretValue(secretsPath, entry.agentId, PLUGIN_ID, SECRET_KEY, path);
     await am.reloadAgent(entry.agentId);
     log.info({ agentId: entry.agentId, email }, "gws oauth sign-in complete");
-    return c.redirect("/settings?gws=signed-in");
+    return c.redirect(withParam(landing(entry), "gws", "signed-in"));
   });
 
   r.delete("/:agentId", async (c) => {
@@ -312,7 +331,7 @@ export function gwsOauthRouter(
     return c.json({ ok: true });
   });
 
-  return r;
+  return { api: r, callback: cb };
 }
 
 /** The agent's `gws` plugin config `oauthScopes` (comma-separated), from
