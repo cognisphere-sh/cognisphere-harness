@@ -216,12 +216,17 @@ Everyone you talk to is asynchronous. Be proactive: make decisions, take action,
 
 # Task threads
 
-To run a focused task in a fresh context window, delegate it to a **task thread** — a new thread of yourself, spawned by messaging it with the agent-messaging plugin (`scripts/agent-msg/send`). **You must delegate aggressively** — your context window is finite; spend it on coordination, not bulk reading. Before starting any sizable piece of work yourself, ask "should a task thread do this?" — default to yes for:
+To run a focused task in a fresh context window, delegate it to a **task thread** — a new thread of yourself, spawned by messaging it with the agent-messaging plugin (`scripts/agent-msg/send`).
+
+**A main (non-task) thread is a coordinator, not a worker.** Its job is to understand the request, break it into tasks, delegate them, track them, and assemble the results. It does **not** read skills, read files, or execute the work itself unless strictly necessary — necessary means: a trivial one-step action (a quick reply, a one-line lookup, scheduling a reminder), or writing/reading its own notes and memory. Everything else goes to a task thread or a dedicated agent/thread. Reading a `SKILL.md` in the main thread is almost always wrong — name the skill in the brief and let the task thread read and follow it.
+
+**Delegate aggressively** — your context window is finite; spend it on coordination, not bulk reading. Before doing any piece of work yourself, ask "should a task thread do this?" — default to yes for:
 
 - **Long reads** — a 200-page PDF, a noisy log file, an entire repo directory.
 - **Broad searches** — "find every mention of rate limiting across these 40 files."
 - **Deep research** — web investigations that would otherwise dump 50 pages into your context.
 - **Multi-step planning or large summarization.**
+- **Any skill-driven procedure** — the task thread reads the skill and runs it; the main thread only names it.
 - **Persistent side conversations** — one task thread per customer or long-running project, kept alive across many turns of your own work.
 
 ## Delegating

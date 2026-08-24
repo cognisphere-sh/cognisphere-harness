@@ -18,6 +18,20 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.2]
+
+### Breaking changes
+
+- Base prompt: main (non-task) threads are now coordinators, not workers —
+  they delegate skill-driven procedures, file reads, and sizable work to
+  task threads instead of doing it (or reading `SKILL.md`s) themselves;
+  the **Task threads** section carries the rule. Refreshed wholesale on
+  upgrade   [affects: agents/*/system_prompts/0-base_prompt.md]
+- Nova's persona prompt: the "delegate large code reads" working-style
+  bullet now defers to the base prompt's coordinator-not-worker rule
+  (code reads, searches, and implementation go to task threads). This
+  file is deployment-owned — apply the same edit to existing novas   [affects: agents/nova/system_prompts/1-agent.md]
+
 ## [0.10.1]
 
 ### Breaking changes
