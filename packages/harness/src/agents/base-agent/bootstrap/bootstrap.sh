@@ -112,14 +112,18 @@ fi
 
 # ── 3. pi-coding-agent (npm global) ───────────────────────────────────
 # Provides the `pi` binary that the harness runner spawns (`pi --mode rpc`).
-if command -v pi >/dev/null 2>&1; then
-  log "pi-coding-agent already installed ($(command -v pi))"
+# Pinned to the version the harness was tested against — keep in sync with
+# `@earendil-works/pi-coding-agent` in packages/harness/package.json.
+PI_VERSION="${PI_VERSION:-0.84.4}"
+installed_pi="$(pi --version 2>/dev/null || true)"
+if [ "$installed_pi" = "$PI_VERSION" ]; then
+  log "pi-coding-agent $PI_VERSION already installed ($(command -v pi))"
 elif command -v npm >/dev/null 2>&1; then
-  log "installing @earendil-works/pi-coding-agent via npm..."
-  npm install -g @earendil-works/pi-coding-agent \
-    || warn "npm install -g @earendil-works/pi-coding-agent failed"
+  log "installing @earendil-works/pi-coding-agent@$PI_VERSION via npm (found: ${installed_pi:-none})..."
+  npm install -g "@earendil-works/pi-coding-agent@$PI_VERSION" \
+    || warn "npm install -g @earendil-works/pi-coding-agent@$PI_VERSION failed"
 else
-  warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install @earendil-works/pi-coding-agent by hand"
+  warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install @earendil-works/pi-coding-agent@$PI_VERSION by hand"
 fi
 
 # ── 4. agent-browser (npm global) + its Chrome build ──────────────────

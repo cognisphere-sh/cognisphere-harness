@@ -18,6 +18,51 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.1]
+
+### Breaking changes
+
+- **`bootstrap.sh` pins the global `pi`.** It previously installed
+  `@earendil-works/pi-coding-agent` unpinned and only when `pi` was
+  missing, so deployed hosts ran whatever npm resolved at first boot.
+  It now compares `pi --version` to `PI_VERSION` (0.84.4) and installs
+  that exact version on mismatch, every agent start. Reseed from the
+  base agent; no operator action beyond that.
+  [affects: agents/*/bootstrap/bootstrap.sh]
+
+### Changed
+
+- `home-template/docs/base-harness/README.md`: documents the pinned-`pi`
+  behaviour of `bootstrap.sh` (refreshed wholesale on upgrade).
+- **pi upgraded to 0.84.4** (`@earendil-works/pi-ai` +
+  `@earendil-works/pi-coding-agent`, from 0.84.1). No harness code
+  changes were required: the `pi --mode rpc` flag set, the RPC events the
+  harness consumes, the session JSONL format (`CURRENT_SESSION_VERSION`
+  still 3), pi-ai's `KnownProvider` union (mirrored in
+  `core/models-catalog.ts`, verified identical) and the `ExtensionAPI` /
+  `ModelRuntime` / `readStoredCredential` / `getAgentDir` surfaces are all
+  unchanged. Verified `pi --mode rpc` on the bundled 0.84.3+ runtime still
+  loads the base agent's `.ts` extensions via `-e` (jiti is now
+  lazy-loaded). Relevant upstream behaviour changes, all favourable:
+  0.84.2/0.84.4 fixed `pi.sendMessage(..., { triggerTurn: false })`
+  placement so `context-meta`'s mid-run checkpoints and
+  `skill-update-notice`'s notices land after the turn's tool results
+  instead of between a tool call and its result; 0.84.4 also runs
+  threshold auto-compaction between tool execution and the next LLM call
+  (so `compaction_start`/`compaction_end` can now arrive mid-run, not only
+  in prompt preflight — handled by the RPC client change below); 0.84.3
+  fixed threshold compaction being skipped when a provider omits usage.
+
+### Fixed
+
+- **RPC prompt ack no longer times out during auto-compaction.** pi runs
+  threshold compaction in the prompt's preflight, before acking the prompt
+  frame, and summarizing a large session can take minutes — the harness's
+  60 s ack timeout then failed the batch repeatedly. `PiRpcClient` now
+  suspends pending frame timeouts on `compaction_start` and re-arms them on
+  `compaction_end`, and logs both at info with `reason` and
+  `tokensBefore` / `estimatedTokensAfter` (`docs/server.md` §4.7).
+
 ## [0.11.0]
 
 ### Changed

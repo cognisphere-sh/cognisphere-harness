@@ -61,7 +61,12 @@ export class PiRpcClient {
   private stderrBuf = "";
   private pending = new Map<
     string,
-    { resolve: (r: RpcResponse) => void; reject: (e: Error) => void }
+    {
+      resolve: (r: RpcResponse) => void;
+      reject: (e: Error) => void;
+      arm: () => void;
+      disarm: () => void;
+    }
   >();
   private nextId = 1;
   private agentEndHandler: ((messages: PiMessage[]) => void) | undefined;
@@ -209,24 +214,35 @@ export class PiRpcClient {
     timeoutMs: number,
   ): Promise<RpcResponse> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`pi did not ack rpc frame within ${timeoutMs}ms`));
-      }, timeoutMs);
+      let timer: NodeJS.Timeout | undefined;
+      const disarm = () => {
+        clearTimeout(timer);
+        timer = undefined;
+      };
+      const arm = () => {
+        disarm();
+        timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`pi did not ack rpc frame within ${timeoutMs}ms`));
+        }, timeoutMs);
+      };
       this.pending.set(id, {
         resolve: (r) => {
-          clearTimeout(timer);
+          disarm();
           resolve(r);
         },
         reject: (e) => {
-          clearTimeout(timer);
+          disarm();
           reject(e);
         },
+        arm,
+        disarm,
       });
+      arm();
       try {
         this.writeFrame(frame);
       } catch (err) {
-        clearTimeout(timer);
+        disarm();
         this.pending.delete(id);
         reject(err as Error);
       }
@@ -286,6 +302,35 @@ export class PiRpcClient {
     }
     if (p.type === "extension_ui_request") {
       this.handleExtensionUi(p as ExtensionUiRequest);
+      return;
+    }
+    // Pi runs threshold compaction in prompt preflight, before acking the
+    // prompt frame. Summarization can take minutes, so suspend pending
+    // timeouts for its duration — pi guarantees the ack follows
+    // compaction_end (success, abort or error → success:false response).
+    if (p.type === "compaction_start") {
+      this.log.info({ reason: (p as { reason?: string }).reason }, "pi compaction start");
+      for (const w of this.pending.values()) w.disarm();
+      return;
+    }
+    if (p.type === "compaction_end") {
+      const e = p as {
+        reason?: string;
+        aborted?: boolean;
+        errorMessage?: string;
+        result?: { tokensBefore?: number; estimatedTokensAfter?: number } | null;
+      };
+      this.log.info(
+        {
+          reason: e.reason,
+          aborted: e.aborted,
+          errorMessage: e.errorMessage,
+          tokensBefore: e.result?.tokensBefore,
+          estimatedTokensAfter: e.result?.estimatedTokensAfter,
+        },
+        "pi compaction end",
+      );
+      for (const w of this.pending.values()) w.arm();
       return;
     }
   }

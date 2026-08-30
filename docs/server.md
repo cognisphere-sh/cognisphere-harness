@@ -673,7 +673,13 @@ newline-delimited.
   responding. `sendPrompt` additionally times out after 60 s if pi never
   acks the prompt frame (pi acks immediately; a missing ack means a wedged
   child) — the batch then fails and the runner tears the child down instead
-  of holding the worker slot forever.
+  of holding the worker slot forever. Exception: pi runs threshold
+  compaction in the prompt's preflight, *before* acking, and summarizing a
+  large session can take minutes. `compaction_start` therefore suspends
+  every pending frame's timeout and `compaction_end` re-arms the full 60 s
+  (pi guarantees the ack follows `compaction_end` — on error it's a
+  `success: false` response, which fails the batch as usual). Both events
+  are logged at info with `reason` and `tokensBefore` / `estimatedTokensAfter`.
 
 ### 4.8 AgentRunner — `runner.ts`
 
@@ -1506,7 +1512,10 @@ pyenv-style ergonomic default.
 **Decision**: `startAgent` runs the agent's `bootstrap/bootstrap.sh`
 (`runBootstrap`, cwd = agent dir) on every start, after spec validation
 and before the runner is constructed, so `.venv` and system deps are
-provisioned before the first spawn. It's awaited but never sinks the
+provisioned before the first spawn. It also pins the global `pi` binary:
+if `pi --version` differs from the script's `PI_VERSION` (the version the
+harness was tested against; bump it with the package.json dep), it runs
+`npm install -g @earendil-works/pi-coding-agent@<ver>`. It's awaited but never sinks the
 agent: spawn errors / non-zero exits are logged and tolerated (a prior
 `.venv` may still be usable), and it's a no-op when the agent ships no
 `bootstrap/bootstrap.sh`.

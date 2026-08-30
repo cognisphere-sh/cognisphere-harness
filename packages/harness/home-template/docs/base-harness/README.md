@@ -93,7 +93,8 @@ plugin config, secrets, and model providers. Login users live in
   agent (`agent/` scope is yours; `<plugin-id>/` scopes are seeded by
   plugins and overwritten on every start).
 - `bootstrap/bootstrap.sh` — runs on every agent start; provisions the
-  agent's `.venv` and system deps.
+  agent's `.venv`, system deps, and the pinned `pi` version (installs or
+  upgrades/downgrades the global `pi` to match; override with `PI_VERSION`).
 
 A **thread** is one conversation. `threadIdStrategy` controls how inbound
 messages map to threads (one global thread, one per plugin, or one per
