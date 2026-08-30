@@ -24,7 +24,10 @@ $HAS_APP && UNITS+=("$NAME-app.service")
 
 # Materialize the deploy `config` into the files the stack reads:
 #   harness/.secrets/users.json — operator console sign-in
-#   app/.env.local              — harness login + DOMAIN/PORT/HARNESS_URL (when app/ exists)
+#   harness/.secrets/app-secret — app→harness bearer (generated once, reused)
+#   app/.env.local              — APP_USER/APP_PASS (the app's default login, same pair),
+#                                 APP_SESSION_SECRET (app's own cookie key, generated once),
+#                                 HARNESS_APP_SECRET, DOMAIN/PORT/HARNESS_URL (when app/ exists)
 # `config` is the single source of truth; both files are gitignored + regenerated.
 # Blank APP_PASS = generated once, then REUSED from the existing users.json so a
 # blank config doesn't churn the password across restarts. A tiny node writer
@@ -49,6 +52,13 @@ const user = E.APP_USER;
 const pass = E.APP_PASS || old?.users?.[0]?.password || crypto.randomBytes(12).toString("hex");
 const write600 = (p, s) => { fs.writeFileSync(p, s); fs.chmodSync(p, 0o600); };
 write600(usersPath, JSON.stringify({ users: [{ username: user, password: pass }] }, null, 2) + "\n");
+
+// App→harness bearer secret. The harness generates this file on first boot
+// too, but the app must have it before both come up, so mint it here and
+// let the harness pick it up. Same format the harness writes (hex, 0600).
+const appSecretPath = path.join(E.ROOT, "harness/.secrets/app-secret");
+let appSecret = ""; try { appSecret = fs.readFileSync(appSecretPath, "utf8").trim(); } catch {}
+if (!appSecret) { appSecret = crypto.randomBytes(24).toString("hex"); write600(appSecretPath, appSecret + "\n"); }
 
 // ---- artifacts plugin (opt-in: blank ARTIFACTS_AGENT = not wired) ----------
 // The app serves /public/artifacts/* and /private/artifacts/* and proves a
@@ -80,9 +90,15 @@ if (agent) {
 }
 
 if (E.HAS_APP === "true") {
-  write600(path.join(E.ROOT, "app/.env.local"),
+  const envPath = path.join(E.ROOT, "app/.env.local");
+  // The app signs its own session cookie (independent of the console's
+  // pi_sid); keep the key stable across restarts so sessions survive.
+  let oldEnv = ""; try { oldEnv = fs.readFileSync(envPath, "utf8"); } catch {}
+  const sessionSecret = oldEnv.match(/^APP_SESSION_SECRET=(\S+)/m)?.[1] || crypto.randomBytes(24).toString("hex");
+  write600(envPath,
     "# Generated from ../config by scripts/server.sh — do not hand-edit.\n" +
-    `HARNESS_USER=${user}\nHARNESS_PASS=${pass}\nDOMAIN=${E.DOMAIN}\nPORT=${E.APP_PORT}\n` +
+    `APP_USER=${user}\nAPP_PASS=${pass}\nAPP_SESSION_SECRET=${sessionSecret}\n` +
+    `HARNESS_APP_SECRET=${appSecret}\nDOMAIN=${E.DOMAIN}\nPORT=${E.APP_PORT}\n` +
     `HARNESS_URL=http://127.0.0.1:${E.HARNESS_PORT}\n` + artifactsEnv);
 }
 console.error(`>> operator login: ${user} / ${pass}`);

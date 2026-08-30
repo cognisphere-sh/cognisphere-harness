@@ -12,11 +12,19 @@ Contract with the deploy scripts:
 - **Honor `PORT`** (set to `APP_PORT` from `../config`). With Next.js,
   `next start` reads it natively.
 - **Reach the harness at `HARNESS_URL`** (`http://127.0.0.1:<HARNESS_PORT>`).
-  `scripts/server.sh secrets` writes `app/.env.local` with `HARNESS_USER`,
-  `HARNESS_PASS`, `HARNESS_URL`, `DOMAIN`, and `PORT` from `../config`.
-- **Proxy `/api/*`** (and `/webhook/*` if the app fronts plugin webhooks)
-  same-origin to `HARNESS_URL` — with Next.js, `rewrites()` in
-  `next.config.ts`. No separate BFF needed.
+  `scripts/server.sh secrets` writes `app/.env.local` with `APP_USER`,
+  `APP_PASS`, `APP_SESSION_SECRET`, `HARNESS_APP_SECRET`, `HARNESS_URL`,
+  `DOMAIN`, and `PORT` from `../config`.
+- **Own your user auth.** The app and the harness console have independent
+  session tokens; the harness never sees your users' sessions. Start from
+  [`auth-routes/`](auth-routes/README.md) — username/password from `config`
+  and an app-minted cookie by default, with `getUser()` as the single seam
+  to swap in Clerk, Supabase Auth, NextAuth, …
+- **Call the harness server-to-server** with
+  `Authorization: Bearer $HARNESS_APP_SECRET` and `X-App-User: <your user id>`
+  (`auth-routes/lib/harness.ts`). A bearer request has full operator access:
+  gate on `getUser()` and allowlist what your route handlers proxy; never
+  expose the secret or rewrite `/api/*` to the harness for the browser.
 
 In production, nginx serves the app on `$DOMAIN` and the harness operator
 console on `$CONSOLE_DOMAIN` (see `scripts/setup-server.sh`).
@@ -35,38 +43,32 @@ build — copy the tree into your app and set the env, as described in
 The per-agent Google sign-in normally lives on the harness console (the gws
 plugin card on the agent's Settings tab), but this app can host the same
 button. The harness's OAuth callback is public and authenticated by a
-single-use `state` nonce, so the flow works from this origin — `/api/*` is
-already proxied to the harness (see the contract above).
+single-use `state` nonce, so the flow works from this origin — rewrite just
+`/api/gws/oauth/callback` to `HARNESS_URL` in `next.config.ts` (Google
+redirects the browser there).
 
-Server-side route handler (never expose `HARNESS_USER`/`HARNESS_PASS` to the
-browser):
+Server-side route handler (behind your own auth gate — never expose
+`HARNESS_APP_SECRET` to the browser):
 
 ```ts
 // app/api/google-signin/route.ts
 export async function GET(req: Request) {
   const harness = process.env.HARNESS_URL!;
   const origin = new URL(req.url).origin;
-  // 1. log in to the harness with the credentials from .env.local
-  const login = await fetch(`${harness}/api/auth/login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      username: process.env.HARNESS_USER,
-      password: process.env.HARNESS_PASS,
-    }),
-  });
-  const cookie = login.headers.get("set-cookie") ?? "";
-  // 2. start the sign-in; returnTo is where the user lands afterwards
+  // 1. start the sign-in; returnTo is where the user lands afterwards
   const start = await fetch(`${harness}/api/gws/oauth/<agentId>/start`, {
     method: "POST",
-    headers: { "content-type": "application/json", cookie },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.HARNESS_APP_SECRET}`,
+    },
     body: JSON.stringify({
       redirectUri: `${origin}/api/gws/oauth/callback`,
       returnTo: "/settings",
     }),
   });
   const { url } = (await start.json()) as { url: string };
-  // 3. send the browser to Google's consent screen
+  // 2. send the browser to Google's consent screen
   return Response.redirect(url, 302);
 }
 ```

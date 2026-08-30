@@ -18,6 +18,39 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0]
+
+### Breaking changes
+
+- **App→harness auth is now a bearer secret, not the operator login.**
+  `scripts/server.sh secrets` no longer writes `HARNESS_USER`/`HARNESS_PASS`
+  into `app/.env.local`; it writes the same pair as `APP_USER`/`APP_PASS`
+  (the app's *own* default sign-in), an `APP_SESSION_SECRET` for the app's
+  own cookie (generated once, reused from the previous `.env.local`), and
+  mints `harness/.secrets/app-secret` (hex, 0600, reused across restarts —
+  the harness also generates it on first boot if absent) written as
+  `HARNESS_APP_SECRET`. The app and the harness console mint independent
+  session tokens. New reference tree `app/auth-routes/` (refreshed on
+  upgrade like `artifacts-routes/`): config-credential login + `app_sid`
+  cookie, `lib/harness.ts` bearer client, and `getUser()` as the single
+  seam to swap in Clerk/Supabase/NextAuth. `/api/*`, `/admin/*` and
+  `GET /api/auth/me` accept `Authorization: Bearer <secret>` alongside the
+  `pi_sid` cookie; `X-App-User: <id>` (trusted only with a valid bearer)
+  sets the harness-side `user`, else `"app"`. Apps that logged in with
+  `HARNESS_USER`/`HARNESS_PASS` or forwarded the browser's `pi_sid`
+  cookie to the harness should switch to the bearer + own their user auth;
+  webhook plugins that verified a cookie via `/api/auth/me` verify the
+  bearer the same way by forwarding `authorization`/`x-app-user` instead.
+  Recipe in `app/auth-routes/README.md`.
+  [affects: scripts/server.sh, config.example, app/README.md, app/auth-routes/**, docs/base-harness/README.md, .claude/skills/cognisphere-upgrade/SKILL.md]
+
+### Changed
+
+- `docs/api.md` §1/§3, `docs/server.md` §3 and
+  `docs/distribution-and-deployment.md` document the app bearer,
+  `.secrets/app-secret`, and the new `app/.env.local` keys. The upgrade
+  skill now refreshes `app/auth-routes/` and drift-checks the home's copies.
+
 ## [0.11.1]
 
 ### Breaking changes

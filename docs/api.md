@@ -43,20 +43,32 @@ three surfaces:
   `/settings`, `/settings/*`, `/agents/*` are served as `index.html`
   so the client-side router can pick up.
 
-**Auth gating** (set up in `main.ts:42–60`):
+**Auth gating** (set up in `main.ts:83–107`):
 
 | Surface | Auth? |
 |---|---|
 | `/healthz` | Public |
 | `/api/auth/*` | Public (login itself can't require auth) |
-| `/api/*` (other) | `requireAuth` middleware — 401 on bad cookie |
-| `/admin/*` | `requireAuth` middleware — 401 on bad cookie |
+| `/api/*` (other) | `requireAuth` middleware — 401 without a valid cookie or app bearer |
+| `/admin/*` | `requireAuth` middleware — 401 without a valid cookie or app bearer |
 | `/webhook/*` | Per-plugin — external services (Telegram, Gmail push, …) hit this surface with their own signature schemes; the internal `agent-messaging` inbox requires the shared `X-Webhook-Secret` (see §10) |
 | Static SPA pages | None — the page shell is public; the SPA itself calls `/api/*` and gets 401 → redirected to `/login` |
 
-`requireAuth` reads the `pi_sid` cookie, validates the HMAC-signed
-session payload, and sets `c.var.user = username` on success. Failures
-return `{ "error": "unauthenticated" }` with HTTP 401.
+`requireAuth` accepts either credential, cookie first:
+
+- **Operator session** — the `pi_sid` cookie, an HMAC-signed session
+  payload issued by `POST /api/auth/login`. `user` = the username.
+- **App bearer** — `Authorization: Bearer <secret>` where the secret is the
+  contents of `<harnessRoot>/.secrets/app-secret` (hex, generated on first
+  boot, 0600; `scripts/server.sh secrets` mints it earlier and hands it to
+  the app as `HARNESS_APP_SECRET`). This is how a frontend app that owns
+  its own user auth (Clerk, Supabase, …) authenticates its *server* to the
+  harness. `user` = the `X-App-User` header if present (an opaque id the
+  app vouches for; ignored without a valid bearer), else `"app"`. A valid
+  bearer has full operator access — the app must gate its own routes.
+
+Failures return `{ "error": "unauthenticated" }` with HTTP 401. Nothing
+in the harness reads `c.var.user` today; it is set for plugins/logs.
 
 ---
 
@@ -121,8 +133,11 @@ token elsewhere are still valid until they expire (or until
 ### `GET /api/auth/me`
 
 Always 200. Returns `{ "user": "<username>" }` for an authenticated
-session, otherwise `{ "user": null }`. Useful for the SPA to decide
-between rendering the login form and the app shell.
+session, `{ "user": "<X-App-User or app>" }` for a valid app bearer,
+otherwise `{ "user": null }`. Useful for the SPA to decide between
+rendering the login form and the app shell, and for webhook plugins to
+verify an app request by forwarding its `authorization`/`x-app-user`
+(or `cookie`) headers here.
 
 ---
 

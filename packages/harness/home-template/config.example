@@ -12,9 +12,12 @@ HARNESS_PORT=3142    # cognisphere backend + operator console — nginx proxies 
 NODE_MAJOR=22        # Node LTS to install
 RUN_USER=            # OS user the services run as (blank = invoking sudo user)
 
-# Operator login. scripts/server.sh secrets writes these into
-# harness/.secrets/users.json (the harness user) and, when app/ exists,
-# app/.env.local (HARNESS_USER/HARNESS_PASS for the app's harness client).
+# Login. scripts/server.sh secrets writes this pair to harness/.secrets/
+# users.json (operator console) and, when app/ exists, to app/.env.local as
+# APP_USER/APP_PASS — the app's default sign-in (app/auth-routes/). The two
+# sign-ins share the credentials but mint independent session cookies; the
+# app authenticates to the harness with HARNESS_APP_SECRET (harness/.secrets/
+# app-secret), so it can swap its sign-in for Clerk/Supabase/… at any time.
 APP_USER=operator    # username to sign in with
 APP_PASS=            # password (blank = a random one is generated once and reused)
 

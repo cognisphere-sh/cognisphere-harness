@@ -153,6 +153,7 @@ and the AWS deploy scripts — the CLI derives `COGNISPHERE_ROOT_DIR` = the home
 │   ├── models.json                   per-provider credentials + enabled models
 │   ├── users.json                    plaintext login credentials
 │   ├── session-key                   32-byte HMAC key for signed session cookies
+│   ├── app-secret                    hex bearer for app→harness auth (api.md §1)
 │   └── gws/                          web Google sign-in (api/gws-oauth.ts)
 │       ├── oauth-client.json             operator's Google OAuth client id/secret
 │       └── <agent-id>/

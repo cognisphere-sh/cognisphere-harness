@@ -121,6 +121,7 @@ diff -u  config.example "$PKG/home-template/config.example"
 diff -ru docs/base-harness/ "$PKG/home-template/docs/base-harness/"
 diff -ru .claude/skills/ "$PKG/skills/"
 [ -d app/artifacts-routes ] && diff -ru app/artifacts-routes/ "$PKG/home-template/app/artifacts-routes/"
+[ -d app/auth-routes ] && diff -ru app/auth-routes/ "$PKG/home-template/app/auth-routes/"
 ```
 
 Separate the differences into **upstream changes** (the refresh should bring
@@ -143,6 +144,7 @@ cp -R "$PKG/skills/." .claude/skills/
 # lives under app/ — refresh it whenever the home has it (or the plugin is
 # enabled on any agent), then do the drift check below.
 [ -d app/artifacts-routes ] && cp -R "$PKG/home-template/app/artifacts-routes/." app/artifacts-routes/
+[ -d app/auth-routes ] && cp -R "$PKG/home-template/app/auth-routes/." app/auth-routes/
 ```
 
 **4b-i. `app/artifacts-routes/` drift check.** That directory is a *template*:
@@ -159,6 +161,11 @@ diff -ru app/app/public/artifacts/ app/artifacts-routes/public/artifacts/
 diff -ru app/app/private/artifacts/ app/artifacts-routes/private/artifacts/
 ```
 
+Same for `app/auth-routes/` (copies at `app/lib/auth.ts`, `app/lib/harness.ts`,
+`app/app/api/auth/`, `app/app/login/page.tsx`) — a home that swapped
+`getUser()` for another provider keeps its version; only flag changes to
+`lib/harness.ts` and the header contract.
+
 A route that gained a security-relevant change upstream (auth checks, forwarded
 headers, the CSP pass-through) must be called out explicitly — a stale copy is
 how a private artifact ends up readable.
@@ -169,8 +176,8 @@ local edit is dropped only when the operator explicitly approves dropping it.
 
 **User-owned files are never refreshed:** `app/`, `docs/harness/`,
 `docs/app/`, `CLAUDE.md`, `config`, and everything under the harness data dir
-(that's what the breaking-change entries scope). The single exception inside
-`app/` is `app/artifacts-routes/`, which is harness-owned reference code — the
+(that's what the breaking-change entries scope). The exceptions inside
+`app/` are `app/artifacts-routes/` and `app/auth-routes/`, which are harness-owned reference code — the
 home's *copies* of it stay user-owned (step 4b-i). Inside `scripts/app/` only
 `README.md` is harness-owned (the `cp -R` refreshes it); the deployment's
 hook scripts and `config.example` there are user-owned and survive the copy

@@ -32,7 +32,7 @@ config.
 ├── app/                       ← your user-facing app (see app/README.md)
 └── harness/                   ← the harness data dir
     ├── harness.json           ← { version, timezone }
-    ├── .secrets/              ← secrets.json, models.json, users.json (gitignored)
+    ├── .secrets/              ← secrets.json, models.json, users.json, app-secret (gitignored)
     ├── agents/<id>/           ← one dir per agent (incl. the developer agent `nova`)
     └── plugins/<id>/          ← forked catalog plugins (shadow built-ins)
 ```
@@ -51,7 +51,9 @@ Run from the app home or `harness/` (`pnpm exec cognisphere …`):
 
 The web console (default `http://127.0.0.1:3142`) manages agents, threads,
 plugin config, secrets, and model providers. Login users live in
-`.secrets/users.json`.
+`.secrets/users.json`. A frontend app owns its own user auth and talks to
+the harness server-to-server with `Authorization: Bearer <.secrets/app-secret>`
+plus an optional `X-App-User` header (see `app/README.md`).
 
 ## Anatomy of an agent
 

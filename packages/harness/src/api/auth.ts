@@ -24,6 +24,13 @@ import type { Logger } from "../core/logger.js";
  * `<harnessRoot>/.secrets/session-key` on first boot, so sessions survive
  * restarts. Logout just clears the cookie; there is no server-side
  * revocation list — deleting `session-key` invalidates every session.
+ *
+ * App-to-harness auth: a frontend app that owns its own user auth (Clerk,
+ * Supabase, …) authenticates its *server* to the harness with the shared
+ * secret at `<harnessRoot>/.secrets/app-secret` (hex, generated on first
+ * boot) as `Authorization: Bearer <secret>`, and asserts the acting user
+ * with `X-App-User: <opaque id>` (defaults to "app"). The header is trusted
+ * only alongside a valid bearer. Rotate by deleting the file and restarting.
  */
 
 interface User {
@@ -45,13 +52,45 @@ const COOKIE_NAME = "pi_sid";
 export class AuthStore {
   private cache: UsersFile | null = null;
   private readonly secret: Buffer;
+  private readonly appSecret: string;
 
   constructor(
     private readonly filePath: string,
     private readonly keyPath: string,
+    private readonly appSecretPath: string,
     private readonly log: Logger,
   ) {
     this.secret = this.loadOrCreateKey();
+    this.appSecret = this.loadOrCreateAppSecret();
+  }
+
+  private loadOrCreateAppSecret(): string {
+    if (existsSync(this.appSecretPath)) {
+      const s = readFileSync(this.appSecretPath, "utf8").trim();
+      if (s.length < 32) {
+        throw new Error(
+          `app secret ${this.appSecretPath} is too short (${s.length} chars); expected at least 32`,
+        );
+      }
+      return s;
+    }
+    mkdirSync(dirname(this.appSecretPath), { recursive: true });
+    const s = randomBytes(24).toString("hex");
+    writeFileSync(this.appSecretPath, s + "\n", { mode: 0o600 });
+    this.log.info({ path: this.appSecretPath }, "auth: generated new app secret");
+    return s;
+  }
+
+  /** Resolve the acting user from a request: session cookie, else app bearer. */
+  resolveRequest(c: Context): string | null {
+    const fromCookie = this.resolveSession(getCookie(c, COOKIE_NAME));
+    if (fromCookie) return fromCookie;
+    const bearer = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!bearer) return null;
+    const a = Buffer.from(bearer, "utf8");
+    const b = Buffer.from(this.appSecret, "utf8");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+    return c.req.header("x-app-user")?.trim() || "app";
   }
 
   private loadOrCreateKey(): Buffer {
@@ -153,7 +192,12 @@ export class AuthStore {
 
 export function makeAuthStore(cfg: ServerConfig, log: Logger): AuthStore {
   const root = secretsRoot(cfg);
-  return new AuthStore(join(root, "users.json"), join(root, "session-key"), log);
+  return new AuthStore(
+    join(root, "users.json"),
+    join(root, "session-key"),
+    join(root, "app-secret"),
+    log,
+  );
 }
 
 /**
@@ -229,8 +273,7 @@ async function readHidden(rl: Interface, query: string): Promise<string> {
 
 export function requireAuth(auth: AuthStore): MiddlewareHandler {
   return async (c, next) => {
-    const token = getCookie(c, COOKIE_NAME);
-    const user = auth.resolveSession(token);
+    const user = auth.resolveRequest(c);
     if (!user) return c.json({ error: "unauthenticated" }, 401);
     c.set("user", user);
     await next();
@@ -279,8 +322,7 @@ export function authRouter(auth: AuthStore): Hono {
   });
 
   r.get("/me", (c) => {
-    const token = getCookie(c, COOKIE_NAME);
-    const user = auth.resolveSession(token);
+    const user = auth.resolveRequest(c);
     if (!user) return c.json({ user: null }, 200);
     return c.json({ user });
   });

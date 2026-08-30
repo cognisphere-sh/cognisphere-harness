@@ -74,13 +74,16 @@ init <name>` scaffolds it:
 ├── .claude/skills/            → agent skills (upgrade, create-plugin, create-skill), copied in by init
 ├── .agents/skills/               (same set — for non-Claude coding agents)
 ├── app/                       ← the user-facing app (placeholder README until you
-│   └── artifacts-routes/         add one; a Next.js app is the convention).
+│   ├── auth-routes/              add one; a Next.js app is the convention).
+│   └── artifacts-routes/         auth-routes/ = drop-in app-owned sign-in
+│                                 (config credentials by default, swappable for
+│                                 Clerk/Supabase) + the bearer harness client;
 │                                 artifacts-routes/ = drop-in public/protected
 │                                 routes for the `artifacts` plugin (§5)
 └── harness/                   ← the harness data dir — a workspace member that
     ├── package.json              depends on @cognisphere-sh/cognisphere-harness
     ├── harness.json            → { "version": "0.3.0", "timezone": "UTC" }
-    ├── .secrets/               → gitignored (secrets.json, models.json, users.json, session-key)
+    ├── .secrets/               → gitignored (secrets.json, models.json, users.json, session-key, app-secret)
     ├── agents/                 → forked from base-agent, edited freely, git-tracked
     │   └── nova/                 the developer agent, pre-created by init
     │                             (fixed, reserved name — §4)
@@ -304,7 +307,7 @@ platform dir's own `scripts/<platform>/config`:
 | `scripts/aws/setup.sh` | locally (admin AWS creds) | one-time provision: S3 bucket, key pair, IAM role + instance profile, security group, EC2 (latest Ubuntu via SSM), Elastic IP, `~/.ssh/config` entry; then remote-bootstraps `gh` + Claude Code and clones the repo. Re-runnable — resources are found by name and reused. |
 | `scripts/contabo/setup.sh` | locally (`cntb` + `jq`) | one-time provision: object storage + backup bucket, SSH-key secret, Cloud VPS (Ubuntu), `~/.ssh/config` entry; same remote bootstrap as AWS plus `ufw` (Contabo has no security groups). Re-runnable — resources are found by displayName/region and reused; **the first run places a paid monthly order**. Prints the four `BACKUP_*` values to paste into the root `config`. |
 | `scripts/setup-server.sh` | on the box, as root, once | apt deps (nginx, sqlite3, agent runtime libs, certbot), Node + pnpm, the GitHub Packages token into the run user's `~/.npmrc`, secrets, build, per-agent bootstrap, systemd units, nginx + HTTPS, backup cron. Re-runnable. Renaming `APP_NAME` is not handled — retire the previous name's units/nginx site/cron by hand before rerunning. |
-| `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json` + `app/.env.local`; `start`/`restart` are the same command (secrets + build + `systemctl restart`, which also starts stopped units), so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. `start`/`stop`/`restart` take an optional `app`\|`harness` target to bounce a single unit (`restart app` applies an app-only change without touching the harness); omit it for both. |
+| `scripts/server.sh` | on the box | day-to-day: `start\|stop\|restart\|status\|logs\|build\|harness\|dev\|secrets`. `secrets` materializes `config` into `harness/.secrets/users.json`, mints `harness/.secrets/app-secret` once, and writes `app/.env.local` (`APP_USER`, `APP_PASS`, `APP_SESSION_SECRET` — generated once and reused, `HARNESS_APP_SECRET`, `HARNESS_URL`, `DOMAIN`, `PORT`); `start`/`restart` are the same command (secrets + build + `systemctl restart`, which also starts stopped units), so the whole deploy loop is `git pull && sudo ./scripts/server.sh restart`. `start`/`stop`/`restart` take an optional `app`\|`harness` target to bounce a single unit (`restart app` applies an app-only change without touching the harness); omit it for both. |
 | `scripts/build.sh` | on the box (or locally) | `pnpm install --frozen-lockfile` + the app build (when `app/` exists). |
 | `scripts/aws/backup.sh` | cron (written by setup-server) | zips the whole home to S3 with consistent SQLite snapshots, prunes to `BACKUP_KEEP`. Reads the root `config` (the `BACKUP_*` keys), not `scripts/aws/config`. Provider-neutral despite the path: `BACKUP_S3_ENDPOINT` + keys point it at any S3-compatible store (Contabo). |
 
