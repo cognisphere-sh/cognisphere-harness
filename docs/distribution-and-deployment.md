@@ -8,6 +8,10 @@ publishing config (§7, §11), the app-home scaffold with its AWS deploy scripts
 This doc is the contract for how CogniSphere is packaged, installed, deployed,
 and upgraded. It supersedes the copy-the-codebase-per-deployment workflow.
 
+CogniSphere is licensed under the [MIT License](../LICENSE). The package declares
+`"license": "MIT"`, and `prepack` bundles the repository's `LICENSE` in the
+published package.
+
 ## Table of contents
 
 1. [Problem & key insight](#1-problem--key-insight)

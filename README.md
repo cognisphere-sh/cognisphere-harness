@@ -10,6 +10,7 @@
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Status: v0](https://img.shields.io/badge/status-v0%20preview-blue?style=for-the-badge)](docs/v0-deferred.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge)](#contributing)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
 </div>
 
@@ -318,3 +319,9 @@ update for which changes, the simplicity/surgical-changes bias, etc.).
 
 CogniSphere builds on the [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
 coding-agent runtime for the per-batch LLM loop.
+
+---
+
+## License
+
+CogniSphere is licensed under the [MIT License](LICENSE).

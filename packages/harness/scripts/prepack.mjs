@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // prepack — bundle the assets the published package needs but that live
 // outside the package dir in the monorepo: the built web UI (sibling `web`
-// package) and the repo-root CHANGELOG (read by `cognisphere upgrade`).
+// package), the repo-root CHANGELOG (read by `cognisphere upgrade`), and LICENSE.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -33,7 +33,11 @@ if (existsSync(changelog)) {
   console.log("[prepack] CHANGELOG.md bundled");
 }
 
-// 3. Bundle the harness-dir-facing agent skills so `cognisphere init` can copy
+// 3. Include the repository license in every published package.
+cpSync(resolve(pkgRoot, "..", "..", "LICENSE"), resolve(pkgRoot, "LICENSE"));
+console.log("[prepack] LICENSE bundled");
+
+// 4. Bundle the harness-dir-facing agent skills so `cognisphere init` can copy
 //    them into new harness dirs (.claude/skills/ + .agents/skills/).
 const skillsSrc = resolve(pkgRoot, "..", "..", ".claude", "skills");
 const skillsDst = resolve(pkgRoot, "skills");
