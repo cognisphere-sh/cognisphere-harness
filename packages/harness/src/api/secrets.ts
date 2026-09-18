@@ -26,9 +26,9 @@ import { applyMaskedPut, MASK, maskCredential } from "./credentials.js";
  *   secrets[agentId][bucketId][KEY] = maskedString
  *   schemas[agentId][bucketId]     = JsonSchema
  *
- * v0 stores plaintext on disk (HLD §15). Runtime exposes resolved values
- * to the pi child as env vars on every spawn, so a value change requires
- * a server restart to take effect — the UI surfaces this caveat.
+ * Stores plaintext on disk and exposes resolved values to pi as env vars.
+ * PUT invalidates the cache and requests a soft reload of affected agents;
+ * active batches drain before replacement runners use the new values.
  */
 
 type Bucket = Record<string, string>;

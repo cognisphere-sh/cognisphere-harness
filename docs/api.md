@@ -32,18 +32,18 @@ Everything is served by a single Node `http.Server`. Routes split into
 three surfaces:
 
 - **Hono routes** mounted in `main.ts`: `/healthz`, `/api/*`, `/admin/*`,
-  and the static SPA shell (when `packages/web/dist` exists).
+  and the static SPA shell when a web build exists and headless mode is off.
 - **Raw `IncomingMessage`/`ServerResponse` dispatch** for
   `/webhook/<agentId>/<pluginId>/*`. The plugin's `handleHttpRequest`
   expects raw req/res; the harness splices a `request` listener onto
   the underlying `http.Server` that intercepts the prefix, strips it,
   and delegates to the plugin. Hono runs only when no `/webhook/`
   match.
-- **The SPA** (only when `packages/web/dist` is present): `/`, `/login`,
+- **The SPA** (bundled `dist-web/`, or monorepo `packages/web/dist`, unless headless): `/`, `/login`,
   `/settings`, `/settings/*`, `/agents/*` are served as `index.html`
   so the client-side router can pick up.
 
-**Auth gating** (set up in `main.ts:83–107`):
+**Auth gating** (set up in `core/main.ts`):
 
 | Surface | Auth? |
 |---|---|
@@ -51,7 +51,7 @@ three surfaces:
 | `/api/auth/*` | Public (login itself can't require auth) |
 | `/api/*` (other) | `requireAuth` middleware — 401 without a valid cookie or app bearer |
 | `/admin/*` | `requireAuth` middleware — 401 without a valid cookie or app bearer |
-| `/webhook/*` | Per-plugin — external services (Telegram, Gmail push, …) hit this surface with their own signature schemes; the internal `agent-messaging` inbox requires the shared `X-Webhook-Secret` (see §10) |
+| `/webhook/*` | Per-plugin — handlers own authentication. The `agent-messaging` inbox requires shared `X-Webhook-Secret`; artifacts use route-specific access checks. Telegram and GWS currently poll instead of receiving webhooks. |
 | Static SPA pages | None — the page shell is public; the SPA itself calls `/api/*` and gets 401 → redirected to `/login` |
 
 `requireAuth` accepts either credential, cookie first:
@@ -147,7 +147,7 @@ Implemented in `packages/harness/src/api/agents.ts`. All routes require auth.
 
 `agents.list()` / `am.get()` / runtime DB methods are the data source;
 mutations route through `AgentManager` lifecycle calls described in
-[`server.md` §4.9](./server.md#49-agentmanager--agent-managerts).
+[server lifecycle reference](server.md#5-runner-and-rpc-hooks).
 
 ### `GET /api/agents`
 
@@ -242,8 +242,7 @@ reload time. If the new config fails validation, the plugin moves to
 runtime rejection is surfaced in the next `/api/agents/:id/plugins`
 response.
 
-`reloadAgent` uses the soft-swap protocol (see [`server.md`
-§5.5](./server.md#55-soft-reload-reloadagent)) — zero interruption to
+`reloadAgent` uses the soft-swap protocol (see [agent lifecycle](system-design.md#agent-lifecycle)) — zero interruption to
 in-flight batches. `reloadPlugin` bounces the single plugin in place
 without touching the runner.
 
@@ -396,16 +395,14 @@ block (e.g. errored before the API returned) are skipped silently.
 message seen across the thread's session files (same shape as the
 threads-list field).
 
-### Events stream
+### Event history
 
-The agent's queue, dead-letter, and audit log are unified into one
-`events` table (one row per logical event). The UI's Events tab reads
-it through these endpoints.
+The `events` table stores one mutable lifecycle row per notification, including failed inputs. The UI polls these endpoints; this is not an SSE or WebSocket stream. The planned runtime stream belongs to the [sandbox design](design/sandbox.md#live-console-and-product-delivery).
 
 | Method | Path | Effect |
 |---|---|---|
 | GET    | `/api/agents/:id/events` | List events with filter / sort / pagination |
-| POST   | `/api/agents/:id/events/:rowId/requeue` | Reset a `status=failed` row back to `queued` (attempts=0, error cleared) |
+| POST   | `/api/agents/:id/events/:rowId/requeue` | Requeue a failed row as a warned resend (`attempts=1`, error and entry link cleared) |
 | POST   | `/api/agents/:id/events/:rowId/status` | Force a non-in-flight row to a new status (`queued`, `done`, `failed`, `cancelled`) |
 | DELETE | `/api/agents/:id/events/:rowId` | Permanently drop a non-in-flight row |
 
@@ -459,10 +456,10 @@ JSONL: `<agentDir>/sessions/<threadId>/<piSessionId>.jsonl`, with
 `piEntryId` is written **in real time** as the message is delivered to the
 model (via a harness-owned pi extension), so it is populated while the row
 is still `in_flight` and on rows whose batch later failed — it is `null`
-only for a row that never reached the model. Multiple rows in the same
+when no entry link was captured or an operator cleared it for resend. Multiple rows in the same
 prompt share a single `piEntryId` (the runner concatenates queued events
 into one prompt); each row added via live steer gets its own. A set
-`piEntryId` also marks the row as already-delivered: if it is later
+`piEntryId` also marks the row as already-delivered: if it is automatically
 requeued, the runner retries it in *continue* mode (a short nudge) rather
 than resending the original text.
 
@@ -471,20 +468,15 @@ UI can render a pager.
 
 Requeue returns `{ ok: true, id: <rowId> }` — the row id is preserved
 (no new row is created). It 404s if the target row does not exist or is
-not in `status=failed`. `piEntryId` is preserved, so a row that was
-delivered before it dead-lettered requeues in *continue* mode rather than
-resending its text.
+not in `status=failed`. The entry link is cleared and `attempts` becomes 1, so the next delivery resends original text with `Retry: true`. The session ID is retained.
 
 Status-set takes `{ "status": "queued" | "done" | "failed" | "cancelled" }`
-and returns `{ ok: true, status }`. Setting `queued` resets `attempts`
-and clears `error` (same effect as requeue), and likewise preserves
-`piEntryId`. `in_flight` cannot be set from the UI — it belongs to the
-runner.
+and returns `{ ok: true, status }`. Setting `queued` sets `attempts=1` and clears `error` and `piEntryId`, matching the warned-resend behavior above. `in_flight` cannot be set from the UI; it belongs to the runner.
 
 Delete returns `{ ok: true }`. Both delete and status-set 409 when the
 target row is currently `in_flight` (abort the batch first), 404 when
 the row does not exist. 503 when the agent has no `AgentDb` open (only
-possible briefly during shutdown).
+possible after early startup validation failure or during shutdown).
 
 ---
 
@@ -493,10 +485,7 @@ possible briefly during shutdown).
 Implemented in `packages/harness/src/api/files.ts`. Used by the web UI's
 file editor to browse the agent's directory and edit files in place.
 
-Every route validates that the resolved absolute path is contained
-within the agent's directory (`resolveSafe`); requests with `..`
-segments or absolute path values return 400 `"path escapes agent
-dir"`.
+Every route applies lexical path containment through `resolveSafe`: absolute paths and paths that normalize outside the agent directory are rejected. This does not resolve symlinks and is not a filesystem sandbox.
 
 `path` is always relative to the agent dir; `""` and `.` mean the
 root.
@@ -576,6 +565,10 @@ Multipart upload. Form field name is `file`. `dir` defaults to
 
 Recursive mkdir. Returns `{ "path": "<rel>" }`.
 
+### `DELETE /api/agents/:id/fs/path?path=<rel>`
+
+Deletes a file or recursively deletes a directory. Returns `{ "path": "<rel>", "isDir": true | false }`. Rejects deleting the agent root (400); missing paths return 404.
+
 ---
 
 ## 6. Secrets — `/api/secrets`
@@ -584,7 +577,7 @@ Implemented in `packages/harness/src/api/secrets.ts`. Both routes require
 auth.
 
 The wire and on-disk shapes are identical (bucketed under each agent;
-see [`server.md` §4.4](./server.md#44-secretsstore--secretsts)). The
+see [credential configuration](server.md#2-agent-configuration)). The
 reserved bucket id `agent` (`AGENT_BUCKET`) holds keys declared in
 `agent.json.secretsSchema`; other ids are plugin ids.
 
@@ -639,8 +632,7 @@ The write merges into the existing file, preserves the doc-header
 
 After saving, the route calls `am.reloadAgent(aid)` for every agent
 named in the body. `reloadAgent` invalidates the secrets cache and
-swaps in a fresh runner once active batches drain (see [`server.md`
-§5.5](./server.md#55-soft-reload-reloadagent)). Response:
+swaps in a fresh runner once active batches drain (see [agent lifecycle](system-design.md#agent-lifecycle)). Response:
 
 ```json
 { "ok": true, "restartRequired": false, "restarted": ["dr-renu"] }
@@ -851,7 +843,7 @@ Browser-driven sign-in for subscription providers (Anthropic Claude
 Pro/Max, OpenAI Codex). The server drives pi-ai's OAuth flow via
 pi-coding-agent's `ModelRuntime`; tokens land in pi's own
 `<piAgentDir>/auth.json` (default `~/.pi/agent/auth.json`), never in
-models.json. See `docs/server.md` §oauth-logins for the design
+models.json. See [credential configuration](server.md#2-agent-configuration) for the design
 rationale. All routes require auth. `:provider` must be a catalog entry
 with `oauth: true`, else 404.
 
@@ -1089,7 +1081,7 @@ Plugins access the loopback URL via `PluginInstanceContext.httpBaseUrl`
 (set only when the plugin declares `handleHttpRequest`). The agent's
 pi child sees the prefix as the env var `PI_WEBHOOK_BASE` and is
 expected to hit `${PI_WEBHOOK_BASE}/<pluginId>/<rest>` from `bash` /
-plugin CLI scripts. See [`server.md` §5.6](./server.md#56-plugin-script--in-process-plugin-loopback).
+plugin CLI scripts. See [plugin lifecycle](server.md#4-plugin-lifecycle).
 
 ---
 

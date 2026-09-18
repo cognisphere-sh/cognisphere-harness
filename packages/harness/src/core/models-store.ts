@@ -12,10 +12,9 @@
  *     }
  *   }
  *
- * v0: file-based, plaintext (HLD §15). Read on every `load()` so PUT
- * writes are immediately visible to subsequent agent starts. Edits to
- * the in-memory snapshot don't reach already-running agents — matches
- * the secrets store's restart-required model.
+ * File-based, plaintext. Read on every `load()` so PUT
+ * writes are visible to subsequent agent starts. The settings API requests
+ * a soft reload for affected running agents to refresh their environment.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

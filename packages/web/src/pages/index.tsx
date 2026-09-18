@@ -87,8 +87,8 @@ function EmptyState() {
       <Sparkles className="mx-auto mb-2 size-6 text-primary" />
       <CardTitle>No agents yet</CardTitle>
       <CardDescription className="mt-2">
-        Agents are created manually on disk in v0. See{" "}
-        <code>docs/v0-deferred.md</code> for the recipe.
+        Run <code>cognisphere agent new &lt;name&gt;</code> in your harness
+        directory, configure its model, then restart the server.
       </CardDescription>
     </Card>
   );

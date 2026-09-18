@@ -2,7 +2,7 @@
  * Secrets resolution for agents and their plugins.
  *
  * v0: file-based, plaintext. Read from `<harnessRoot>/.secrets/secrets.json`
- * at boot (cached per process). Encryption is deferred — see HLD §15.
+ * on first access (cached per store). See docs/server.md for configuration.
  *
  * Format (uniform — every entry under `<agentId>` is a bucket):
  *
@@ -20,8 +20,7 @@
  *
  * Top-level keys starting with `_` are ignored — used for inline docs in
  * the auto-created placeholder. PUT /api/secrets calls `invalidate()` and
- * auto-restarts the affected agents so edits reach the pi runtime
- * immediately — no server bounce needed.
+ * soft-reloads affected running agents after their active batches drain.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

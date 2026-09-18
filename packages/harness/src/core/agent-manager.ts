@@ -70,10 +70,9 @@ export class LifecycleError extends Error {
 }
 
 /**
- * Loads agents from disk on boot and exposes them by id. Authoring (creating
- * agents, installing plugins, editing configs) is deferred to a later phase
- * — see `docs/v0-deferred.md`. v0: agents are created manually on disk; the
- * server picks them up at boot.
+ * Loads agents from disk on boot and exposes them by id. The CLI scaffolds
+ * agent directories; the server discovers them at boot. Settings APIs reload
+ * existing agents and plugins. See docs/server.md for operating procedures.
  *
  * Lifecycle:
  *   - boot()                   → load every agent dir; failed agents stay listed.
