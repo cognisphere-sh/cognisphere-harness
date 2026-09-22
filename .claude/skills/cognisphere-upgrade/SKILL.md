@@ -9,7 +9,7 @@ metadata:
 
 # CogniSphere Upgrade
 
-Drive the **two-phase upgrade** (see `docs/distribution-and-deployment.md` §9):
+Drive the **two-phase upgrade** (see `docs/low-level/cli.md#upgrades`):
 
 1. **Code** — bump the installed dependency (`pnpm`/the CLI does this).
 2. **Data** — *this skill*: edit the harness dir (agents, plugins, secrets) to

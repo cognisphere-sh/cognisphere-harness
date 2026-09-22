@@ -72,7 +72,7 @@ export class LifecycleError extends Error {
 /**
  * Loads agents from disk on boot and exposes them by id. The CLI scaffolds
  * agent directories; the server discovers them at boot. Settings APIs reload
- * existing agents and plugins. See docs/server.md for operating procedures.
+ * existing agents and plugins. See docs/low-level/core.md for operating procedures.
  *
  * Lifecycle:
  *   - boot()                   → load every agent dir; failed agents stay listed.

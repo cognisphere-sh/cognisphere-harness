@@ -1,12 +1,62 @@
-# CogniSphere — HTTP API
+# API low-level design
 
-This doc describes the server's HTTP surface as it exists today. The
-agent-runner subsystem (lifecycle, queues, RPC) is documented separately
-in [`server.md`](./server.md); this doc covers only what's reachable over
-HTTP and how routes are gated.
+**Status:** current HTTP implementation. [High-level design](../high-level-design.md) · [Roadmap](../roadmap.md).
 
-If you're new and want to read code: start in `packages/harness/src/core/main.ts`,
-follow `packages/harness/src/api/*.ts`.
+## Responsibility and dependencies
+
+API adapts authenticated HTTP commands and queries to [core](core.md), [plugin](plugins.md), and agent-file operations. It owns request validation, credential masking, HTTP status mapping, and route wiring. It does not schedule a second worker pool or serialize Pi history. [Web](web.md) and product backends consume these contracts; a product backend's bearer currently grants full operator access.
+
+| Implementation | Responsibility |
+|---|---|
+| [core/main.ts](../../packages/harness/src/core/main.ts) | Mount order, global middleware, raw webhook interception, static SPA routes. |
+| [auth.ts](../../packages/harness/src/api/auth.ts) | File-backed users, signed cookies, app bearer, auth gates. |
+| [agents.ts](../../packages/harness/src/api/agents.ts) | Lifecycle/configuration, session/usage reads, thread overrides, event actions. |
+| [admin.ts](../../packages/harness/src/api/admin.ts) | Send through AdminPlugin and abort through AgentRunner. |
+| [files.ts](../../packages/harness/src/api/files.ts) | Agent-relative tree/text/raw/upload/delete operations. |
+| [secrets.ts](../../packages/harness/src/api/secrets.ts), [models.ts](../../packages/harness/src/api/models.ts), [credentials.ts](../../packages/harness/src/api/credentials.ts) | Mask/merge credentials, persist settings, trigger reloads. |
+| [harness.ts](../../packages/harness/src/api/harness.ts), [gws-oauth.ts](../../packages/harness/src/api/gws-oauth.ts) | Timezone and Google Workspace sign-in; callback uses issued state nonce. |
+| [webhook.ts](../../packages/harness/src/api/webhook.ts) | Dispatch raw HTTP to running plugins; handlers own authentication. |
+
+```mermaid
+flowchart TB
+    HTTP[Node HTTP request] --> Prefix{Webhook prefix?}
+    Prefix -->|yes| Dispatch[Lookup plugin and strip prefix]
+    Dispatch --> Plugin[Plugin handler and its auth policy]
+    Prefix -->|no| Hono[Hono mount order]
+    Hono --> Public[Health / auth / OAuth callback]
+    Hono --> Gate[Cookie or app bearer gate]
+    Gate --> Routes[Agent / files / settings / admin routers]
+    Routes --> Manager[Core lifecycle and stores]
+    Routes --> Admin[AdminPlugin notification]
+    Routes --> Files[Agent files and Pi JSONL]
+```
+
+## Request flow and design choices
+
+For `PUT /api/agents/support/config`, the auth middleware verifies the caller, the route checks the agent and request fields, writes `agent.json`, and calls `reloadAgent`. The manager may defer runtime replacement until active work drains. A successful settings response and the activation time of those settings are different observations. Lifecycle conflicts map to HTTP errors; views should refetch agent/plugin state after mutation.
+
+For chat, the executable client pattern after authenticating is:
+
+```bash
+curl --cookie /tmp/cognisphere.cookies \
+  -H 'Content-Type: application/json' \
+  --data '{"text":"Summarize workspace/report.md","threadId":"review"}' \
+  http://127.0.0.1:3142/admin/support/send
+curl --cookie /tmp/cognisphere.cookies \
+  'http://127.0.0.1:3142/api/agents/support/events?status=queued,in_flight,done'
+```
+
+The send route returns `{ "ok": true }`, not an event ID or model result. Inspect events and session history for processing evidence. Current plugin notifications can fail without propagating through the wrapper, so this is not a guaranteed durable-admission acknowledgment.
+
+| Decision | Reason | Limit |
+|---|---|---|
+| One Hono API plus raw plugin dispatch | Keep common operator policy and preserve native plugin HTTP handling. | Webhook handlers must enforce their own auth. |
+| Cookie or product-server bearer | Supports the console and independently authenticated product apps. | Bearer is operator-level; `X-App-User` does not enforce tenant scope. |
+| Read Pi JSONL for history | Preserve original conversation entries and entry IDs. | Live tails may be incomplete; no stream/replay contract today. |
+| Masked credential merge | UI can preserve secrets it cannot read back. | File-backed credentials are plaintext on disk; masking is a display boundary. |
+| Agent-relative filesystem paths | Restricts ordinary lexical traversal. | Does not resolve symlink escapes, serialize tool writes, or compare expected file revisions. |
+
+Future runtime grants belong to [plan 1.4](../plans/04-ingress-and-operations.md); SSE belongs to [plan 1.6](../plans/06-live-interface.md). Neither route family is available today. The remainder of this document is the authoritative current route reference.
 
 ---
 
@@ -23,6 +73,7 @@ follow `packages/harness/src/api/*.ts`.
 9. [Admin chat — `/admin/*`](#9-admin-chat--admin)
 10. [Plugin webhooks — `/webhook/*`](#10-plugin-webhooks--webhook)
 11. [Conventions](#11-conventions)
+12. [FAQ](#faq)
 
 ---
 
@@ -52,7 +103,7 @@ three surfaces:
 | `/api/*` (other) | `requireAuth` middleware — 401 without a valid cookie or app bearer |
 | `/admin/*` | `requireAuth` middleware — 401 without a valid cookie or app bearer |
 | `/webhook/*` | Per-plugin — handlers own authentication. The `agent-messaging` inbox requires shared `X-Webhook-Secret`; artifacts use route-specific access checks. Telegram and GWS currently poll instead of receiving webhooks. |
-| Static SPA pages | None — the page shell is public; the SPA itself calls `/api/*` and gets 401 → redirected to `/login` |
+| Static SPA pages | `/login` and static assets are public; `/`, `/settings*`, and `/agents/*` use the server redirect gate when the UI is mounted. The client also checks auth. |
 
 `requireAuth` accepts either credential, cookie first:
 
@@ -147,7 +198,7 @@ Implemented in `packages/harness/src/api/agents.ts`. All routes require auth.
 
 `agents.list()` / `am.get()` / runtime DB methods are the data source;
 mutations route through `AgentManager` lifecycle calls described in
-[server lifecycle reference](server.md#5-runner-and-rpc-hooks).
+[core lifecycle](core.md#agent-lifecycle).
 
 ### `GET /api/agents`
 
@@ -242,7 +293,7 @@ reload time. If the new config fails validation, the plugin moves to
 runtime rejection is surfaced in the next `/api/agents/:id/plugins`
 response.
 
-`reloadAgent` uses the soft-swap protocol (see [agent lifecycle](system-design.md#agent-lifecycle)) — zero interruption to
+`reloadAgent` uses the soft-swap protocol (see [agent lifecycle](core.md#agent-lifecycle)) — zero interruption to
 in-flight batches. `reloadPlugin` bounces the single plugin in place
 without touching the runner.
 
@@ -397,7 +448,7 @@ threads-list field).
 
 ### Event history
 
-The `events` table stores one mutable lifecycle row per notification, including failed inputs. The UI polls these endpoints; this is not an SSE or WebSocket stream. The planned runtime stream belongs to the [sandbox design](design/sandbox.md#live-console-and-product-delivery).
+The `events` table stores one mutable lifecycle row per notification, including failed inputs. The UI polls these endpoints; this is not an SSE or WebSocket stream. The planned runtime stream belongs to the [live-interface plan](../plans/06-live-interface.md).
 
 | Method | Path | Effect |
 |---|---|---|
@@ -414,7 +465,7 @@ Query params (all optional):
 |---|---|---|
 | `status` | comma-separated subset of `queued,in_flight,done,failed,cancelled` | (no filter) |
 | `plugin` | exact `pluginId` match | (no filter) |
-| `search` | substring match against `text` (case-sensitive `LIKE`) | (no filter) |
+| `search` | SQLite `LIKE` match against `text` (`%query%`; wildcard characters retain LIKE semantics) | (no filter) |
 | `isSilent` | `true` (silent only) or `false` (non-silent only); omit for both | (no filter) |
 | `tsFrom`, `tsTo` | epoch ms, filter on row `ts` | (no filter) |
 | `updatedFrom`, `updatedTo` | epoch ms, filter on row `updated_at` | (no filter) |
@@ -577,7 +628,7 @@ Implemented in `packages/harness/src/api/secrets.ts`. Both routes require
 auth.
 
 The wire and on-disk shapes are identical (bucketed under each agent;
-see [credential configuration](server.md#2-agent-configuration)). The
+see [credential configuration](agents.md#configuration-and-credentials)). The
 reserved bucket id `agent` (`AGENT_BUCKET`) holds keys declared in
 `agent.json.secretsSchema`; other ids are plugin ids.
 
@@ -632,7 +683,7 @@ The write merges into the existing file, preserves the doc-header
 
 After saving, the route calls `am.reloadAgent(aid)` for every agent
 named in the body. `reloadAgent` invalidates the secrets cache and
-swaps in a fresh runner once active batches drain (see [agent lifecycle](system-design.md#agent-lifecycle)). Response:
+swaps in a fresh runner once active batches drain (see [agent lifecycle](core.md#agent-lifecycle)). Response:
 
 ```json
 { "ok": true, "restartRequired": false, "restarted": ["dr-renu"] }
@@ -811,6 +862,8 @@ schema (OAuth-only, e.g. `openai-codex`) are configured iff connected.
 
 Same null / mask / string sentinel semantics as
 [`/api/secrets`](#6-secrets--apisecrets) for the `credentials` map.
+The models handler additionally treats an empty credential string as deletion;
+the secrets handler stores it as an empty value instead.
 
 Filters:
 
@@ -827,7 +880,7 @@ Filters:
   dropped by the store's normalize on save.
 
 After saving, the route mirrors the stored `modelOverrides` into pi's
-own models.json (see `pi-models-sync.ts` in [server.md](server.md)) so
+own models.json (see `pi-models-sync.ts` in [core design](core.md)) so
 newly spawned pi children resolve the overridden context windows
 natively, then reloads every running agent whose
 `agentJson.model.provider` matches one of the touched providers
@@ -843,7 +896,7 @@ Browser-driven sign-in for subscription providers (Anthropic Claude
 Pro/Max, OpenAI Codex). The server drives pi-ai's OAuth flow via
 pi-coding-agent's `ModelRuntime`; tokens land in pi's own
 `<piAgentDir>/auth.json` (default `~/.pi/agent/auth.json`), never in
-models.json. See [credential configuration](server.md#2-agent-configuration) for the design
+models.json. See [credential configuration](agents.md#configuration-and-credentials) for the design
 rationale. All routes require auth. `:provider` must be a catalog entry
 with `oauth: true`, else 404.
 
@@ -971,7 +1024,7 @@ these.
 `deliver()` ends up calling `ctx.notify("user_message", { text,
 channelId, threadIdOverride })`, which goes through
 `runner.notify()` — so it's enqueue-or-steer just like any other
-plugin notification. No special operator privileges.
+plugin notification. Operator HTTP authentication still applies; the input uses the same queue/steering policy as other sources.
 
 Errors:
 
@@ -1005,7 +1058,7 @@ Errors:
 ## 10. Plugin webhooks — `/webhook/*`
 
 Implemented in `packages/harness/src/api/webhook.ts`. **Not** gated by auth
-— this surface receives unauthenticated external traffic.
+— this surface bypasses the global middleware; each plugin handler must authenticate its own traffic.
 
 URL shape: `/webhook/<agentId>/<pluginId>/<rest>`. The harness:
 
@@ -1081,17 +1134,15 @@ Plugins access the loopback URL via `PluginInstanceContext.httpBaseUrl`
 (set only when the plugin declares `handleHttpRequest`). The agent's
 pi child sees the prefix as the env var `PI_WEBHOOK_BASE` and is
 expected to hit `${PI_WEBHOOK_BASE}/<pluginId>/<rest>` from `bash` /
-plugin CLI scripts. See [plugin lifecycle](server.md#4-plugin-lifecycle).
+plugin CLI scripts. See [plugin lifecycle](plugins.md#discovery-and-lifecycle).
 
 ---
 
 ## 11. Conventions
 
-### JSON only
+### Request and response formats
 
-Every Hono route reads and writes JSON. Wrong content-type ⇒ the
-`c.req.json()` parser swallows the error and routes see `{}`; most
-handlers respond `400` with a hint.
+Most control routes use JSON. Handlers commonly catch malformed JSON and treat it as an empty object before field validation; content-type behavior is not a universal validation guarantee. File upload uses multipart form data, raw-file routes return bytes, OAuth callbacks redirect, and static routes serve HTML/assets.
 
 ### Error shape
 
@@ -1137,3 +1188,63 @@ interruption); `reloadPlugin` stops/starts the one plugin in place
 (the runner keeps running). The `restartRequired: false` field in the
 response is a forward-compat signal for settings that *would* need a
 hard restart.
+
+## FAQ
+
+These questions target API integrators, product-backend developers, and operators. All routes in these answers are current unless explicitly described as planned.
+
+### Which credential should the console, a script, and my product app use?
+
+The console uses the signed `pi_sid` cookie after login. An operator script can use that authenticated cookie; a trusted product backend uses the app bearer stored in `.secrets/app-secret`. Keep the bearer out of browser JavaScript because it grants operator-level access. `X-App-User` supplies attribution only after valid bearer authentication; it does not enforce per-user agent/thread permissions.
+
+### Why does `/healthz` work while my API call returns 401?
+
+Health is public; `/api/*` control routes and `/admin/*` require a valid cookie or app bearer. Check the credential being sent to the correct backend origin and use `/api/auth/me` to inspect its recognized user. Webhooks have their own handler-specific policy; successful operator authentication does not automatically satisfy a webhook's shared-secret/header contract.
+
+### What do `text`, `channelId`, and `threadId` mean when sending chat?
+
+`text` is required. `channelId` identifies the admin source channel and defaults to `operator`; `threadId`, when supplied, is an explicit routing override. Without it, the agent's strategy selects the thread. For example, `{ "text": "Review the report", "threadId": "review" }` targets `review` directly. The admin endpoint does not expose plugin-level `priority`, `isSilent`, or `doNotSteer` options.
+
+### Does chat send return the answer, an event ID, or an idempotency receipt?
+
+It returns `{ "ok": true }`; none of those richer results is part of the current contract. Read events and session entries to observe processing. There is no general idempotency key for admin send, so an uncertain HTTP result should not trigger blind repeated sends. Durable input receipts are part of the planned ingress work.
+
+### Is `PUT /api/agents/:id/config` a partial patch?
+
+No. Its body is `{ "config": <complete agent.json object> }`, and the supplied object replaces the file before reload. Read and preserve fields you are not changing. Plugin-config PUT similarly replaces the supplied plugin config object. A successful write can be followed by failed validation/startup; inspect returned and subsequently refreshed state/error.
+
+### What do the event-query filters, sorting, and paging parameters do?
+
+`status`, `plugin`, `search`, and `isSilent` filter event rows; timestamp bounds use epoch milliseconds. `sortBy`/`sortDir` order the filtered rows, and `limit`/`offset` page them (`limit` defaults to 200 and is capped at 1000). `total` is the filtered count before paging. `search` is a SQLite LIKE match on event input text, not full transcript/tool-history search; see the [exact query table](#get-apiagentsidevents).
+
+### How is session `limit` different from event `limit`, and how do I follow an event into history?
+
+Session `limit` selects the newest N JSONL entries, with `hasMore` indicating older entries exist; omitting it reads the whole session. Event `limit` controls a page of queue lifecycle rows. Use an event's `piSessionId` and `piEntryId` with its thread to find the delivered user entry; multiple inputs batched into one prompt can share that entry.
+
+### How do I change or clear a thread's model, and why might I receive 409?
+
+Use `PUT /api/agents/:id/sessions/:threadId/model` with `provider`, `modelId`, and optional `thinkingLevel`; pass null provider/model values to clear the override. Send an initial message first so the thread binding exists. The override route returns 409 for an absent binding and 400 for invalid/unconfigured choices; selection affects the next batch.
+
+### How do masked credentials behave on update?
+
+`"********"` preserves an existing value; `null` deletes it; an omitted key is unchanged. For `/api/secrets`, an empty string is stored as empty and resolves as unset. For `/api/models`, the handler explicitly treats an empty credential string as deletion. Do not send the display mask as a new real credential or assume all non-credential fields use merge semantics.
+
+### Why can abort return HTTP 200 with `ok: false`, while deleting an event returns 409?
+
+Abort's boolean says whether a matching active batch was found, so “nothing active” is a valid handled request. Event mutation refuses `in_flight` rows, and thread deletion refuses an active thread. Abort first when intended, wait for finalization, then retry the relevant mutation; abort does not synchronously delete queued work or erase side effects.
+
+### Does a file save trigger a configuration reload or prevent overwriting another writer?
+
+No. Generic filesystem writes persist text but do not invoke agent/plugin settings reloads, compare expected hashes, or acquire a workspace writer gate today. Use dedicated settings endpoints for runtime configuration. Avoid simultaneous operator/tool edits; the planned writer/revision contract is in [plan 1.2](../plans/02-workspace-and-provisioning.md).
+
+### Which filesystem formats and path limits should my client handle?
+
+Text read/edit is for nonbinary files; the read endpoint rejects files over 4 MiB. Use raw responses for downloads and multipart form data with a `file` field for upload. Paths must be agent-relative; lexical traversal checks do not resolve symlink escapes. Do not mistake the text-read cap for a universal upload/write limit; see the [filesystem reference](#5-filesystem--apiagentsidfs).
+
+### What happens if I upload a second file with the same name?
+
+The current handler sanitizes the filename and writes it into the selected `dir` (default `uploads`). An existing file at that sanitized path is overwritten; there is no automatic version suffix or collision conflict. Even different original names can sanitize to the same name, so clients should deliberately choose distinct names/directories when preserving both files matters.
+
+### Can I subscribe to live tokens or send runtime-broker requests now?
+
+No. The current console polls events and JSONL-backed history. `/api/agents/:id/stream` and `/runtime/v1/*` are proposed in the live-interface and ingress plans. Their examples are design contracts, not implemented endpoints an integrator can depend on today.

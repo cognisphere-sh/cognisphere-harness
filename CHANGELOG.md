@@ -13,7 +13,7 @@ whose entries follow the form:
 
 The skill collects every section in `(current, target]`, proposes a diff against
 the harness directory, and applies it after user approval. See
-[`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) §9.
+[CLI upgrades](docs/low-level/cli.md#upgrades).
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
@@ -46,8 +46,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- `docs/api.md` §1/§3, `docs/server.md` §3 and
-  `docs/distribution-and-deployment.md` document the app bearer,
+- `docs/low-level/api.md` §1/§3, `docs/low-level/agents.md#persistent-layout` and
+  `docs/low-level/cli.md` document the app bearer,
   `.secrets/app-secret`, and the new `app/.env.local` keys. The upgrade
   skill now refreshes `app/auth-routes/` and drift-checks the home's copies.
 
@@ -94,7 +94,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   60 s ack timeout then failed the batch repeatedly. `PiRpcClient` now
   suspends pending frame timeouts on `compaction_start` and re-arms them on
   `compaction_end`, and logs both at info with `reason` and
-  `tokensBefore` / `estimatedTokensAfter` (`docs/server.md` §4.7).
+  `tokensBefore` / `estimatedTokensAfter` (`docs/low-level/core.md#execution-and-example`).
 
 ## [0.11.0]
 
@@ -382,7 +382,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   procedure moved into a plugin-owned skill: `plugin-gws.md` 204 → 50 lines,
   `plugin-telegram.md` 75 → 48. A fragment costs every turn of every thread; a
   skill costs one description line until an agent needs it.
-- `docs/server.md`, `docs/base-harness/skills.md` and the `create-plugin` skill
+- `docs/low-level/agents.md`, `docs/base-harness/skills.md` and the `create-plugin` skill
   (v1.3.0) document the 50-line budget and what belongs in a fragment
   (identity, event shape, always-on rules) versus a skill. Both scaffold trees
   are refreshed wholesale by the upgrade skill.
@@ -450,9 +450,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **`create-skill` 1.2.0**, **`publish-harness` 1.1.0** — descriptions gained
   situational triggers; `publish-harness` also covers the new-plugin case of
   the shipped-artifact rule and deploy-time wiring notes.
-- Docs: `docs/api.md` §10 (artifact routes + header contract),
-  `docs/server.md` (plugin list, plugin-shipped skills),
-  `docs/distribution-and-deployment.md` §5 (deploy-time wiring),
+- Docs: `docs/low-level/api.md` §10 (artifact routes + header contract),
+  `docs/low-level/plugins.md` (plugin list, plugin-shipped skills),
+  `docs/low-level/cli.md#server-deployment` (deploy-time wiring),
   `docs/base-harness/README.md`, `app/README.md`.
 
 ### Breaking changes
@@ -548,7 +548,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   the situation/task/result summary.
 - Base-agent seeds updated to match: new `knowledge/index.md` and
   `knowledge/memory.md`, refreshed `workspace/index.md`.
-- Docs updated: `docs/server.md` §3 on-disk tree and the shipped
+- Docs updated: `docs/low-level/agents.md#persistent-layout` on-disk tree and the shipped
   `docs/base-harness/README.md` agent-anatomy list.
 
 ### Breaking changes
@@ -764,7 +764,7 @@ invisible to the agent. Per agent dir:
   Models page until an entry is added.
 - **System-prompt file ownership is now an explicit contract**, taught in
   the base prompt (new "System prompts" section) and documented in
-  `docs/server.md` §3 and the shipped `docs/base-harness/README.md`:
+  `docs/low-level/agents.md#persistent-layout` and the shipped `docs/base-harness/README.md`:
   `0-*` files are harness-owned (replaced by the seed on upgrade;
   `0.1-agent-directory.md` excepted), `plugin-<id>.md` is plugin-owned
   (reseeded on every agent start — edits are clobbered), and `1-agent.md`
@@ -1945,7 +1945,7 @@ sync to adopt the feature; old copies keep working untouched.)*
   in the monorepo, the Vite dev server (HMR) together (`--port`/`--web-port`/
   `--no-web`); `serve` takes `--port` and `--headless` (mount no web UI —
   backend-only deploy, via `COGNISPHERE_HEADLESS`). See
-  [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) §10.
+  [CLI reference](docs/low-level/cli.md#cli).
 - **Publishable package.** `@cognisphere-sh/cognisphere-harness` ships a `bin`, a
   `files` allowlist, `publishConfig` (GitHub Packages), and a `prepack` step that
   bundles the built web UI (`dist-web/`) and the root `CHANGELOG.md` into the

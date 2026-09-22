@@ -42,7 +42,7 @@ Plugins implement one interface: `manifest`, `start`, `stop`, optional HTTP hand
 
 ## Run an app home
 
-Prerequisites: Node.js 20.12 or later, pnpm, and access to the configured GitHub Packages registry. Configure registry authentication as described in the [deployment guide](docs/distribution-and-deployment.md#installation).
+Prerequisites: Node.js 20.12 or later, pnpm, and access to the configured GitHub Packages registry. Configure registry authentication as described in the [CLI installation guide](docs/low-level/cli.md#installation).
 
 ```bash
 npx @cognisphere-sh/cognisphere-harness init my-app
@@ -84,11 +84,36 @@ pnpm check    # typecheck and lint both packages
 
 | Document | Purpose |
 |---|---|
-| [System design](docs/system-design.md) | Current components, responsibilities, interactions, and diagrams. |
-| [Server reference](docs/server.md) | Configuration, lifecycle hooks, persistence, and operating procedures. |
-| [HTTP API](docs/api.md) | Current routes, authentication, requests, and responses. |
-| [Distribution and deployment](docs/distribution-and-deployment.md) | Packaging, app homes, CLI, deployment, and upgrades. |
-| [Roadmap](docs/roadmap.md) | Priorities, individual designs, milestones, and completion criteria, starting with sandbox implementation. |
+| [High-level design](docs/high-level-design.md) | System boundaries, layer dependencies, end-to-end examples, and design choices. |
+| [Core low-level design](docs/low-level/core.md) | Lifecycle, queue, routing, execution, recovery, and server settings. |
+| [Plugins low-level design](docs/low-level/plugins.md) | Integration contracts, discovery, seeds, notifications, actions, and failures. |
+| [Agents low-level design](docs/low-level/agents.md) | Agent templates, configuration, files, prompts, skills, extensions, and tools. |
+| [API low-level design](docs/low-level/api.md) | HTTP architecture, authentication, and complete current route reference. |
+| [CLI low-level design](docs/low-level/cli.md) | Scaffolding, process supervision, packaging, deployment, and upgrades. |
+| [Web low-level design](docs/low-level/web.md) | Operator console, API state, polling, chat rendering, settings, and files. |
+| [Core roadmap](docs/roadmap.md) | Delivery order and acceptance gates, with a separate implementation plan for each item. |
+
+## FAQ
+
+### I want to run my first agent. Where should I start?
+
+Follow [Run an app home](#run-an-app-home), install dependencies, and configure an enabled model/provider in the console. `init` creates nova; additional agents are created with `agent new` and discovered at server restart. The [CLI FAQ](docs/low-level/cli.md#faq) explains directory resolution, ports, and installation issues.
+
+### My message is queued or failed. How do I find out why?
+
+Inspect the agent's state/error, then its Events view and linked session history. Queue capacity, silent input, a running thread, settings drain, and failed attempts have different causes. The [core FAQ](docs/low-level/core.md#faq) covers each and explains automatic versus manual retries.
+
+### Where can I find parameter explanations and examples?
+
+Use the [agents FAQ](docs/low-level/agents.md#faq) for `agent.json`, [plugins FAQ](docs/low-level/plugins.md#faq) for integration settings/notification flags, and [API FAQ](docs/low-level/api.md#faq) for request fields and paging. Each links to its authoritative contract rather than duplicating every schema here.
+
+### Are Docker isolation, live token streaming, and session search available now?
+
+They are planned in the [core roadmap](docs/roadmap.md). Current execution uses local Pi RPC processes and the console polls saved state. Each [design document](#documentation) separates current behavior from proposed interfaces; roadmap examples alone do not enable a feature.
+
+### I am building a product app. Is it the same thing as the operator console?
+
+No. The bundled console is for operating the harness; the scaffold's optional `app/` owns its own user experience/authentication. Its backend can use the operator-level app bearer to call the harness and must enforce its own user access. See the [API FAQ](docs/low-level/api.md#faq) before exposing any harness credential to a browser.
 
 ## Contributing
 

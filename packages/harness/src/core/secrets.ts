@@ -2,7 +2,7 @@
  * Secrets resolution for agents and their plugins.
  *
  * v0: file-based, plaintext. Read from `<harnessRoot>/.secrets/secrets.json`
- * on first access (cached per store). See docs/server.md for configuration.
+ * on first access (cached per store). See docs/low-level/core.md for configuration.
  *
  * Format (uniform — every entry under `<agentId>` is a bucket):
  *

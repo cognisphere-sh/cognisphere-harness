@@ -1,6 +1,6 @@
 /**
  * `cognisphere` CLI entrypoint — install, scaffold, run, and upgrade a harness
- * (see docs/distribution-and-deployment.md §10). Dispatch only; each command
+ * (see docs/low-level/cli.md#cli). Dispatch only; each command
  * lives in its own module.
  */
 import { cmdAgentNew } from "./agent.js";

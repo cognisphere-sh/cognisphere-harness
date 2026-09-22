@@ -204,8 +204,8 @@ Config/secret edits need an agent restart to take effect:
 
 ## Reference
 
-- Plugin lifecycle: `docs/server.md` §4; on-disk layout:
-  `docs/system-design.md` (repository references).
+- Plugin lifecycle: `docs/low-level/plugins.md#discovery-and-lifecycle`; on-disk layout:
+  `docs/low-level/agents.md#persistent-layout` (repository references).
 - Builtin plugins are the best examples: `telegram` (long-poll + CLI +
   multi-kind `EventType`), `gws` (poller + shared lib in seed),
   `scheduler` (cron + CLI), `agent-messaging` (webhook inbox with

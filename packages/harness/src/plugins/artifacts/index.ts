@@ -190,7 +190,7 @@ export default class ArtifactsPlugin implements Plugin {
     };
 
     // Agent-facing listing, read by `scripts/artifacts/artifact`. Insider-only,
-    // same shared-secret scheme as agent-messaging — see docs/api.md §10.
+    // same shared-secret scheme as agent-messaging — see docs/low-level/api.md §10.
     if (req.method === "GET" && scope === "api" && slug === "list" && !verb) {
       const expected = process.env.COGNISPHERE_WEBHOOK_SECRET;
       if (expected && req.headers["x-webhook-secret"] !== expected) {

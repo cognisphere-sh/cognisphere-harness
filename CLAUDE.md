@@ -78,21 +78,19 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **Project docs are part of the surface area. Update them with the code.**
 
-- [`docs/server.md`](docs/server.md) — agent-runner subsystem: process model, on-disk layout, components (`agent-manager`, `runner`, `queue`, `rpc`, `plugin-registry`, `secrets`, `models-store`, `models-catalog`, `types`, `config`, `logger`), runtime configuration, lifecycle hooks, and operations. The component overview lives in `docs/system-design.md`; planned changes are indexed in `docs/roadmap.md`.
-- [`docs/api.md`](docs/api.md) — HTTP surface: auth model, every route under `/healthz`, `/api/*`, `/admin/*`, `/webhook/*`, request/response shapes, error codes, conventions.
-- [`docs/distribution-and-deployment.md`](docs/distribution-and-deployment.md) — packaging, the `cognisphere` CLI, the app-home scaffold (`harness/` + `app/` + `scripts/`), the AWS deploy scripts, the upgrade flow.
-- [`packages/harness/home-template/docs/base-harness/`](packages/harness/home-template/docs/base-harness/) — the **user-facing** harness docs shipped into every app home (`docs/base-harness/` there): what cognisphere is, the CLI, agent/plugin anatomy, secrets/models, skills. **Owned in this repo** — every home treats its copy as read-only reference.
+- [High-level design](docs/high-level-design.md) owns system boundaries, layer interactions, and cross-cutting design choices.
+- [Core low-level design](docs/low-level/core.md) owns lifecycle, queue/routing, execution, recovery, stores, and server configuration.
+- [Plugins low-level design](docs/low-level/plugins.md) owns plugin contracts, discovery, seeds, listeners/actions, and failure behavior.
+- [Agents low-level design](docs/low-level/agents.md) owns agent templates, configuration, file layout, prompts, skills, scripts, and Pi extensions.
+- [API low-level design](docs/low-level/api.md) owns auth, route wiring, request/response/error contracts, settings reload behavior, and filesystem/session access.
+- [CLI low-level design](docs/low-level/cli.md) owns scaffolding, process supervision, packaging, app-home deployment scripts, and upgrades.
+- [Web low-level design](docs/low-level/web.md) owns console routes, query/mutation state, chat rendering, files/settings, and API integration.
+- [Core roadmap](docs/roadmap.md) is the sole delivery/status index. Each item links its own low-level plan under `docs/plans/`; proposed interfaces remain labeled planned until implemented.
+- [Shipped app-home reference](packages/harness/home-template/docs/base-harness/) is user-facing documentation copied into every app home. This repository owns that reference; homes treat their copies as read-only.
 
-**When to update which doc:**
+Update the owning layer document when behavior changes, and every affected layer when a change crosses contracts. Update the high-level design when boundaries or major dependencies change. A layout change updates agents, core persistence, and API/CLI sections where applicable. User-visible CLI, plugin, secrets/model, template, or agent behavior also requires updating the shipped app-home reference.
 
-- Touching `packages/harness/src/core/agent-manager.ts`, `runner.ts`, `queue.ts`, `rpc.ts`, `plugin-registry.ts`, `secrets.ts`, `models-*.ts`, `types.ts`, `config.ts`, `logger.ts`, or built-in plugin runtime contracts → update `docs/server.md`.
-- Touching anything under `packages/harness/src/api/` or `packages/harness/src/core/main.ts`'s route wiring → update `docs/api.md`.
-- Touching `packages/harness/src/cli/` or `packages/harness/home-template/` (the scaffolded app-home layout / deploy scripts) → update `docs/distribution-and-deployment.md` (and `docs/server.md` persistence reference if the scaffolded tree changed).
-- Any harness change that alters **user-visible behavior** (CLI surface, agent/plugin anatomy, secrets/models shapes, base-agent contract, shipped plugins) → also update the shipped user docs in `packages/harness/home-template/docs/base-harness/`.
-- Changes that span both (e.g. a new lifecycle method exposed via a new HTTP route) → update both.
-- On-disk layout changes (file names, secrets shape, models.json shape, agent dir structure) → update `docs/server.md` persistence reference and the relevant section in `docs/api.md` if it's reachable over HTTP.
-
-If the change is large enough to need a new section, add one. If a section becomes wrong, fix it in the same diff — stale docs are worse than missing docs.
+Keep one authoritative explanation per concern. Do not add competing system/server/deployment guides or a root roadmap alias. Record implementation evidence and remaining limitations in `docs/roadmap.md`; keep detailed algorithms and validation scenarios in the corresponding plan. Fix stale local links when moving or replacing documents.
 
 ---
 
