@@ -1,6 +1,6 @@
 # Plan 1.8: agent and automation simplification
 
-**Status:** planned; no runtime behavior changes in this document. **Depends on:** [1.1 SDK/admission](01-sdk-runtime.md), [1.2 workspace/provisioning](02-workspace-and-provisioning.md), [1.4 ingress/broker](04-ingress-and-operations.md), and [1.7 protection/cutover](07-protection-and-cutover.md). Agree on these resource and automation interfaces while building those foundations; activate this task after their gates pass. **Layers:** all six. [Roadmap](../roadmap.md#1-sandbox-implementation).
+**Status:** planned. **Delivery:** M1 directory/override/role configuration first, M3 local delegation, M4 secrets, M6–M9 plugins/automation, M10 migration cleanup and M11 image customization. [Delivery order](../roadmap.md#delivery-order). The [filesystem plan](02-workspace-and-provisioning.md) owns the three roots and direct Pi session storage; this plan owns resource/role and automation behavior. **Layers:** all six. [Roadmap](../roadmap.md#1-agent-foundation-and-sandbox-implementation).
 
 ## Objective and decisions
 
@@ -10,39 +10,18 @@ Make an agent a versioned base, a persistent workspace, and an explicit configur
 |---|---|
 | Base assets | Build the agent's base release into a pinned image; run it read-only. A versioned read-only mount is an alternative delivery mechanism for development/Process, using the same manifest. |
 | Workspace | One persistent shared cwd with work files, plugin downloads, and agent-authored resource overrides. Histories/profiles stay separate per logical session. |
-| Main and sub-agents | One agent identity, image and sandbox; explicit role-specific resources, separate histories, asynchronous delegation, one executing turn. |
+| Main and sub-agents | One agent identity, image and sandbox; explicit role-specific resources and model selection, separate histories, asynchronous delegation, one executing turn. |
 | Credentials | Existing secret manager behind a typed broker; neither the guest nor editable automation receives upstream secrets. |
 | Routing | A bounded script returns delivery decisions; trusted ingress validates and durably records them. |
 | Monitoring | One script lifecycle with `daemon`, `cron`, or `at` triggers; action-only plugins need no monitor. Harness supervises isolated workers outside agent compute. |
 
 ## 1. Base assets, workspace, and images
 
-Extend [plan 1.2's layout](02-workspace-and-provisioning.md#data-boundaries), keeping its existing `/assets` and `/workspace` paths. The agent's **base directory** is the selected `assets/releases/<revision>/`; it contains all agent-facing defaults, including plugin assets. Keep trusted server plugin implementations in the harness installation, outside agent images.
+Use [plan 1.2's three-root layout](02-workspace-and-provisioning.md#data-boundaries): `base/releases/<revision>/` holds agent/plugin defaults, `agent-managed/` holds persistent writable resources/work products, and `sessions/` is owned directly by Pi. Docker maps these to `/assets`, `/workspace` and `/sessions`. All paths below referring to the workspace mean the agent-managed directory. Trusted server plugin implementations stay in the harness installation.
 
-```text
-agents/<agent>/
-  agent.json                              trusted configuration; nonsecret references
-  assets/releases/<revision>/             base source, immutable after publication
-    manifest.json                         resource IDs, hashes, dependency recipe
-    prompts/ skills/ scripts/ install/     agent defaults and base install entry point
-    plugins/<plugin>/                     manifest, prompts, skills, scripts, install
-  workspace/                              persistent shared cwd: /workspace
-    resources.json                        ordered additions for permitted roles/namespaces
-    prompts/<namespace>/                  new prompts and same-ID overrides
-    skills/<namespace>/<name>/            complete skill bundles, including SKILL.md
-    scripts/<namespace>/                  execution helpers, routes, cron, daemon drafts
-    install/                              ordered post-base install steps
-    config/                               nonsecret script configuration
-    files/ memory/ .deps/                  work products, notes, project dependencies
-    plugins/<plugin>/{attachments,files,cache}/
-  sessions/ profiles/ runs/ scratch/       retain plan 1.2's scoped layout
-control/
-  automation/releases/<digest>/           immutable script/config/dependency snapshots
-  plugins/<agent>/<plugin>/               durable cursors, schedules and private state
-  ...                                    queues, policies, vault references, staging
-```
+Base bundles contain prompts, skills, scripts, install steps and plugin resources. Agent-managed bundles provide permitted additions and same-ID overrides, plus execution scripts, installer drafts, nonsecret configs, plugin downloads and ordinary work files. Per-session profiles live under `agent-managed/state/profiles/`. The resource resolver and main/sub-agent model/configuration preview are M1 deliverables, before SDK integration. Runtime state such as queue records, private plugin cursors and secrets remains outside these mounts.
 
-All durable agent work and plugin downloads survive batches and sandbox replacement. Scratch is deliberately temporary. Private control state, schedules/cursors, and secrets must not move into the agent's writable workspace merely to put everything under one directory. Session recovery remains independent of workspace recovery.
+Pi directly creates and reopens session JSONL on the persistent `sessions/` mount. There is no harness archive/copy/restore workflow, per-turn filesystem snapshot or memory subsystem. Files persist independently of compute; scratch remains temporary.
 
 **Use images and read-only enforcement together.** An image packages the correct Pi SDK, OS packages, CLIs, base prompts/skills/scripts and plugin resources; a read-only root prevents changes to those files at runtime. Do not copy assets out into a writable directory on startup. A read-only bind mount is useful for local iteration, but still needs a versioned source, pinned dependencies and controlled activation; host-side changes can otherwise change what the guest reads. Mounting over an image directory also hides its packaged contents, so select one source for `/assets` per launch. See [Docker bind mounts](https://docs.docker.com/engine/storage/bind-mounts/).
 
@@ -60,7 +39,7 @@ Base updates default to denied. A trusted per-agent `baseAssets.publish` permiss
 
 1. Assign each resource a stable namespaced ID, such as prompt `agent/persona`, skill `browser/browse`, or script `browser/open`. Namespace is part of the name: two plugins' `search` skills must not collide accidentally. Reject ambiguous duplicate IDs in the base catalogue.
 2. Select the role's plugins, prompts, skills and scripts from trusted `agent.json`. Resolve a selected ID from the workspace first, then the base. Same-ID prompts replace the complete fragment **at its existing ordered position**. Same-ID skills replace the complete skill directory so relative scripts/assets come from one coherent version. Script overrides execute only as guest code unless separately published for automation.
-3. `workspace/resources.json` can register new skills/scripts and ordered prompt additions for the role's explicitly permitted `workspaceNamespaces`. Append new prompts after the configured prompt list in the declared order; same-ID overrides retain the original position. Reject duplicates, missing references and namespace violations. Unlisted new prompts do not silently change the system prompt. Deleting an override reveals its base version on the next resolution.
+3. `agent-managed/resources.json` can register new skills/scripts and ordered prompt additions for the role's explicitly permitted `workspaceNamespaces`. Append new prompts after the configured prompt list in the declared order; same-ID overrides retain the original position. Reject duplicates, missing references and namespace violations. Unlisted new prompts do not silently change the system prompt. Deleting an override reveals its base version on the next resolution.
 4. New workspace content may refine already-authorized capabilities; it cannot add a plugin, expand a broker scope, load privileged Pi extensions, or alter routing/secret policy. Every configurable base prompt and skill supports the above override rule; mandatory runtime identity/protocol metadata is supplied separately by the host. Security does not depend on an uneditable prompt.
 5. Under the workspace gate, resolve and record one resource manifest per turn: role/config/base/image revision, ordered prompt IDs, source paths and content hashes. Pass the exact manifest to the SDK. Disable global/project discovery and prevent extension resource-discovery hooks from silently adding omitted resources. Detect duplicate Pi skill names before initialization rather than relying on loader order. Later additions/selection changes affect the next turn's catalogue; prompt edits do not rewrite an active conversation's loaded system prompt. This does not freeze lazy file reads: an agent may edit and reread a selected workspace skill/script during its turn. Record its actual revision when read/executed if exact replay provenance is required.
 
@@ -76,7 +55,7 @@ Migrate current sorted-all-prompts assembly, whole-tree skill loading, unconditi
 
 ## 3. Main-agent and sub-agent configuration
 
-A sub-agent is a named execution role of the same agent, not another persistent agent identity or sandbox. Store its description and explicit resources alongside the main role in `agent.json`. Generate the main agent's catalogue from allowed main-agent descriptions and its own sub-agent descriptions; list each entry's kind/address. Sub-agents receive only their task, selected context, and parent return address. They do not receive the global catalogue, parent transcript, or full harness/admin prompts by default.
+A sub-agent is a named execution role of the same agent, not another persistent agent identity or sandbox. Store its description, optional model and explicit resources alongside the main role in `agent.json`. Generate the main agent's catalogue from allowed main-agent descriptions and its own sub-agent descriptions; list each entry's kind/address. Sub-agents receive only their task, selected context, and parent return address. They do not receive the global catalogue, parent transcript, or full harness/admin prompts by default.
 
 Illustrative **proposed** configuration; this is not today's `AgentJson` schema:
 
@@ -84,8 +63,9 @@ Illustrative **proposed** configuration; this is not today's `AgentJson` schema:
 {
   "id": "assistant",
   "description": "Personal assistant that coordinates research and communication.",
-  "sandbox": { "maxSessionsPerSandbox": 4 },
+  "model": { "provider": "configured-provider", "id": "main-model-id", "thinkingLevel": "medium" },
   "maxConcurrentSlots": 1,
+  "sandbox": { "lifecycle": { "mode": "per_turn" } },
   "base": { "assetRevision": "r42", "image": "registry/assistant@sha256:<digest>" },
   "plugins": ["agent-messaging", "browser", "gws", "telegram", "scheduler"],
   "main": {
@@ -100,6 +80,7 @@ Illustrative **proposed** configuration; this is not today's `AgentJson` schema:
   "subagents": {
     "browser": {
       "description": "Browses websites and returns findings with source links.",
+      "model": { "provider": "configured-provider", "id": "browser-model-id", "thinkingLevel": "low" },
       "plugins": ["agent-messaging", "browser"],
       "prompts": ["browser/task", "browser/usage", "agent-messaging/child"],
       "skills": ["browser/browse"],
@@ -119,9 +100,22 @@ Illustrative **proposed** configuration; this is not today's `AgentJson` schema:
 
 The top-level plugin list is the installed union, not a grant to every role. `agent.json` is operator-controlled; the harness compiles its publication permissions and operation/account/destination scopes into trusted policy. Agent-authored config files hold routing preferences and filters within that envelope. No secret values belong in either. A privileged configuration change is distinct from editing a workspace override.
 
+### Sub-agent model selection
+
+`subagents.<role>.model` uses the existing model shape: `{ provider, id, thinkingLevel? }`. Provider/model strings in the example are placeholders for models enabled in the deployment; roles may use different providers without another sandbox. Validate the selected model and its supported thinking level before accepting work.
+
+| Configuration | Effective delegated model |
+|---|---|
+| Sub-agent has `model` | Use that explicit provider/id and its optional validated thinking setting. Omitted thinking uses the selected model's configured/default behavior; do not inherit an incompatible setting from another model. |
+| Sub-agent omits `model` | Inherit the top-level `agent.model`, including its thinking setting. |
+| Parent thread has a model override | Apply it to the parent only; it does not silently replace the sub-agent's configured/inherited model. |
+| Missing, disabled or unsupported model/provider/settings | Reject the delegation with a visible error; do not silently switch provider/model. |
+
+Resolve and persist the effective provider/model/thinking setting and configuration revision when the delegated task is created. Retries/resume retain that selection; configuration edits apply to new tasks. Recheck current authorization and model availability at execution, so an existing task cannot use a revoked model. The SDK creates the child's session with that model; the broker enforces its allowed provider/model and keeps credentials outside the guest. Record actual provider/model in run/history metadata and expose it in task status. Workspace prompt/skill overrides cannot change model permissions. Test explicit selection, inheritance, different providers, queued-task config changes and failure without fallback as part of M3.
+
 Use the existing agent messaging protocol with `roleId`, `taskId`, `parentSessionId`, correlation/reply IDs and durable receipts added to the envelope. The harness derives the sender; an arbitrary message field cannot set it. The child keeps the parent's `agentId` while receiving its own logical session/history/profile and a grant scoped to that role/task. Child messaging permits only its bound parent; no sibling, external/main-agent catalogue, recursive delegation or user-channel send by default. A browser plugin's typed browsing operations are distinct from messaging permissions.
 
-**Baseline delegation is asynchronous:** the parent submits the task, receives an acceptance receipt, and ends/yields its turn. Settle and close the child, prove descendant cleanup, revoke its grants before slow persistence, then archive/checkpoint before releasing its admission reservation and writer lease. The parent is durably `awaiting_child`, with no live SDK child. The sub-agent then obtains ordinary admission and the same agent's writer gate. Its result is a durable message to the parent, which is re-admitted using its existing history and rereads changed workspace files. The parent must not synchronously await a queued child while holding the gate or a required capacity slot. This works even with `maxSessionsPerSandbox: 1`; full capacity queues children fairly without allocating another sandbox.
+**Baseline delegation is asynchronous:** the parent submits the task, receives an acceptance receipt, and ends/yields its turn. Wait for Pi settlement, revoke grants, close the SDK child and prove descendant cleanup; commit the task/run outcome before releasing the execution slot and writer lease. Pi leaves its session file on the persistent mount; no archival step runs. The parent is durably `awaiting_child`, with no live SDK child. The sub-agent then obtains ordinary admission and the same agent's writer gate. Its result is a durable message to the parent, which is re-admitted using its existing history and rereads changed workspace files. The parent must not synchronously await a queued child while holding the gate or a required capacity slot. This works with the baseline `maxConcurrentSlots: 1`; the child waits in the durable queue until the parent releases its execution slot, without allocating another sandbox.
 
 Record task state (`queued`, `running`, `succeeded`, `failed`, `cancelled`), result receipt, retry budget and parent continuation durably. A repeated task/result ID returns its receipt; restart never repeats a confirmed external operation solely to reconstruct a result. Cancellation propagates through the task relationship, and terminal failure resumes the parent with a failure result. No in-memory promise is the only record of delegated work.
 
@@ -143,7 +137,7 @@ Guest CLI / isolated automation
 
 Only the trusted adapter can resolve a secret reference. There is no guest `getSecret`, decrypt endpoint, arbitrary authenticated HTTP proxy, or environment export. Credentials appear briefly in trusted adapter memory when required; encryption cannot hide them from that adapter or a compromised trusted host. Guests can read their broker grants, which authorize limited operations; these are intentionally distinct from upstream credentials.
 
-Run-bound grants use plan 1.4's session/run/fence/generation checks. Background automation needs a separate `AutomationPrincipal` bound to owner agent, plugin/account, script digest, activation generation, job occurrence, policy revision and expiry: it must work when no agent session or sandbox exists. Grant renewal requires a live trusted job/daemon lease and current policy; broker authorization also checks revocation independently of pinned code. The server chooses permitted secret references, endpoints and operations. Scripts cannot select arbitrary vault paths, override authentication headers, follow authenticated redirects to attacker hosts, or obtain token-bearing error/debug responses. Bound and sanitize request/results/logs; no credential values in events, sessions, image layers or archives. Reuse operation IDs and uncertain-outcome recovery from plan 1.4.
+Run-bound grants use plan 1.4's session/run/fence/generation checks. Background automation needs a separate `AutomationPrincipal` bound to owner agent, plugin/account, script digest, activation generation, job occurrence, policy revision and expiry: it must work when no agent session or sandbox exists. Grant renewal requires a live trusted job/daemon lease and current policy; broker authorization also checks revocation independently of pinned code. The server chooses permitted secret references, endpoints and operations. Scripts cannot select arbitrary vault paths, override authentication headers, follow authenticated redirects to attacker hosts, or obtain token-bearing error/debug responses. Bound and sanitize request/results/logs; no credential values in events, sessions or image layers. Reuse operation IDs and uncertain-outcome recovery from plan 1.4.
 
 Prefer workload identity for the broker's vault access, scoped policies, rotation/revocation and encrypted backups with tested restore. Guest and automation workers have no vault route/identity; strict profiles enforce network restrictions externally. CLIs that insist on raw credentials must execute behind a typed trusted adapter; a guest wrapper preserves their useful command syntax. Hiding a value from the model while placing it in the guest's environment is insufficient.
 
@@ -235,20 +229,27 @@ Routing config changes use the same snapshot/activation path as code changes. Pe
 
 ## Implementation sequence and acceptance
 
-Deliver incrementally inside this single roadmap task:
+Keep this as one owning task while delivering its parts through the [roadmap](../roadmap.md#delivery-order):
 
-1. Resource catalogue/resolver, base image recipe, workspace additions/overrides and safe migration from copied seeds.
-2. Small core prompt and capability plugin bundles; explicit ordered role config and SDK loading.
-3. Durable asynchronous parent/child messaging, catalogue generation and single-writer scheduling.
-4. Secret-provider implementation/migration, typed adapters and separately scoped automation grants.
-5. Isolated script execution/publication, script routing, scheduler scripts and daemon lifecycle; migrate Telegram/GWS and remove redundant monitors/static routing.
-6. Cross-layer API/CLI/web visibility, migration/rollback evidence, then update current layer and shipped app-home documentation.
+| Increment | Scope from this plan |
+|---|---|
+| M1 | Three-root directory scaffold, resource IDs/resolver, ordered main/sub-agent context, prompt/skill overrides, descriptions/catalogue and per-role model configuration preview. |
+| M3 | Execute specialist roles locally with durable asynchronous parent/child continuation and the selected models; no Docker/cron dependency. |
+| M4 | One encrypted vault backend and brokered model access before protected execution. |
+| M6 | First complete capability plugin/Telegram flow with reusable trusted transport adapter. |
+| M7 | Isolated one-shot workers, automation grants/IPC, exact script/config publication and script routing. |
+| M8 | At/cron scripts and GWS monitoring with durable occurrence/cursor handoff. |
+| M9 | Long-running daemon lifecycle and Telegram consumer migration. |
+| M10 | Remaining integrations and removal of redundant routes/monitors/seeding/direct-secret paths. |
+| M11 | Agent-managed image installers and authorized base publication. |
+
+Apply applicable protection/recovery checks before enabling each increment and update current/shipped docs as behavior lands. No unfinished feature may borrow host privileges or raw secrets as a shortcut.
 
 | Acceptance scenario | Required result |
 |---|---|
 | Same-ID prompt/skill plus a new workspace resource | Override wins once; prompt order is deterministic; whole skill bundle is coherent; additions follow namespace/config policy; base upgrade preserves overrides. |
 | Image install and forbidden base edit | Base → plugins → workspace install order is verified; protected assets/runtime hashes survive untrusted installer attempts; dependency outputs remain visible outside the workspace mount; no host code/secret access; failed build preserves old image and work files. |
-| Main versus browser sub-agent | Same agent/sandbox/cwd, separate histories and exact selected resources; no omitted-plugin rediscovery; child grant refuses non-parent messaging. Disclose shared-identity limits. |
+| Main versus browser sub-agent | Same agent/sandbox/cwd, separate histories and exact selected resources/model; explicit model and inherited default both work; disabled/unsupported selections fail visibly without fallback; no omitted-plugin rediscovery; child grant refuses non-parent messaging. Disclose shared-identity limits. |
 | Delegation at capacity 1, parent crash, duplicate result | Parent releases execution/capacity before child admission; no deadlock/second sandbox; result resumes the correct parent once through durable correlation. |
 | Secret read, token echo, forged account, vault outage | No plaintext storage in agent paths, no upstream credential retrieval; broker validates accounts/egress/results and fails closed; scoped operation receipts survive retries. |
 | Routing fan-out, error, changed script and replay | Authorized durable deliveries only; no partial fan-out loss, duplicate queue rows, implicit reroute or default silent drop. |
@@ -257,4 +258,4 @@ Deliver incrementally inside this single roadmap task:
 | Edit/reload while an old daemon or cron run exists | Exact immutable code/config snapshot, no privileged import, no overlapping daemon generations, pinned in-flight jobs, failed activation leaves a recoverable revision. |
 | Attempted worker host/peer/workspace access | Enforced isolation denies access; publication alone does not widen policy; unsupported Process profiles make no hidden-secret claim. |
 
-Keep detailed runtime/storage algorithms in plans 1.1–1.7. This plan owns resource selection/overrides, specialist roles, vault-provider choices and editable automation; [plan 3](09-agent-improvement.md) remains the later evidence-driven review workflow, not a prerequisite for ordinary workspace customization.
+Keep SDK/lifecycle and direct-filesystem ownership in plans 1.1–1.2; ingress, Docker and protection remain in their owning plans. This plan owns resource selection/overrides, specialist roles, vault-provider choices and editable automation; [plan 3](09-agent-improvement.md) remains the later evidence-driven review workflow, not a prerequisite for ordinary workspace customization.

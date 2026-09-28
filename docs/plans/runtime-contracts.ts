@@ -1,13 +1,12 @@
 /**
  * Migration design reference, not an installed runtime implementation.
  * Type-checkable contracts and provider/shared orchestration bodies.
- * OS, Docker Engine, transactional admission, archive and filesystem drivers
+ * OS, Docker Engine, transactional admission and filesystem drivers
  * remain implementation work. Sessions sharing a sandbox are not OS-isolated.
  * Selected integration: direct Pi SDK in the execution child, never a new
  * pi --mode rpc subprocess path. AgentHostClient is our boundary transport.
  */
 export type RuntimeKind = "process" | "docker";
-export type ArchiveKind = "local" | "cloud" | "database";
 export type RunOutcome = "completed" | "failed" | "cancelled";
 export type RuntimeState = "created" | "running" | "exited" | "missing" | "unknown";
 
@@ -37,18 +36,20 @@ export interface RuntimeRef extends SandboxIdentity {
   id: string; // container ID or native process identity, not PID alone
 }
 export interface AgentSandboxConfig {
-  maxSessionsPerSandbox: number; // positive integer; proposed default: 4
-  maxConcurrentSlots: 1; // REQUIRED baseline; runtime validation rejects >1
   lifecycle: { mode: "idle"; idleMinutes: number } | { mode: "per_turn" | "always_on" };
 }
-export const EXAMPLE_SANDBOX_CONFIG: AgentSandboxConfig = {
-  maxSessionsPerSandbox: 4, maxConcurrentSlots: 1,
-  lifecycle: { mode: "idle", idleMinutes: 15 },
+export interface AgentExecutionConfig {
+  maxConcurrentSlots: 1; // existing top-level field; validate JSON as 1, reject larger values
+  sandbox: AgentSandboxConfig;
+}
+export const EXAMPLE_EXECUTION_CONFIG: AgentExecutionConfig = {
+  maxConcurrentSlots: 1,
+  sandbox: { lifecycle: { mode: "idle", idleMinutes: 15 } },
 };
-export type SlotState = "reserved" | "waiting_for_workspace" | "starting" | "running" | "finalizing" | "persistence_pending";
+export type SlotState = "reserved" | "waiting_for_workspace" | "starting" | "running" | "finalizing" | "recovery_required";
 export type SandboxState = "reserved" | "starting" | "ready" | "draining" | "stopped" | "recovery_required";
 export interface SessionSlot {
-  reservationId: string;
+  reservationId: string; // sole execution reservation, not a separate admitted-session pool
   session: SessionKey;
   sandbox: SandboxIdentity;
   run: RunIdentity;
@@ -58,13 +59,13 @@ export interface SessionSlot {
 export type AdmissionDecision =
   | { kind: "bound"; slot: SessionSlot } // steer/queue on existing binding; no extra slot
   | { kind: "reserved"; slot: SessionSlot; startSandbox: boolean }
-  | { kind: "queued"; reason: "session_capacity" | "provider_capacity" | "recovery_required" | "upgrading" };
+  | { kind: "queued"; reason: "execution_capacity" | "provider_capacity" | "recovery_required" | "upgrading" };
 export interface SessionAdmissionRequest {
   requestId: string;
   session: SessionKey;
   runId: string;
   compatibility: SandboxCompatibility;
-  config: AgentSandboxConfig;
+  config: AgentExecutionConfig;
 }
 interface WorkspaceLeaseBase {
   harnessId: string;
@@ -81,42 +82,47 @@ export interface AuxiliaryWorkspaceWriteLease extends WorkspaceLeaseBase {
 }
 export type WorkspaceWriteLease = RunWorkspaceWriteLease | AuxiliaryWorkspaceWriteLease;
 export interface SessionReleaseReceipt {
-  archiveRevision: string | null;
-  workspaceRevision: string; // required even if preparation failed before Pi startup
+  outcome: RunOutcome;
+  writersStopped: true; // verified by trusted control, not a guest assertion
   grantRevoked: true;
   closure: "orderly_session_close" | "provider_stopped" | "not_started";
 }
 /**
  * Declarative trusted storage contract, not a distributed locking implementation.
- * Reserve atomically under unique(harnessId, agentId), validate limits/deduplicate
- * requests, and reuse the sole compatible sandbox (including provisioning).
- * All SlotStates consume session capacity; archived history does not. Overflow
- * queues: NEVER create a second sandbox. Existing session events steer/queue on
- * their binding. Launch capacity is recorded; reductions drain without eviction.
- * Higher capacity or incompatible profiles require draining/stopping the old
- * supervisor before replacement. Uncertain provisioning reserves the singleton
- * until provider identity/labels prove its outcome, even across upgrades.
+ * Reserve atomically under unique(harnessId, agentId), validate maxConcurrentSlots
+ * is exactly 1, deduplicate requests, and reuse the sole compatible sandbox.
+ * The sole reservation spans every SlotState, including workspace waiting and
+ * recovery_required. Every other session remains in the durable queue; there
+ * is no extra admission pool. Historical sessions are unlimited by this setting.
+ * Existing session events steer/queue on their binding. Incompatible profiles
+ * drain/stop the old supervisor before replacement. Uncertain provisioning keeps
+ * the singleton reserved until provider identity proves its outcome; NEVER
+ * create a second sandbox, even across upgrades.
  *
- * Admission is not execution authority. Several slots may wait, but exactly one
- * agent-wide WorkspaceWriteLease permits a complete tool-enabled turn. Acquire
- * before shared reads/preparation or arbitrary child/extension startup; waiting
- * slots have no child execution or run grant. Installs, background jobs, memory
- * writes, plugin publication and maintenance use this SAME gate. Descendants
+ * A reservation is not execution authority: it may wait for plugin publication
+ * or maintenance to release the agent-wide WorkspaceWriteLease. Acquire that
+ * gate before shared reads/preparation or arbitrary child/extension startup;
+ * waiting/queued work has no child execution or run grant. Installs, background
+ * jobs, plugin publication and maintenance use this SAME gate. Descendants
  * cannot outlive the turn's gate. Lease renewal is trusted-controller-only.
  *
- * Keep the gate through child/descendant closure, capture and committed archive
- * plus shared-workspace checkpoint. Revoke grants after bounded close, before
- * slow persistence. Persistence failure retains gate+slot without tool authority.
+ * Keep the gate through Pi settlement and verified child/descendant closure.
+ * Revoke grants on abort or bounded close. Uncertain cleanup/write failure enters
+ * recovery_required, retaining gate+slot without tool authority until reconciled.
+ * Pi owns session files directly on the persistent mount; the harness does not
+ * capture, rewrite, archive, or checkpoint those files or the workspace per turn.
  * Lease expiry is not a stop: externally fence/stop the old writer and reconcile
  * before handoff. A guest exit claim is not proof hostile descendants are quiet;
  * use provider/storage enforcement when needed. Process profiles cannot claim
- * protections their OS driver lacks. Every mutable actor must be quiescent for
- * consistent capture. A whole-sandbox stop affects all admitted session bindings.
+ * protections their OS driver lacks. Every prior mutable actor must be stopped
+ * before writer handoff. A whole-sandbox stop invalidates the active binding; other
+ * sessions remain durably queued and their existing histories are preserved.
  *
- * finishRun CAS-commits persistence receipts and atomically releases writer gate
- * and session occupancy. cancelWaiting only releases a never-started slot with
- * no held writer lease. Auxiliary writes checkpoint before releasing their gate.
- * Drain is atomic with admission and requires no slots, writer or background work.
+ * finishRun CAS-records the trusted outcome/cleanup receipt and releases writer gate
+ * and execution reservation. cancelWaiting only releases a never-started slot with
+ * no held writer lease. Auxiliary operations record their own durable receipts
+ * and stop their writers before releasing the same gate; no filesystem snapshots.
+ * Drain is atomic with reservation and requires no reserved run, writer or background work.
  */
 export interface AgentSandboxStore {
   reserve(request: SessionAdmissionRequest): Promise<AdmissionDecision>;
@@ -130,7 +136,9 @@ export interface AgentSandboxStore {
   renewWorkspace(lease: WorkspaceWriteLease, expiresAt: string): Promise<WorkspaceWriteLease>;
   finishRun(slot: SessionSlot, lease: RunWorkspaceWriteLease, receipt: SessionReleaseReceipt): Promise<void>;
   cancelWaiting(slot: SessionSlot): Promise<void>; // no child/grant/held writer lease
-  finishAuxiliary(lease: AuxiliaryWorkspaceWriteLease, workspaceRevision: string): Promise<void>;
+  finishAuxiliary(lease: AuxiliaryWorkspaceWriteLease, receipt: {
+    operationReceiptId: string; writersStopped: true;
+  }): Promise<void>;
   beginDrainIfEmpty(sandbox: SandboxIdentity): Promise<boolean>;
   markStopped(sandbox: SandboxIdentity): Promise<void>; // provider-confirmed boundary
   releaseAllocation(sandbox: SandboxIdentity): Promise<void>; // no live/uncertain old compute
@@ -149,17 +157,17 @@ export type RuntimeArtifact =
   | { kind: "process"; installationId: string; nodeExecutable: string; agentHostScript: string; environment: Readonly<Record<string, string>> }
   | { kind: "docker"; imageDigest: string };
 export interface AgentPaths {
-  assets: string; // resolved immutable revision, not a moving symlink
-  workspace: string; // ONE shared durable agent cwd, used by every session
-  sessions: string; // this logical session's Pi JSONL files, no queue database
+  assets: string; // read-only base release, resolved revision rather than moving symlink
+  workspace: string; // persistent agent-managed cwd shared by every session
+  sessions: string; // persistent session directory owned by Pi, no queue database
   scratch: string; // this session only; ephemeral
   home: string; // session-specific HOME/config root, no ambient credentials
   browserProfile: string; // session-specific; not a confidentiality boundary
 }
 export interface SandboxPaths {
   assets: string;
-  workspace: string; // shared files, scripts, memory and project dependencies
-  sessionRoots: string; // corresponding per-session Pi JSONL roots
+  workspace: string; // agent-managed files, prompt/skill overrides, scripts and dependencies
+  sessionRoots: string; // persistent Pi-owned session roots; mounted without copying files
   runSpecs: string; // preplanned RO transfer parent; nonsecret files only
   scratch: string;
 }
@@ -189,7 +197,6 @@ export interface RuntimeStartSpec {
   hostPaths: SandboxPaths;
   runtimePaths: SandboxPaths;
   mounts: readonly MountSpec[];
-  maxSessionsPerSandbox: number;
   argv: readonly string[]; // supervisor flags, not a per-session Pi command
   environment: Readonly<Record<string, string>>; // nonsecret allowlist, no run grant
   identity: { uid: number; gid: number };
@@ -205,7 +212,7 @@ export interface RuntimeCapabilities {
 }
 export interface SessionOpenSpec {
   paths: AgentPaths;
-  sessionFile: string; // SessionManager.open(file, sessions, workspace) with explicit cwd override
+  sessionFile?: string; // existing Pi file to open with cwd override; otherwise SDK creates it
   assetRevision: string;
   systemPrompt: string;
   settings: Readonly<Record<string, unknown>>; // nonsecret; validated by trusted host
@@ -231,17 +238,20 @@ export interface AgentHostFrame {
   payload: unknown;
 }
 /**
- * One long-lived supervisor tracks multiple admitted session bindings, but only
- * the workspace-lease owner may start a Pi SDK host child or run arbitrary code.
+ * One long-lived supervisor accepts at most one host-authorized session binding.
+ * Trusted control enforces maxConcurrentSlots=1 and the workspace gate; only its
+ * lease owner may start a Pi SDK host child or run arbitrary code. No launch
+ * capacity parameter or supervisor-side admission pool is needed.
  * The child imports the pinned SDK, configures resources/model auth explicitly,
  * and maps commands to AgentSession APIs; no stock CLI RPC compatibility layer.
- * Waiting sessions are metadata, not tool-enabled idle children. Every child
+ * Other sessions stay in the durable queue, not idle SDK children. Every child
  * receives the same cwd, with distinct JSONL/HOME/browser/scratch paths. IDs and
  * paths prevent accidental mixing, not same-agent security isolation. Dynamic
  * specs travel over this channel or a preplanned RO transfer area; opening a
  * session never changes Docker mounts. A session close does not close the whole
  * supervisor channel. Validate binding and live workspace fence outside guest.
- * Input acceptance, agent_settled, child exit and durability are separate events.
+ * Input acceptance, agent_settled and verified child exit are separate events.
+ * Pi owns session creation/writes/compaction; persistent mounts outlive compute.
  * Awaiting session.prompt must not block the control reader; dispose alone is
  * not evidence that every descendant writer has stopped.
  */
@@ -252,8 +262,8 @@ export interface AgentHostClient {
   steerRun(session: HostSessionRef, run: RunIdentity, requestId: string, message: unknown): Promise<void>;
   abortRun(session: HostSessionRef, run: RunIdentity): Promise<void>;
   getSessionState(session: HostSessionRef): Promise<{ state: string; activeRunId: string | null }>;
-  closeSession(session: HostSessionRef): Promise<{ state: "closed"; activeRelativePath: string }>;
-  drain(): Promise<void>; // reject new opens; allow already admitted sessions to settle
+  closeSession(session: HostSessionRef): Promise<{ state: "closed"; sessionFile?: string }>;
+  drain(): Promise<void>; // reject new opens; allow the active session to settle
   shutdown(): Promise<void>; // whole supervisor; singleton controller authorizes after drain
   events(after: Readonly<Record<string, number>>): AsyncIterable<AgentHostFrame>; // runId -> cursor
 }
@@ -307,7 +317,7 @@ export class ProcessRuntimeProvider extends RuntimeProvider {
     return this.driver.spawn({
       sandbox: spec.sandbox,
       executable: spec.artifact.nodeExecutable,
-      args: [spec.artifact.agentHostScript, ...spec.argv, "--max-sessions", String(spec.maxSessionsPerSandbox)],
+      args: [spec.artifact.agentHostScript, ...spec.argv],
       cwd: spec.runtimePaths.scratch,
       env: { ...spec.artifact.environment, ...spec.environment },
       uid: spec.identity.uid, gid: spec.identity.gid,
@@ -368,7 +378,7 @@ export class DockerRuntimeProvider extends RuntimeProvider {
     const ref = await this.driver.create({
       sandbox: spec.sandbox, image: spec.artifact.imageDigest,
       entrypoint: ["node", "/opt/runtime/agent-supervisor.mjs"],
-      args: [...spec.argv, "--max-sessions", String(spec.maxSessionsPerSandbox)],
+      args: spec.argv,
       cwd: spec.runtimePaths.scratch, env: spec.environment, mounts: spec.mounts,
       user: `${spec.identity.uid}:${spec.identity.gid}`,
       readOnlyRoot: true, init: true, tty: false, openStdin: true,
@@ -387,17 +397,15 @@ export class DockerRuntimeProvider extends RuntimeProvider {
   listOwned(): AsyncIterable<RuntimeRef> { return this.driver.listOwned(); }
 }
 
-/** Shared workspace checkpoints require the agent-wide gate; JSONL paths are per-session. */
+/** Prepare persistent mounts and safe SDK paths; Pi alone manages session file contents. */
 export abstract class AgentVolumeProvider {
   abstract prepare(sandbox: SandboxIdentity, assetRevision: string, lease: WorkspaceWriteLease): Promise<PreparedVolume>;
   abstract sessionPaths(volume: PreparedVolume, key: SessionKey, lease: RunWorkspaceWriteLease): Promise<AgentPaths>;
-  abstract checkpoint(lease: WorkspaceWriteLease, workspace: string): Promise<{ revision: string }>;
 }
 export interface LocalVolumeDriver {
   // Drivers verify trusted current lease ownership/fence, not just this object's shape.
   prepareAgentRoots(sandbox: SandboxIdentity, assetRevision: string, lease: WorkspaceWriteLease): Promise<SandboxPaths>;
   prepareSessionDirectories(roots: SandboxPaths, key: SessionKey, lease: RunWorkspaceWriteLease): Promise<AgentPaths>;
-  checkpointWorkspace(lease: WorkspaceWriteLease, workspace: string): Promise<{ revision: string }>;
 }
 export class LocalDirectoryVolumeProvider extends AgentVolumeProvider {
   constructor(private readonly driver: LocalVolumeDriver) { super(); }
@@ -419,137 +427,6 @@ export class LocalDirectoryVolumeProvider extends AgentVolumeProvider {
     if (volume.sandbox.agentId !== key.agentId) throw new Error("Session volume agent mismatch");
     // Driver verifies agent ownership, safe IDs and paths under the mounted root.
     return this.driver.prepareSessionDirectories(volume.paths, key, lease);
-  }
-  checkpoint(lease: WorkspaceWriteLease, workspace: string): Promise<{ revision: string }> {
-    return this.driver.checkpointWorkspace(lease, workspace);
-  }
-}
-
-export interface JsonlFile {
-  relativePath: string; // validated under the session root; never an arbitrary host path
-  bytes: Uint8Array;
-  sha256: string;
-  piHeaderSessionId: string | null;
-}
-export interface SessionArchive {
-  revision: string;
-  integrity: "valid" | "partial";
-  activeRelativePath: string;
-  files: readonly JsonlFile[];
-  outcome: RunOutcome;
-}
-export interface ArchiveHead {
-  headRevision: string | null; // newest stored revision, including incomplete captures
-  restore: SessionArchive | null; // selected validated complete manifest, possibly older
-}
-export interface ArchiveWrite {
-  key: SessionKey;
-  run: RunIdentity;
-  workspaceFence: number; // verified with the trusted agent-wide gate at commit
-  expectedHeadRevision: string | null;
-  integrity: "valid" | "partial";
-  promoteRestore: boolean;
-  idempotencyKey: string;
-  activeRelativePath: string;
-  files: readonly JsonlFile[];
-  outcome: RunOutcome;
-}
-export abstract class SessionArchiveStore {
-  abstract readonly kind: ArchiveKind;
-  abstract load(key: SessionKey): Promise<ArchiveHead>;
-  abstract save(write: ArchiveWrite): Promise<{ revision: string }>;
-}
-export interface ArchiveDriver {
-  load(key: SessionKey): Promise<ArchiveHead>;
-  commit(write: ArchiveWrite): Promise<{ revision: string }>;
-}
-export class LocalSessionArchiveStore extends SessionArchiveStore {
-  readonly kind = "local" as const;
-  constructor(private readonly driver: ArchiveDriver) { super(); }
-  load(key: SessionKey) { return this.driver.load(key); }
-  save(write: ArchiveWrite) { return this.driver.commit(write); }
-}
-export class CloudSessionArchiveStore extends SessionArchiveStore {
-  readonly kind = "cloud" as const;
-  constructor(private readonly driver: ArchiveDriver) { super(); }
-  load(key: SessionKey) { return this.driver.load(key); }
-  save(write: ArchiveWrite) { return this.driver.commit(write); }
-}
-export class DatabaseSessionArchiveStore extends SessionArchiveStore {
-  readonly kind = "database" as const;
-  constructor(private readonly driver: ArchiveDriver) { super(); }
-  load(key: SessionKey) { return this.driver.load(key); }
-  save(write: ArchiveWrite) { return this.driver.commit(write); }
-}
-
-export interface SessionFiles {
-  // Agent-wide writer lease already held. Reject unresolved prior writes and
-  // symlink escapes. Restore this JSONL only, never roll back shared cwd to an
-  // older session's view; workspace recovery uses its own latest committed head.
-  prepare(paths: AgentPaths, runtimePaths: AgentPaths, archive: ArchiveHead,
-    key: SessionKey, lease: RunWorkspaceWriteLease): Promise<{
-    hostFile: string; relativeFile: string; expectedHeadRevision: string | null;
-  }>;
-  // Hold the same gate through closure/capture, blocking queued sessions and
-  // plugin publishers. Uncertain or hostile descendants require external fence.
-  capture(paths: AgentPaths, activeRelativePath: string, lease: RunWorkspaceWriteLease): Promise<{
-    files: readonly JsonlFile[]; integrity: "valid" | "partial";
-  }>;
-}
-export interface PreparedSession {
-  key: SessionKey;
-  hostFile: string;
-  relativeFile: string;
-  expectedHeadRevision: string | null;
-}
-/**
- * Archive one logical session while holding the agent-wide workspace gate.
- * Neither provider serializes/appends Pi JSONL. The runner also commits the
- * shared workspace checkpoint before releasing that gate. Persistence failure
- * retains gate+slot; a successful capture does not stop the shared supervisor.
- */
-export class SessionStorageManager {
-  constructor(private readonly store: SessionArchiveStore, private readonly files: SessionFiles) {}
-  async beforeBatch(key: SessionKey, paths: AgentPaths, runtimePaths: AgentPaths,
-    lease: RunWorkspaceWriteLease): Promise<PreparedSession> {
-    const archive = await this.store.load(key);
-    const prepared = await this.files.prepare(paths, runtimePaths, archive, key, lease);
-    return { key, ...prepared };
-  }
-  async afterBatch(
-    run: RunIdentity, paths: AgentPaths, prepared: PreparedSession,
-    outcome: RunOutcome, activeRelativePath: string,
-    lease: RunWorkspaceWriteLease,
-  ): Promise<{ state: "saved"; revision: string; integrity: "valid" | "partial"; restorable: boolean } | { state: "no-transcript" }> {
-    if (run.agentId !== prepared.key.agentId || run.threadId !== prepared.key.threadId ||
-        run.logicalSessionId !== prepared.key.logicalSessionId) throw new Error("Session archive identity mismatch");
-    const { files, integrity } = await this.files.capture(paths, activeRelativePath, lease);
-    if (files.length === 0) return { state: "no-transcript" };
-    const receipt = await this.store.save({
-      key: prepared.key, run, workspaceFence: lease.fence, expectedHeadRevision: prepared.expectedHeadRevision,
-      integrity, promoteRestore: integrity === "valid",
-      idempotencyKey: `${run.runId}:final`, activeRelativePath, files, outcome,
-    });
-    return { state: "saved", revision: receipt.revision, integrity, restorable: integrity === "valid" };
-  }
-}
-
-/**
- * Agent-wide memory is ordinary shared workspace content, protected by the SAME
- * writer gate as files/scripts/dependencies. It remains separate from Pi JSONL.
- */
-export abstract class MemoryProvider {
-  abstract beforeBatch(workspace: string, lease: WorkspaceWriteLease): Promise<{ directory: string; indexFile: string }>;
-  abstract afterBatch(workspaceRevision: string): Promise<void>;
-}
-export interface WorkspaceMemoryDriver {
-  ensureWithoutOverwrite(workspace: string, lease: WorkspaceWriteLease): Promise<{ directory: string; indexFile: string }>;
-}
-export class WorkspaceFileMemoryProvider extends MemoryProvider {
-  constructor(private readonly driver: WorkspaceMemoryDriver) { super(); }
-  beforeBatch(workspace: string, lease: WorkspaceWriteLease) { return this.driver.ensureWithoutOverwrite(workspace, lease); }
-  async afterBatch(_workspaceRevision: string): Promise<void> {
-    // Already included in the workspace checkpoint. Never rewrite Pi's transcript.
   }
 }
 
@@ -605,16 +482,20 @@ export interface StagedPluginFile {
   originalName: string;
   sha256: string;
 }
+export interface PluginFilePublicationReceipt {
+  operationReceiptId: string; // durable idempotent publication result, not a snapshot
+  fileId: string;
+  relativeWorkspacePath: string;
+  sha256: string;
+}
 export interface PluginWorkspaceDriver {
-  // Shared agent plugin files use the same gate as turns, installs and memory.
+  // Shared agent plugin files use the same gate as turns and installs.
   ensureScopedDirectories(workspace: string, pluginId: string, lease: WorkspaceWriteLease): Promise<PluginWorkspacePaths>;
   // Background publication acquires an auxiliary lease; a broker action within
   // a turn uses that live run's lease without recursively acquiring another.
-  // Verify current fence, reject symlink escapes and use server-assigned names.
-  publishAtomically(lease: WorkspaceWriteLease, staged: StagedPluginFile): Promise<{
-    fileId: string;
-    relativeWorkspacePath: string;
-  }>;
+  // Verify fence, reject symlink escapes and use server-assigned names. Commit
+  // a durable receipt; retry by file ID/hash, rejecting a changed payload.
+  publishAtomically(lease: WorkspaceWriteLease, staged: StagedPluginFile): Promise<PluginFilePublicationReceipt>;
 }
 /** Durable staging can proceed freely; mutating the shared workspace cannot. */
 export class PluginWorkspaceManager {

@@ -1,72 +1,108 @@
 # Plugins low-level design
 
-**Status:** current implementation. [High-level design](../high-level-design.md) · [Roadmap](../roadmap.md). [FAQ](#faq).
+**Status:** implemented. [High-level design](../high-level-design.md) · [Roadmap](../roadmap.md) · [FAQ](#faq)
 
-## Responsibility and dependencies
+## In one minute
 
-Plugins adapt external sources and scheduled work to `NotifyPayload`, maintain integration state, and supply agent-facing actions. They run in the trusted server process. Pi extensions run in the agent child and are a different mechanism, documented under [agents](agents.md#runtime-capabilities).
+A plugin connects **one agent** to **one source of work**, such as Telegram, Gmail, a schedule or the console. It has three jobs:
 
-The [Plugin interface](../../packages/harness/src/core/types.ts) is the core dependency. [PluginRegistry](../../packages/harness/src/core/plugin-registry.ts) discovers definitions; [AgentManager](../../packages/harness/src/core/agent-manager.ts) instantiates them. API dispatches optional raw HTTP handlers. CLI forks source definitions. Agents consume copied prompts, skills, and scripts.
+1. **Listen.** Poll, watch a file, or accept HTTP requests, and turn each new input into a `ctx.notify(...)` call. Core then queues it ([event lifecycle](core.md#event-lifecycle)).
+2. **Remember.** Keep its own state (cursors, routes, schedules) and store any downloaded attachments.
+3. **Equip the agent.** Ship prompts, skills and scripts in a `seed/` folder. They are copied into the agent so it knows how to use the integration and can *act* (for example, send a reply).
+
+Plugins run **inside the server process**, one copy per agent. They are trusted code. Pi extensions are something else: they run inside the Pi process ([agents](agents.md#runtime-capabilities)).
+
+| Who | Role |
+|---|---|
+| [Plugin interface](../../packages/harness/src/core/types.ts) | The contract, defined by core. |
+| [PluginRegistry](../../packages/harness/src/core/plugin-registry.ts) | Finds plugin code when the server boots. |
+| [AgentManager](../../packages/harness/src/core/agent-manager.ts) | Creates, starts, reloads and stops each agent's plugins, and copies their seed files. |
+| [Webhook route](../../packages/harness/src/api/webhook.ts) | Passes raw HTTP requests to a running plugin. |
+| `cognisphere plugin add` | Copies a packaged plugin's code into your deployment so you can edit it. |
 
 ## Contract
 
 ```ts
 interface Plugin {
-  manifest: PluginManifest;
+  manifest: PluginManifest;   // displayName, description, configSchema, secretsSchema
   start(ctx: PluginInstanceContext): Promise<void>;
   stop(): Promise<void>;
   handleHttpRequest?(req: IncomingMessage, res: ServerResponse): void | Promise<void>;
 }
 ```
 
-`PluginManifest` contains display name/description and config/secrets JSON schemas. The manager validates/defaults configuration with Ajv and resolves declared secret keys before `start`. Required missing secrets fail the plugin. The context provides:
+What the plugin receives in `ctx`:
 
-| Context member | Use |
+| Field | What it's for |
 |---|---|
-| `agentId`, `agentDir` | Owning identity and agent filesystem root. |
-| `stateDir`, `inboxDir` | Plugin-local durable state and received files. |
-| `config`, `secrets` | Validated config and declared plugin credentials. |
-| `timezone`, `log` | Harness timezone and scoped logger. |
-| `httpBaseUrl` | Callback prefix when an HTTP handler exists. |
-| `notify(name, payload)` | Attach `_notification` metadata and call the current runner. Returns `void`. |
-| `resetThread(channelId, override?)` | Delegate thread deletion to the manager; refuses active threads. |
+| `agentId`, `agentDir` | Which agent this copy belongs to, and that agent's folder. |
+| `stateDir`, `inboxDir` | `plugins/<id>/state/` for the plugin's own data; `plugins/<id>/inbox/` for received files. |
+| `config` | The plugin's `config.json`, checked against `configSchema` with defaults filled in. |
+| `secrets` | The secret keys the plugin declared, taken from its bucket. |
+| `timezone`, `log` | The harness timezone, and a logger labelled `plugin:<agent>:<plugin>`. |
+| `httpBaseUrl` | The local URL of the plugin's webhook route. Only set if the plugin has `handleHttpRequest`. |
+| `notify(name, payload)` | Send an input to the agent. `name` is saved as `metadata._notification`. Returns nothing. |
+| `resetThread(channelId, override?)` | Ask core to delete a conversation. Refused while it's running. |
 
-`NotifyPayload` requires `text` and `channelId`, with optional `metadata`, `threadIdOverride`, `priority`, `isSilent`, and `doNotSteer`. Routing and delivery belong to [core](core.md#execution-and-example). Do not infer durable acceptance from the `void` notification call: the current wrapper catches/logs runner errors, and an absent runner does not produce a receipt.
+The payload needs `text` and `channelId`. It can also carry `metadata`, `threadIdOverride`, `priority`, `isSilent` and `doNotSteer` ([what each field does](core.md#input-fields-notifypayload)).
+
+> **`notify()` is not a receipt.** Anything a plugin sends before its agent's runner has started (during the plugin's own `start()`, on every agent Start, Restart or settings swap) is **dropped**, with only a log line. After the agent is stopped, `notify()` silently does nothing, not even a log line (a well-behaved plugin has stopped by then anyway). When the runner is running, the row is saved before `notify()` returns, but the plugin still isn't told about failures. So don't advance an external cursor just because `notify()` returned.
 
 ## Discovery and lifecycle
 
+A plugin has two lifetimes:
+
+- **Its code** is loaded once, when the server boots.
+- **Its instance** (one per agent) is created fresh every time the agent starts or the plugin is reloaded.
+
 ```mermaid
 flowchart TB
-    Builtin[Packaged plugin definitions] --> Registry[Registry scan]
-    User[Deployment plugin definitions] --> Registry
-    Registry -->|constructor and manifest| Manager[AgentManager]
-    Config[Agent plugin config and secrets] --> Manager
-    Manager --> Seed[Copy seed into agent]
-    Seed --> Validate[Validate config and required secrets]
-    Validate --> Instance[New per-agent instance]
-    Instance --> Start[start context]
-    Start --> Running[Listeners and HTTP actions]
-    Running --> Stop[stop and release resources]
+    subgraph Boot["Server boot (once)"]
+        Builtin[Packaged plugin code] --> Registry[Registry]
+        User[Deployment plugins folder] -->|same ID wins| Registry
+    end
+    subgraph Start["Agent start or plugin reload (per agent)"]
+        Registry --> Select[Which plugins? Core ones + the agent's plugins/ folders]
+        Select --> Seed[Manager copies seed/ into the agent]
+        Seed --> Validate[Check config, look up secrets]
+        Validate -->|problem| Failed[This plugin: failed. Others carry on.]
+        Validate -->|ok| New[Create instance, make state/ and inbox/]
+        New --> StartCall["await start(ctx)"]
+    end
+    StartCall --> Running[Running: listening, notifying, serving HTTP]
+    Running --> Stop["stop(): cancel timers and polls (manager waits up to 5 s)"]
 ```
 
-The scan imports `<pluginId>/index.ts` from packaged then deployment roots. A deployment definition overrides the same packaged ID. Core IDs `admin`, `scheduler`, and `agent-messaging` are always included; optional IDs come from the agent's `plugins/` directories. CLI refuses to fork core IDs even though registry precedence is general.
+### Step by step
 
-On each start, the manager copies the selected definition's `seed/` into the agent directory, reasserts executable scripts, validates config/secrets, creates `state/` and `inbox/`, then starts a fresh instance. Namespaced seed files are overwritten; edit their selected source to preserve a change across restart. The [agents layout](agents.md#persistent-layout) shows destinations.
+1. **Find the code (server boot).** The registry loads `<pluginId>/index.ts` from the package, then from `<harnessRoot>/plugins/`. If both have the same ID, your deployment's copy wins. It creates one throwaway instance of each plugin to read its manifest. Code you edit later isn't picked up until the server restarts.
+2. **Choose which plugins an agent gets.** Every agent gets the core plugins `admin`, `scheduler` and `agent-messaging`. You turn on any other plugin for an agent by creating `agents/<agent>/plugins/<id>/` (normally with a `config.json` inside). If there's no matching code, the plugin fails with "unknown plugin id".
+3. **Copy seed files.** The manager copies the plugin's `seed/` folder into the agent (for example `scripts/telegram/`, `skills/telegram/` and a prompt in `system_prompts/`) and makes the scripts executable. This happens on **every** start, and overwrites the copies. Edit the plugin's source instead of the copies. Removing a plugin later does **not** delete its copied files.
+4. **Check config and secrets.** The config is validated and defaults are filled in, then the declared secrets are looked up. A missing *required* secret or an invalid config marks only this plugin `failed`. The agent's other plugins and its runner still start.
+5. **Start.** The manager creates the instance, makes `state/` and `inbox/`, and waits for `start(ctx)`. There is no time limit. If `start()` throws, the plugin is marked `failed`, but `stop()` isn't called, so anything it had already set up (a timer, say) keeps running. Plugins start one after another.
+6. **Run.** The plugin listens and calls `ctx.notify()`, and it may serve `/webhook/<agent>/<plugin>/*`. The agent uses the copied scripts to act.
+7. **Reload.** Saving the plugin's **config** reloads just that plugin: stop it (waiting up to 5 s), then run steps 3–5 again. The agent's runner is untouched. This only works while the agent is running, and only for a plugin the agent already loaded. For a newly added plugin folder, restart the agent. Saving the plugin's **secrets** reloads the whole agent, so the Pi process gets the new values too.
+8. **Stop.** When the agent stops, restarts or reloads, or the server shuts down, `stop()` must cancel every poll, timer and file watcher. The manager waits at most 5 seconds and then carries on; it can't force a plugin to stop.
 
-`stop()` must cancel poll/timer/watch activity and release resources. One plugin's startup failure is recorded without automatically stopping the other plugins. Reload replaces only that instance, with a five-second stop timeout. Definition imports/scanning happen at server boot; source edits are not an automatic live-reload contract.
+**Example: turning on Google Workspace (GWS) for Support.**
 
-## Built-in implementations
+1. Create `agents/support/plugins/gws/config.json` and restart Support.
+2. The manager copies the GWS seed (the `scripts/gws/email`, `routes` and `settings` helpers, a skill and a prompt) and checks the config. The required secret `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` is missing, so GWS shows `failed`. Support's console chat and scheduler work normally.
+3. Click **Connect** on the GWS card and approve in Google. The harness saves the credentials, sets that secret and reloads Support.
+4. GWS starts, waits 5 seconds (so the runner is ready), and begins polling Gmail.
 
-| Plugin/source | Ingress and state | Agent action / design choice |
-|---|---|---|
-| [admin](../../packages/harness/src/plugins/admin/index.ts) | `deliver()` from authenticated admin API; no external state. | Inline answer is read from session JSONL by the console. |
-| [scheduler](../../packages/harness/src/plugins/scheduler/index.ts) | Watches `state/schedules.json`; cron and one-time jobs use harness timezone. | Fires `schedule_fire` with `doNotSteer: true`, so a job starts as queued work; seeded CLI edits schedules. |
-| [agent-messaging](../../packages/harness/src/plugins/agent-messaging/index.ts) | HTTP inbox guarded by shared `X-Webhook-Secret`; explicit target thread. | Seeded `agent-msg/send` calls target inbox; silent mode sets both silent and no-steer. |
-| [telegram](../../packages/harness/src/plugins/telegram/index.ts) | Long-polls Bot API; routes messages/edits and downloads attachments into inbox. | Seeded CLI sends explicit Bot API actions with environment credentials. No incoming webhook mode. |
-| [gws](../../packages/harness/src/plugins/gws/index.ts) | Gmail polling through GWS CLI, routes/settings/ingestion ledger; silent backlog; `-1` polling interval is passive mode. | Explicit Workspace CLI actions. Polls do not overlap; settings overlay is re-read each tick. |
-| [artifacts](../../packages/harness/src/plugins/artifacts/index.ts) | HTTP publication and serving, stored artifact metadata/files. | Public/private HTML access with route-specific checks; agent script publishes explicitly. |
+## Built-in plugins
 
-## Example: a Telegram attachment and explicit reply
+| Plugin | How work arrives | Notification names | How the agent acts |
+|---|---|---|---|
+| [admin](../../packages/harness/src/plugins/admin/index.ts) | Messages sent from the console (`/admin/:id/send`). No state. | `user_message` (channel `operator`) | Nothing is sent anywhere. The console reads the answer from the session file. |
+| [scheduler](../../packages/harness/src/plugins/scheduler/index.ts) | Watches `state/schedules.json`. Jobs use cron syntax in the harness timezone. A one-time job is a cron job that pauses itself after firing. Each job goes to the thread saved with it, with `doNotSteer: true`, so it never interrupts a running turn. | `schedule_fire` | A copied script adds and edits schedules. |
+| [agent-messaging](../../packages/harness/src/plugins/agent-messaging/index.ts) | Other agents post to its webhook with the shared `X-Webhook-Secret`. The receiver's `allowMessageFrom` (default: everyone) decides who may send. The sender picks the target thread. | `agent_message` (channel `agent`) | The copied `agent-msg/send` script. Its "silent" option sets both `isSilent` and `doNotSteer`. |
+| [telegram](../../packages/harness/src/plugins/telegram/index.ts) | Long-polls the Telegram Bot API (there is no webhook mode). Downloads attachments to `inbox/`. Can be limited with `allowedChatIds` and routed with `state/routes.json`. Handles `/reset` itself by deleting that chat's thread. The poll position is kept in memory only. | `message_received`, `edited` | A copied script calls the Bot API using the token from the environment. |
+| [gws](../../packages/harness/src/plugins/gws/index.ts) | Polls Gmail through the GWS CLI; polls never overlap. The thread is `<Subject> [<gmailThreadId>]`, and `routes.json` rules can change it. Unread mail is marked read. Settings in `state/` are re-read on every poll. `pollIntervalSec: -1` turns polling off. In backlog mode, the first email of each thread wakes the agent, and later ones arrive as silent (without `doNotSteer`, so they *can* join a running turn). Already-seen threads are listed in `ingested-threads.jsonl`. | `email_received`, `email_silent`, `gws_settings` (channel `main`) | Copied `scripts/gws/*` helpers and the GWS CLI. |
+| [artifacts](../../packages/harness/src/plugins/artifacts/index.ts) | Serves agent-written HTML pages. The agent publishes by having a copied script write `state/<slug>.<public\|private>.html`; the file name holds the visibility. | — | The copied `scripts/artifacts/artifact` script. Serving rules are in [API §10](api.md#10-plugin-webhooks--webhook). |
+
+## Example: a Telegram attachment and an explicit reply
 
 ```mermaid
 sequenceDiagram
@@ -74,16 +110,18 @@ sequenceDiagram
     participant Plugin as Telegram plugin
     participant Core
     participant Pi
-    Telegram-->>Plugin: Message in chat 42 with file
-    Plugin->>Plugin: Download into inbox and resolve route
-    Plugin->>Core: notify message_received with attachment path
-    Core->>Pi: Prompt or steer in telegram:42
-    Pi->>Pi: Read attachment and compose answer
-    Pi->>Telegram: Seeded CLI sends reply explicitly
-    Pi-->>Core: Finish model turn
+    Telegram-->>Plugin: Message with a file, chat 42 (long-poll)
+    Plugin->>Plugin: Save file to inbox/, work out route
+    Plugin->>Core: notify("message_received", text + file path)
+    Core->>Pi: New batch, or fed into the running turn, on telegram:42
+    Pi->>Pi: Read the file, write an answer
+    Pi->>Telegram: Copied telegram script sends the reply
+    Pi-->>Core: agent_end, event marked done
 ```
 
-For a custom producer, the invocation is conceptually:
+If Pi finishes without running the send script, the user gets nothing, even though the event is `done`.
+
+**Writing your own plugin's notify call:**
 
 ```ts
 ctx.notify("ticket_received", {
@@ -94,73 +132,182 @@ ctx.notify("ticket_received", {
 });
 ```
 
-This snippet assumes the plugin has already created the referenced file. Under `plugin_channel`, it routes to `helpdesk:ticket-T42`; an override would take precedence. Source IDs in metadata aid correlation, but the queue does not automatically deduplicate the producer's external IDs.
+- Save the file before calling `notify`.
+- With `threadIdStrategy: plugin_channel`, this lands on thread `helpdesk:ticket-T42`.
+- The queue **doesn't remove duplicates** by `ticketId`. If your source can deliver the same ticket twice, your plugin has to check.
 
-## HTTP boundary and failure behavior
+## HTTP and safety
 
-`/webhook/<agentId>/<pluginId>/*` bypasses global Hono authentication. The [dispatcher](../../packages/harness/src/api/webhook.ts) looks up the running instance, strips the prefix while preserving the query, and forwards raw Node request/response objects. Each handler owns authentication, body limits, methods, status codes, and response completion. Exact current routes are in the [API design](api.md#10-plugin-webhooks--webhook).
+`/webhook/<agentId>/<pluginId>/*` skips the console login. The route finds the **running** plugin, removes the prefix (keeping the query string) and passes the raw Node request and response to `handleHttpRequest`. The handler is responsible for checking who is calling, size limits, allowed methods, status codes and ending the response. Routes are listed in [API §10](api.md#10-plugin-webhooks--webhook).
 
-The shared webhook secret is an insider credential, not a per-agent security identity. Current agent tools can read exported credentials; plugins and agent filesystem state are not isolated by OS permissions. Producers should persist cursors carefully, stop reliably, and expose failures in logs. A successful external action cannot be reversed by queue retry, and a plugin cursor update is not equivalent to model completion.
+Keep in mind:
 
-## Design choices and planned changes
+- The shared webhook secret proves a caller is *inside the harness*, not *which* agent.
+- The agent can read the credentials passed to it, and plugin files aren't protected from the agent's shell.
+- Advancing a cursor doesn't mean the model has finished, and a retry can't unsend a message.
 
-| Choice | Reason | Limit |
+## Design choices
+
+| Choice | Why | Cost |
 |---|---|---|
-| Small common notification contract | New sources reuse queueing, routing, and steering. | Current notify lacks an acceptance receipt. |
-| Per-agent plugin instances | Isolate configuration and integration cursors logically. | All instances still share the server process. |
-| Seeded tools/prompts | Keep integration instructions and scripts versioned with source. | Agent-local copies are overwritten at start. |
-| Explicit outbound actions | Agent decides when and where a reply belongs. | External delivery needs its own evidence and deduplication. |
+| One small `notify` contract | Every source reuses the same queue, routing and follow-up handling. | No receipt; input can be dropped when the runner is off. |
+| A separate copy per agent | Each agent has its own config and cursors. | All copies share one server process. |
+| Prompts and scripts ship with the plugin | Instructions stay in step with the plugin's code. | Local edits to the copies are lost. |
+| Replies are explicit agent actions | The agent decides whether and where to reply. | Delivery needs its own evidence and duplicate checks. |
 
-[Plan 1.4](../plans/04-ingress-and-operations.md) adds durable ingress, scoped broker operations, operation receipts, and staged file publication through the agent workspace gate. [Plan 1.2](../plans/02-workspace-and-provisioning.md) moves private plugin control state outside compute. These are planned changes, not protections provided by the current `PluginInstanceContext`.
+**Planned** (none of this exists yet):
+
+- [Plan 1.4](../plans/04-ingress-and-operations.md): a durable intake with receipts, scoped broker actions, and safe file publishing.
+- [Plan 1.2](../plans/02-workspace-and-provisioning.md): moves private plugin state out of the agent's reach.
+- The [reusable OAuth proposal](core.md#reusable-plugin-oauth-proposed): lets a plugin register sign-in on its code, so it works before the plugin can run.
+
+## Known issues and suggested improvements
+
+Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High* = lost work, security exposure or a wrong result; *Medium* = confusing or wasteful behavior; *Low* = cleanup. None of these is fixed yet. When one is fixed or scheduled, update this table and the [roadmap](../roadmap.md).
+
+| # | Type | Severity | Problem | Why it matters | Suggested change |
+|---|---|---|---|---|---|
+| 1 | Bug | High | `notify()` during a plugin's `start()` (on every agent Start, Restart or settings swap) throws inside the runner and the error is swallowed; after the agent stops, `notify()` is a silent no-op. Either way the input is dropped. | Lost messages; plugins can't tell. GWS relies on a 5 s delay to avoid it. | See the core fix: start the runner first, or always persist. Return a result from `notify()` so plugins can hold their cursor on failure. |
+| 2 | Bug | Medium | A plugin whose `start()` throws part-way is marked `failed` but `stop()` isn't called. | Timers or polls it already set up keep running, and a later reload can create a second, duplicate producer. | Call `stop()` (with the 5 s limit) after a failed `start()`. |
+| 3 | Risk | Medium | Seed copying only adds and overwrites; it never deletes, and a seed can write anywhere in the agent folder. | Removed plugins leave prompts and scripts behind that still instruct the agent; a bad seed can overwrite agent files. | Record which files each plugin seeded and remove them when the plugin is removed; restrict seeds to namespaced paths. |
+| 4 | Risk | Medium | The Telegram bot token isn't a required secret. Without it (or if Telegram rejects it) the plugin logs a warning and shows `running` while doing nothing. | Looks healthy but receives nothing. | Make the token required, or report a `failed` state with the reason. |
+| 5 | Risk | Medium | Telegram keeps its poll position only in memory. | After a restart, Telegram may resend recent updates, and the queue doesn't dedupe them, so the agent can answer twice. | Save the offset in `state/` after each successful `notify()`. |
+| 6 | Risk | Medium | The queue never removes duplicates by source ID. | Any plugin that re-delivers causes repeated work and repeated replies. | Add an optional dedup key to `NotifyPayload` (planned with the intake in [plan 1.4](../plans/04-ingress-and-operations.md)). |
+| 7 | Risk | Low | GWS backlog emails arrive as `isSilent` without `doNotSteer`. | Old emails can be fed into an unrelated running turn on the same thread. | Set `doNotSteer` on backlog rows too, unless steering is intended. |
+| 8 | Risk | Low | Saving config for a plugin the agent hasn't loaded returns 404; `reloadPlugin` does nothing while the agent is stopped. | Newly added plugins seem "stuck" until the agent is restarted. | Allow the config save to load a newly added plugin, or tell the operator to restart the agent. |
+| 9 | Risk | Low | The registry creates a throwaway instance of each plugin at scan time to read its manifest. | Constructor side effects run once at boot for every plugin, even unused ones. | Read the manifest from a static export instead of an instance. |
+| 10 | Cleanup | Low | `packages/harness/src/plugins/outlook/` exists locally with only a `seed/` folder and no `index.ts`. | The registry logs a "no index.ts; skipping plugin" warning on every boot. | Delete the folder or finish the plugin. |
+| 11 | Cleanup | Low | The GWS plugin's header comment says no helper CLI is shipped, but `scripts/gws/*` are seeded. | Misleading for contributors. | Update the comment. |
+| 12 | Cleanup | Low | The shipped `create-plugin` skill says the notification name isn't delivered to the agent (it is, as `Notification: <name>`), lists only `admin` and `scheduler` as always-on (it misses `agent-messaging`), and links a stale `docs/server.md`. | Agents that write plugins follow wrong guidance. | Update the skill. |
+| 13 | Cleanup | Low | The `scheduler-cli` help says `--once` deletes the schedule after it fires; the plugin actually pauses it. | Agents and operators expect it to disappear. | Fix the help text (or make the behavior match). |
+| 14 | Cleanup | Low | A comment in the Telegram plugin says pending updates are dropped at start; the code doesn't do that. | Misleading for contributors; relates to the redelivery risk above. | Fix the comment, or implement it deliberately. |
 
 ## FAQ
 
-Questions here come from integration operators and plugin authors. The answers describe today's in-process plugins; broker/staging behavior remains planned.
+### Operators
 
-### How do I enable an optional plugin for one agent?
+#### How do I turn on a packaged plugin for one agent?
 
-Create `agents/<agent>/plugins/<pluginId>/config.json` with settings accepted by that plugin's manifest, configure its declared secrets, and restart the agent. A packaged definition can be used directly. Run `cognisphere plugin add <id>` only when you need a deployment-owned source fork; forking alone does not enable it for any agent.
+1. Create `agents/<agent>/plugins/<id>/config.json` with the settings you want. Missing settings get their defaults.
+2. Set the plugin's secrets on the Secrets page.
+3. Restart the agent. A plugin folder added while the agent runs isn't picked up until then.
 
-### How do I add a completely new plugin?
+You don't need `cognisphere plugin add`. That only copies the code so you can change it. Each setting is explained in the plugin's `configSchema` and `secretsSchema`, which the settings page shows.
 
-Create a deployment definition at `<harnessRoot>/plugins/<id>/index.ts` that default-exports a class implementing `Plugin`: manifest, `start`, `stop`, and optionally HTTP handling. Add its agent-local configuration and restart the server so the registry discovers/imports it. Use a bundled plugin as the contract example; the CLI `plugin add` command forks catalog entries rather than generating arbitrary new plugins.
+#### How do I set up Telegram?
 
-### What belongs in `config`, `secrets`, `stateDir`, and `inboxDir`?
+1. Create `agents/<agent>/plugins/telegram/config.json`.
+2. Put the bot token in `TELEGRAM_BOT_TOKEN` (Telegram bucket) and restart the agent.
+3. Check the logs for `telegram authenticated`.
 
-Config holds operator settings validated by `configSchema`; secrets hold credentials declared by `secretsSchema`. `stateDir` holds integration cursors/routes/schedules or other durable plugin data, while `inboxDir` holds received attachments. Put agent-visible instructions/helpers in the definition's namespaced `seed/`. Directory ownership is a convention today, not isolation from agent shell access.
+The token isn't a required secret. If it's missing or Telegram rejects it, the plugin logs a warning and shows `running` while doing nothing ([issue 4](#known-issues-and-suggested-improvements)). Don't use one bot token on two agents: both would poll the same bot. A user who sends `/reset` wipes that chat's thread. With the default `single` strategy that is the agent's one shared thread.
 
-### How do I learn what a particular plugin parameter does?
+#### How do I restrict who can message my agent?
 
-Read its `manifest.configSchema` and `manifest.secretsSchema`, also exposed through the plugins API/settings UI. Schemas specify defaults, required fields, constraints, and descriptions. For example, Telegram's `pollTimeoutSec` controls a long-poll request, whereas GWS's `pollIntervalSec` controls time between polling ticks and accepts `-1` for passive mode. These settings are not the model-run timeout.
+Each plugin has its own filter, and each is off by default:
 
-### How do I choose the destination conversation for a notification?
+- **Telegram:** `allowedChatIds`. It lists **chat** IDs, not user IDs, so anyone in an allowed group gets through. Messages from other chats are dropped without a reply or a log line. To find a chat's ID, message the bot once with the list empty and read `Channel` in that thread's history.
+- **Gmail (GWS):** `allowedSenders` (patterns like `*@abc.com`) and `requireAgentInTo`. Mail from other senders is marked read and skipped.
+- **Agent messaging:** `allowMessageFrom` lists which agents may message this one. Others get a 403.
 
-Set `channelId` to a stable source conversation ID and let the agent's routing strategy derive the thread, or supply `threadIdOverride` for an explicit destination. Keep reset operations consistent with any override. Two sources using the same resolved thread share that conversation and can steer each other; see [core routing and flags](core.md#faq).
+#### How do I connect Gmail, and why is new mail slow to arrive?
 
-### Can I add background context without interrupting the agent?
+Follow the [GWS example](#step-by-step): create `plugins/gws/config.json`, restart, then click **Connect** on the GWS card. By default the plugin polls every 900 seconds (15 minutes). Lower `pollIntervalSec` to poll more often; the smallest gap is 10 seconds. The agent can override these settings itself in `plugins/gws/state/settings.json`, and its values win over `config.json`. So check that file if a change seems ignored.
 
-Set both `isSilent: true` and `doNotSteer: true`. Silent alone only suppresses waking an idle thread and can still steer active work. The combined flags keep the input queued until a later batch is triggered by non-silent work. Scheduler jobs use no-steer so scheduled requests run as fresh work.
+#### A message arrived, but the agent never replied. Why?
 
-### Does returning from `ctx.notify()` mean my source can acknowledge delivery?
+The agent's written answer isn't sent anywhere. It must run the plugin's send script, such as `telegram-cli send-message`. The event can be `done` even though nothing was sent ([example](#example-a-telegram-attachment-and-an-explicit-reply)). Open the thread's history to see what it did. If there is no event at all, check that the plugin is `running`, that no allow-list filtered the message, and the [core FAQ](core.md#faq).
 
-It does not provide a durable receipt: the wrapper returns `void`, logs and swallows runner errors, and can have no active runner. A plugin needs a deliberate cursor/recovery strategy; it cannot infer model completion or guaranteed admission from this call. [Plan 1.4](../plans/04-ingress-and-operations.md) introduces durable ingress acknowledgments and source deduplication.
+#### Why didn't my schedule fire, or why did it fire at the wrong time?
 
-### Will an assistant answer automatically become an email or Telegram reply?
+Check these, in order:
 
-No. The agent must explicitly invoke the relevant integration action with its destination. The admin console reads inline answers from JSONL, but external services are separate delivery paths. When diagnosing a missing reply, inspect the action/tool result as well as whether the model turn finished.
+1. **The agent was stopped.** Schedules fire only while it runs, and missed fires aren't replayed later.
+2. **The schedule is paused.** A one-time (`--once`) job pauses itself after it fires.
+3. **The cron is invalid.** It's skipped and logged as `invalid cron`. If `schedules.json` isn't valid JSON, the old timers keep running, and at the next start the scheduler fails.
+4. **The timezone is wrong.** Cron uses the harness timezone from **Settings**. Saving it reloads running agents.
+5. **The thread is busy.** A fire never interrupts a running turn on its thread, so it waits for that turn to end.
 
-### Why did my edited plugin prompt or helper disappear after restart?
+#### How do agents message each other?
 
-The manager recopies the selected definition's `seed/` on every plugin start. Change the packaged source when developing the harness, or fork the optional definition and edit its seed in the deployment. Editing only the copied file under an agent does not survive that reseed.
+Every agent has the `agent-messaging` plugin. The agent runs `scripts/agent-msg/send --to-agent <id> --thread-id <thread> --message "..."`. The receiver sees `From` and `FromThread`, so it can reply. With `--silent`, the note waits on that thread until something else wakes it. A 403 means the receiver's `allowMessageFrom` doesn't list the sender. A 404 means a wrong agent ID, or that agent isn't running.
 
-### Do I need a public webhook URL for every plugin?
+#### How does an agent publish an HTML page?
 
-No. Telegram long-polls and GWS polls through its CLI; scheduler and admin also do not require incoming external webhooks. A custom HTTP plugin gets a raw handler under `/webhook/<agent>/<plugin>/...`, which bypasses global operator auth. That handler must enforce its own authentication and request rules.
+Turn on the `artifacts` plugin. It needs `appBaseUrl` (your front-end app's address) and the `ARTIFACTS_APP_SECRET` secret. Your app must also forward `/public/artifacts/*` and `/private/artifacts/*` to the plugin ([API §10](api.md#10-plugin-webhooks--webhook)). The agent then runs `scripts/artifacts/artifact publish <file>`. Pages are private (signed-in users only) unless published with `--public`.
 
-### What happens when one plugin fails, or when I edit its source while running?
+#### Do I need a public webhook URL?
 
-A startup failure is recorded for that plugin and does not automatically stop sibling plugins or the runner. Reload replaces an instance using the registry's imported definition; it is not a source hot-reload guarantee. Restart the server to rescan edited/new definitions, and inspect plugin state after applying config or credentials.
+No. Telegram and GWS poll, and admin, scheduler and agent-messaging are internal. Only a plugin that receives HTTP from outside needs one, such as a custom webhook plugin. It gets `/webhook/<agent>/<plugin>/...`, which skips the console login, so its handler must check callers itself.
 
-### What must my `stop()` method do, and who prevents duplicate notifications?
+### Plugin authors
 
-Cancel polls, timers, watchers, and any retained resources so an old instance cannot keep producing work after replacement. Stop has a bounded wait, so plugins must implement cleanup reliably. The current queue does not deduplicate arbitrary external IDs in metadata; source deduplication and uncertain external-action handling need explicit integration logic.
+#### How do I write and test a new plugin?
+
+1. Create `<harnessRoot>/plugins/<id>/index.ts` that default-exports a class with `manifest`, `start()` and `stop()`. The `create-plugin` skill has a tested template, and the built-in plugins are good examples.
+2. `stop()` must cancel every timer, poll and watcher. The manager waits only 5 seconds.
+3. Turn it on for a test agent (see the operator steps above).
+4. Run `cognisphere dev` and look for `plugin loaded` with `"scope":"user"`, then `agent started` with your ID in `runningPlugins`.
+
+If the load fails, the log says `failed to load plugin`. If the start fails, the plugin shows `failed` with the error. Your own `ctx.log` lines go to the server's standard output as JSON, labelled `plugin:<agent>:<plugin>`. Set `LOG_LEVEL=debug` for more detail.
+
+#### Where should each kind of data go?
+
+| Data | Put it in |
+|---|---|
+| Operator settings | `config`, described by `configSchema` |
+| Credentials | `secrets`, described by `secretsSchema` |
+| Cursors, routes, schedules | `stateDir` |
+| Received files | `inboxDir` |
+| Instructions and helpers for the agent | `seed/` |
+
+Nothing enforces this. `stateDir` survives restarts, but the agent can read and change it. Write files atomically (write a temp file, then rename), as the scheduler does.
+
+#### How do I declare config and secrets?
+
+Describe them as JSON Schema in the manifest. The config is validated and defaults are filled in at every start. Only secrets listed in `required` stop the plugin from starting. Every non-empty key in the plugin's bucket is also passed to the agent as an environment variable. Two buckets with the same key make the whole agent fail, so use prefixed names like `ACME_API_KEY`.
+
+#### What does the agent see when I call `notify()`?
+
+It sees `text` after a `<harness-metadata>` block. The block holds `Timestamp`, `Plugin`, `Channel` and `ThreadId`, plus your `metadata` with keys changed to PascalCase. The notification name appears as `Notification: <name>`. Reserved keys such as `Channel` or `ThreadId` in your metadata are dropped, and `null` or `undefined` values are skipped. Describe every field in your seed prompt, because that is the agent's only manual.
+
+#### How do I choose which thread an input lands on?
+
+By default, the agent's `threadIdStrategy` picks the thread from your plugin ID and `channelId` ([routing](core.md#routing)). Use one stable `channelId` per conversation, such as a chat or ticket ID. Pass `threadIdOverride` to pick an exact thread. Telegram and GWS do this with a `routes.json` rule file.
+
+#### Is `notify()` guaranteed to deliver?
+
+No. It returns nothing. If the agent's runner isn't running, the input is dropped. That includes calls made during your own `start()`. That's why GWS waits 5 seconds before its first notify ([issue 1](#known-issues-and-suggested-improvements)). Otherwise the input is saved before `notify()` returns, but you still can't learn about failures. Don't treat a return as proof the model got it.
+
+#### How do I avoid duplicates and floods?
+
+The queue never removes duplicates, and it has no size limit or rate limit. Your plugin must:
+
+- remember which source IDs it has already sent, and save that in `stateDir`;
+- schedule the next poll only after the current one finishes, as GWS does;
+- batch or summarize bursts, since every `notify()` becomes a row.
+
+Use `priority` to make important threads go first.
+
+#### How do I add background information without interrupting the agent?
+
+Set both `isSilent: true` and `doNotSteer: true`. A silent input doesn't wake an idle thread; it waits for the next normal input. Silent alone can still be fed into a running turn.
+
+#### How do I secure my HTTP handler?
+
+The webhook route does no checks of its own. It only forwards requests to a **running** plugin (otherwise it returns 404). Your handler must check the method, body size and caller, and always end the response. For calls from agents, compare the `X-Webhook-Secret` header with `process.env.COGNISPHERE_WEBHOOK_SECRET`. That proves the caller is inside the harness, not which agent it is. For outside services, check their own signature or a secret you declare. See [HTTP and safety](#http-and-safety).
+
+#### How does an agent's script call back into my plugin?
+
+The Pi process gets `PI_WEBHOOK_BASE`, which is `<server>/webhook/<agent>`. A seed script calls `${PI_WEBHOOK_BASE}/<plugin-id>/<path>` and sends `X-Webhook-Secret: $COGNISPHERE_WEBHOOK_SECRET`. The artifacts `list` command is a working example. `PI_AGENT_ID` and `PI_THREAD_ID` tell the script which agent and thread are calling.
+
+#### What goes in `seed/`, and why did my edit to a copied file disappear?
+
+`seed/` mirrors the agent folder: `system_prompts/plugin-<id>.md`, `scripts/<id>/` and `skills/<id>/`. A prompt file outside `system_prompts/` is copied but never loaded. The copy happens on every plugin start and overwrites the agent's copies, so edit the plugin source instead. Keep the prompt short and move longer procedures into a skill. Removing the plugin doesn't delete its copied files ([issue 3](#known-issues-and-suggested-improvements)).
+
+#### When do my code and config changes take effect?
+
+- **Plugin code:** on server restart. `cognisphere dev` restarts the backend when a loaded file changes, but a new plugin folder needs a restart.
+- **Config saved in the console:** that plugin reloads right away, if the agent is running.
+- **`config.json` edited by hand, or a new plugin folder on an agent:** restart the agent.
+- **Secrets:** saving reloads the whole agent once its running turns finish.

@@ -1,73 +1,113 @@
 # Agents low-level design
 
-**Status:** current agent templates and runtime assets. [High-level design](../high-level-design.md) · [Roadmap](../roadmap.md). [FAQ](#faq).
+**Status:** implemented. [High-level design](../high-level-design.md) · [Roadmap](../roadmap.md) · [FAQ](#faq)
 
-## Responsibility and dependencies
+## In one minute
 
-The agents layer defines the capabilities and persistent content Pi sees: persona, prompts, skills, scripts, extensions, knowledge, and work products. The runtime lifecycle is owned by [core](core.md#agent-lifecycle). [CLI](cli.md) creates deployment-owned forks; [plugins](plugins.md) add namespaced seeds; [API](api.md) and [web](web.md) expose configuration and files.
+**An agent is a folder.** Everything Pi knows and uses comes from it:
 
-| Source | Responsibility |
+- its persona and instructions;
+- skills and helper scripts;
+- Pi extensions;
+- notes and work files;
+- plugin data;
+- its conversation history.
+
+[Core](core.md#agent-lifecycle) decides *when* the agent runs. This page explains *what the agent is made of*: how the folder is created, what's in it, how it is configured, and what Pi loads from it.
+
+| Source | What it provides |
 |---|---|
-| [base-agent](../../packages/harness/src/agents/base-agent/) | Base prompts, extensions, tool wrappers, bootstrap requirements, knowledge/workspace seeds. |
-| [nova overlay](../../packages/harness/src/agents/nova/) | Developer-agent persona for managing the deployment. |
-| [scaffoldAgent](../../packages/harness/src/cli/agent.ts) | Copy base/overlay, install skills, write starter `agent.json`. |
-| [AgentJson and fixed tools](../../packages/harness/src/core/types.ts) | Runtime settings contract and tool list. |
-| [spawnPi / assembleSystemPrompt](../../packages/harness/src/core/runner.ts) | Prompt assembly and explicit Pi resource loading. |
+| [base-agent](../../packages/harness/src/agents/base-agent/) | The template every agent starts from: base prompt, extensions, bootstrap script, starter knowledge and workspace folders. |
+| [nova overlay](../../packages/harness/src/agents/nova/) | Extra prompts that make `nova` the developer agent that manages the deployment. |
+| [scaffoldAgent](../../packages/harness/src/cli/agent.ts) | Copies the template (and overlay), installs skills, writes a starter `agent.json`. |
+| [AgentJson, tool list](../../packages/harness/src/core/types.ts) | The settings format and the seven fixed tools. |
+| [spawnPi, assembleSystemPrompt](../../packages/harness/src/core/runner.ts) | Builds the system prompt and tells Pi what to load. |
 
-## Creation and loading
+## Agent lifecycle, end to end
 
 ```mermaid
 flowchart TB
-    Base[Base agent template] --> Fork[CLI agent fork]
-    Nova[Optional nova overlay] --> Fork
-    Skills[Shipped authoring skills] --> Fork
-    Fork --> Agent[Deployment agent directory]
-    PluginSeeds[Selected plugin seeds] -->|every plugin start| Agent
-    Agent --> Config[Manager validates settings and runs bootstrap]
-    Config --> Load[Runner loads prompts, skills and extensions]
-    Load --> Pi[Pi child per batch]
-    Pi --> History[Session JSONL]
-    Pi --> Work[Knowledge and workspace files]
+    Base[Base template] --> Fork[1. CLI copies the template]
+    Nova[nova overlay, dev agent only] --> Fork
+    Skills[Shipped skills] --> Fork
+    Fork --> Dir[Agent folder]
+    Dir --> Configure[2. You set persona, model, secrets, plugins]
+    Configure --> Start[3. Start: check settings, open DB,<br/>run bootstrap, create runner]
+    PluginSeeds[Plugin seed/ files] -->|4. copied on every plugin start| Dir
+    Start --> Idle[Running and idle: no Pi process]
+    Idle -->|5. work arrives| Batch[Pi process for this batch<br/>loads prompts, skills, extensions]
+    Batch --> History[sessions/*.jsonl]
+    Batch --> Work[workspace/, knowledge/]
+    Batch -->|exits| Idle
+    Idle -->|6. stop / reload / shutdown| Stopped[Stopped: files stay]
 ```
 
-`cognisphere init` creates `nova`. The name is reserved for the developer agent; `agent new nova --dev` recreates that role. Ordinary agents receive the base template and `create-skill`; the developer receives the full shipped harness skill set. A fork is deployment-owned, not dynamically inherited from the package after creation. Plugin seed copying is a separate repeated operation.
+1. **Create.**
+   - `cognisphere init` creates `nova`, the developer agent, with all three shipped skills.
+   - `cognisphere agent new support` copies the base template, installs the `create-skill` skill under `skills/agent/create-skill/`, and writes a starter `agent.json` (model `anthropic` / `claude-sonnet-4-6`, thread strategy `single`).
 
-The manager writes the agent-directory prompt fragment only if absent, so operator edits win but the roster is not a live directory service. Sorted `.md` files in `system_prompts/` form the system prompt. The runner adds thread/session context and writes the assembled prompt to `sessions/<thread>/.system-prompt.md`; passing a file path avoids large argv strings.
+   The copy belongs to your deployment. Later harness upgrades **don't** change it automatically.
+2. **Configure.** In the console, enable a model provider, fill in any required secrets, and add `plugins/<id>/config.json` for each optional plugin. Write the persona in `system_prompts/1-agent.md`.
+3. **Start.** The server only finds new agent folders at boot, so restart it. Then core:
+   - checks the settings;
+   - opens `sessions/.events.db`;
+   - runs `bootstrap/bootstrap.sh` (this happens on *every* start);
+   - creates the runner ([full startup steps](core.md#startup-steps)).
+
+   A problem leaves the agent `failed` with a readable error.
+4. **Plugin files.** Each time a plugin starts, its `seed/` files are copied into the agent, overwriting earlier copies. If there are at least two agents, core also writes `system_prompts/0.1-agent-directory.md` (a list of the others) once, when that file is missing.
+5. **Handle a batch.** When there is work, core:
+   1. builds the system prompt from every `system_prompts/*.md` file in name order, plus the thread's context;
+   2. saves it to `sessions/<thread>/.system-prompt.md`;
+   3. starts Pi in the agent's folder.
+
+   Pi adds to the thread's history file and edits files, then exits. Edits to prompts or skills apply to the **next** Pi process, never one that is already running.
+6. **Stop.** Stopping, reloading or shutting down leaves every file, the database and the history in place. Deleting a thread removes its events, its session link and its session folder. Nothing deletes workspace files for you.
 
 ## Persistent layout
 
 ```text
 <harnessRoot>/
   harness.json
-  .secrets/                           credentials, login and model settings
-  plugins/<plugin>/                   optional deployment-owned definitions
+  .secrets/                           credentials, logins and model settings
+  plugins/<plugin>/                   optional plugin code owned by the deployment
   agents/<agent>/
     agent.json                        identity and runtime settings
-    system_prompts/                   ordered instruction fragments
-    skills/                           recursively discovered SKILL.md files
-    scripts/                          agent and plugin command helpers
-    extensions/                       explicit Pi extension entry points
-    bootstrap/                        bootstrap.sh and dependency requirements
-    .venv/                            optional agent Python environment
-    knowledge/                        editable knowledge and memory notes
-    workspace/                        durable work products
+    system_prompts/                   instruction files, read in name order:
+                                        0-base_prompt.md    harness base prompt
+                                        0.1-agent-directory.md  other agents (if ≥2)
+                                        1-agent.md          this agent's persona
+                                        plugin-<id>.md      copied from plugins
+    skills/                           SKILL.md files, found recursively
+    scripts/                          helper scripts (the agent's and plugins')
+    extensions/                       Pi extensions
+    bootstrap/                        bootstrap.sh and its requirements
+    .venv/                            optional Python environment
+    .vertex-sa.json                   only while running with Vertex; removed on stop
+    knowledge/                        notes and memory the agent maintains
+    workspace/                        work products
     plugins/<plugin>/
       config.json
       state/                          cursors, routes, schedules, output
       inbox/                          attachments
     sessions/
-      .events.db                      core queue and thread bindings
-      <thread>/<session>.jsonl         Pi-owned conversation history
-      <thread>/.system-prompt.md       most recent assembled prompt
+      .events.db                      core's queue and thread links
+      <thread>/<session>.jsonl        conversation history (written by Pi)
+      <thread>/.system-prompt.md      the last system prompt built for this thread
 ```
 
-**Current cwd is the entire agent directory**, not `workspace/`. The child can therefore use `knowledge/`, plugin inboxes, and scripts directly. Session files and database placement here do not create a security boundary. Proposed `/workspace`-only cwd and separated control storage belong to [plan 1.2](../plans/02-workspace-and-provisioning.md).
+Pi runs with the **whole agent folder** as its working folder, not just `workspace/`. That makes everything reachable by a relative path: `knowledge/`, plugin inboxes and scripts, but also `sessions/`, the database and `.vertex-sa.json`. None of this layout is a security boundary. A workspace-only view with separate control storage is [plan 1.2](../plans/02-workspace-and-provisioning.md).
 
-Pi writes JSONL; core writes event/session bindings; plugins write integration state; tools write work products. These are separate persistence responsibilities. The session API reads files and the console renders entries; neither replaces Pi as the transcript writer.
+| Who writes | What |
+|---|---|
+| Pi | `sessions/<thread>/*.jsonl` (the conversation) |
+| Core | `.events.db` (inputs, thread-to-session links), `0.1-agent-directory.md`, `.system-prompt.md` |
+| Plugins | `plugins/<id>/state` and `inbox`, plus their copied seed files |
+| The agent's tools | `workspace/`, `knowledge/`, and anything else in the folder |
+
+The console and API only *read* history files. Pi is the only thing that writes them.
 
 ## Configuration and credentials
-
-Illustrative `agent.json`, using the repository's scaffold model value (the provider/model must be configured and enabled in the deployment):
 
 ```json
 {
@@ -85,111 +125,211 @@ Illustrative `agent.json`, using the repository's scaffold model value (the prov
 }
 ```
 
-| Field / store | Behavior |
+| Field | Meaning |
 |---|---|
-| `name`, `description`, `devAgent` | Display/roster identity and developer-role marker. |
-| `model` | Default provider/id/thinking level; unset thinking defaults to `medium`. Per-thread overrides take effect on next batch. |
-| `threadIdStrategy.type` | `single`, `plugin`, `plugin_channel`; explicit per-input override wins. |
-| `maxConcurrentSlots`, `maxAttempts` | Defaults 1 and 3; slots clamped to at least 1. Current validation is targeted, not a complete schema for all fields. |
-| `configSchema` / `config` | Schema-validated nonsecret string environment values; populated config requires a schema. |
-| `secretsSchema` | Agent secret fields; only required keys block startup when absent. |
-| `.secrets/secrets.json` | `agentId → bucket → key/value`, with reserved bucket `agent`; duplicate environment keys fail startup. |
-| `.secrets/models.json` | Provider credentials, enabled models, context/token overrides. Known providers are gated; unknown providers can fall through to Pi ambient configuration. |
+| `name`, `description` | Shown in the console and to other agents. The **folder name** is the agent's ID. |
+| `devAgent` | Marks the developer agent (set by the CLI). |
+| `model.provider`, `model.id` | The default model. It must be set up and enabled on the Models page. |
+| `model.thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high` or `xhigh`. Default `medium`. A thread can override the model from its next batch. |
+| `threadIdStrategy.type` | How inputs are grouped into conversations: `single` (one), `plugin` (one per source), `plugin_channel` (one per source chat). |
+| `maxConcurrentSlots` | How many conversations can run at once. Default 1. They share files with no lock. |
+| `maxAttempts` | How many failed attempts before an input is marked failed. Default 3. |
+| `configSchema` and `config` | Non-secret settings given to Pi as environment variables (`REPLY_STYLE` above). **Set both or neither.** Values must be strings. |
+| `secretsSchema` | The agent's own secret fields. Only *required* ones stop it from starting. |
 
-Plugin contexts receive declared keys from their bucket; the Pi child receives all nonempty keys across the agent's buckets plus provider credentials and config. Collisions across those sources fail startup. Secrets are readable by code the agent runs. Provider OAuth uses Pi's separate runtime `auth.json` (normally under `~/.pi/agent/`), while Workspace OAuth lives under the harness's `.secrets/gws/`. Model overrides are synchronized into Pi's runtime `models.json`.
+Only some fields are validated. The `sandbox` fields in roadmap examples don't exist yet. When each change takes effect is covered in [core configuration](core.md#configuration).
+
+### Where credentials live
+
+| Store | Contents |
+|---|---|
+| `.secrets/secrets.json` | `agent → bucket → key: value`. The bucket `agent` holds the agent's own secrets; every other bucket is named after a plugin. Top-level keys (at the agent-ID level) starting with `_` are notes and are ignored; a `_KEY` inside a bucket is still passed to Pi. The same key in two buckets of one agent makes the agent fail to start. |
+| `.secrets/models.json` | Provider keys, enabled models, context and output size overrides (also copied into Pi's config). Providers the harness doesn't know are left to Pi's own setup. |
+| Pi's `auth.json` (usually in `~/.pi/agent/`) | Subscription sign-in tokens for model providers. Pi owns this file. |
+| `.secrets/gws/` | The Google Workspace client and each agent's Google credentials. |
+
+### What the Pi process can see
+
+| Who | Receives |
+|---|---|
+| Each plugin | Only its own declared keys. |
+| The Pi process | The server's environment variables, which include the internal webhook secret; harness variables (`PI_AGENT_ID`, `PI_THREAD_ID`, `PI_WEBHOOK_BASE`, `HARNESS_BASE_URL`, `VIRTUAL_ENV`); **every non-empty key from all of the agent's buckets**; model credentials; config values. |
+
+If the same variable name is defined by two of *secrets, config and model credentials*, the agent fails to start. Against the server's own variables there's no check: the agent's value simply wins.
+
+**Anything the agent runs can read all of these.**
 
 ## Runtime capabilities
 
-Every agent has the fixed tools `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. The runner disables ambient prompt/context/skill/extension discovery and passes the explicit roots. Skills load recursively from `skills/`; extensions are valid first-level `.ts`/`.js` files or directories with an entry point.
+Every agent has the same seven tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. There's no setting to change them.
 
-| Base extension | Operation and reason |
+Pi's own automatic discovery of prompts, context files, skills and extensions is turned off. Instead, core tells Pi exactly what to load:
+
+- **Skills:** every `SKILL.md` under `skills/`, at any depth.
+- **Extensions:** each `.ts` or `.js` file directly inside `extensions/`, or each folder there that has an entry file. Deeper files aren't loaded on their own.
+
+| Base extension | What it does and why |
 |---|---|
-| [harness-bridge](../../packages/harness/src/agents/base-agent/extensions/harness-bridge.ts) | Sweeps persisted user entries at later events and reports IDs via RPC extension status frames. Maps queued inputs to history without pretending message events prove persistence. |
-| [context-meta](../../packages/harness/src/agents/base-agent/extensions/context-meta.ts) | Persists checkpoint deltas and injects ephemeral per-call context usage. Avoids creating endless turns by only queuing mid-run metadata when another model call is expected. |
-| [bash-guard](../../packages/harness/src/agents/base-agent/extensions/bash-guard.ts) | Prepends `set -u` and provides a quoting hint on unbound-variable errors. Agents can opt out; this prevents accidental text corruption, not malicious shell access. |
-| [skill-update-notice](../../packages/harness/src/agents/base-agent/extensions/skill-update-notice.ts) | Tracks read/notified skill versions in custom session entries and announces later changes with a short changelog. |
+| [harness-bridge](../../packages/harness/src/agents/base-agent/extensions/harness-bridge.ts) | Tells core the ID of each user message Pi actually saved. Core uses this to link inputs to history and to choose between a "please continue" nudge and a full resend on retry. |
+| [context-meta](../../packages/harness/src/agents/base-agent/extensions/context-meta.ts) | Records how much of the context window is used and shows it to the model on each call. It only adds this mid-run when another model call is coming, so it can't cause extra turns. |
+| [bash-guard](../../packages/harness/src/agents/base-agent/extensions/bash-guard.ts) | Adds `set -u` to shell commands and explains unset-variable errors, which prevents silent text corruption. It can be turned off and is **not** a security control. |
+| [skill-update-notice](../../packages/harness/src/agents/base-agent/extensions/skill-update-notice.ts) | Remembers which skill versions the agent has read and tells it when a skill changes, with a short changelog. |
 
-Bootstrap executes on the host at agent startup. `.venv/bin` is prepended to PATH when available. Helpers such as `agent-browser`, `ddgs`, `markitdown`, and `session-reader` are agent capabilities; they do not own queue scheduling.
+The bootstrap script runs directly on the host every time the agent starts. `.venv/bin` goes first on `PATH` when it exists. Helper tools such as `agent-browser`, `ddgs`, `markitdown` and `session-reader` are just tools the agent can use.
 
-## Example: the same agent across two conversations
+## Example: one agent, two conversations
 
-With `plugin_channel`, Telegram chat 42 maps to `telegram:42`, while operator input with explicit `threadId: review` maps to `review`. Each thread has a separate canonical JSONL. Both children use the same agent directory and can read `workspace/report.md`.
+Support uses `plugin_channel`:
 
-1. Chat 42 asks support to create the report. Core starts Pi with chat 42's session path.
-2. Pi reads the plugin prompt/skills, writes the report, and records its actions in that conversation.
-3. Later the operator asks the `review` thread to revise it. That thread has independent history, but can read the same report.
-4. If multiple current slots run these turns simultaneously, files can race. The future shared-workspace gate serializes whole turns and requires rereading current files before editing.
+- a Telegram message from chat 42 goes to thread `telegram:42`;
+- a console message sent with `threadId: review` goes to thread `review`.
 
-## Design choices and future work
+Each thread has its own history file, but both use the same folder.
 
-Editable deployment forks support custom personas and local tools; repeated seed copying keeps packaged plugin instructions aligned. These ownership rules must be understood before upgrades. File-backed history preserves Pi behavior and readable evidence, while agent-authored memory remains editable notes rather than an authoritative transcript.
+1. Chat 42 asks for a report. Pi runs with `telegram:42`'s history, reads the Telegram prompt and skill, and writes `workspace/report.md`.
+2. Later, the operator asks `review` to improve it. That conversation knows nothing about chat 42, but the file is right there.
+3. With `maxConcurrentSlots` above 1, both could run at once and overwrite each other's edits. The planned workspace gate lets only one turn change files at a time, and makes each turn re-read files before editing.
 
-[Plan 1.2](../plans/02-workspace-and-provisioning.md) introduces immutable approved assets and shared workspace coordination; [plan 2](../plans/08-session-search-memory.md) adds source-linked recall; [plan 3](../plans/09-agent-improvement.md) produces reviewable improvements before allowing trusted publication. None of those plans currently prevents an agent from modifying its host-accessible assets.
+## Design choices
+
+| Choice | Why | Cost |
+|---|---|---|
+| Agents are editable copies | Each deployment can have its own personas and tools. | Upgrades need a deliberate migration. |
+| Plugin files are re-copied on start | Integration instructions stay in step with the plugin code. | Edits to those copies are lost. |
+| History stays in Pi's own files | Pi's features work unchanged, and there's a readable record. | Agent "memory" is just editable notes, not an authoritative record. |
+| The whole folder is Pi's working folder | Everything is a simple relative path. | Nothing separates assets, history and credentials. |
+
+Planned:
+
+- [plan 1.2](../plans/02-workspace-and-provisioning.md): approved read-only assets and the workspace gate;
+- [plan 2](../plans/08-session-search.md): read-only history search;
+- [plan 3](../plans/09-agent-improvement.md): reviewable self-improvements.
+
+None of these stops today's agent from editing its own files.
+
+## Known issues and suggested improvements
+
+Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High* = lost work, security exposure or a wrong result; *Medium* = confusing or wasteful behavior; *Low* = cleanup. None of these is fixed yet. When one is fixed or scheduled, update this table and the [roadmap](../roadmap.md).
+
+| # | Type | Severity | Problem | Why it matters | Suggested change |
+|---|---|---|---|---|---|
+| 1 | Bug | Medium | `0-base_prompt.md` contains `{{Timezone}}`, but nothing replaces it: `scaffoldAgent` doesn't, although a comment in `runner.ts` says variables are baked in at creation. | Every agent sees the literal text `{{Timezone}}` in its system prompt. | Substitute the variables when scaffolding (or at prompt assembly), and fix the comment. |
+| 2 | Risk | High | Pi's working folder is the whole agent folder, and it gets every secret as an environment variable. | The agent's own tools can read `sessions/.events.db`, other threads' histories, `.vertex-sa.json` and all credentials. | Workspace-only view and a credential broker ([plan 1.2](../plans/02-workspace-and-provisioning.md), [plan 1.4](../plans/04-ingress-and-operations.md)). |
+| 3 | Risk | Medium | Bootstrap failures are logged and ignored. | The agent shows `running` while a tool it relies on is missing. | Record bootstrap failure on the agent (a warning state or error shown in the console). |
+| 4 | Risk | Medium | Removing a plugin folder leaves its seeded prompt, scripts and skills in the agent. | The agent keeps following instructions for a plugin that is gone. | Track and remove seeded files (see [plugins](plugins.md#known-issues-and-suggested-improvements)). |
+| 5 | Risk | Low | There's no way to restrict tools per agent. | Every agent can run shell commands. | A per-agent tool policy, enforced by the runtime ([protection profiles](../plans/07-protection-and-cutover.md)). |
+| 6 | Risk | Low | `agent.json` has no full schema; only some fields are validated, and `config`/`configSchema` must be set together with string values. | Typos in unchecked fields are silently ignored; the together-rule surprises people. | Validate the whole file against one schema and give specific error messages. |
+| 7 | Cleanup | Low | The "next steps" printed by `agent new` say `plugin add <id>` "adds a catalog plugin". | It only copies plugin code; it doesn't turn the plugin on for the agent. | Change the hint to explain creating `plugins/<id>/config.json`. |
+| 8 | Cleanup | Low | `bootstrap.sh` ends by telling you to restart the server; restarting the agent is enough, because `.venv` is picked up on every Pi start. | Unnecessary server restarts. | Change the message. |
 
 ## FAQ
 
-These questions cover people configuring agents and developers extending their capabilities. They describe the current file-backed agent contract.
+### Operators
 
-### How do I create an agent that is ready to receive work?
+#### How do I set the agent's persona?
 
-Run `pnpm exec cognisphere agent new support` from the app home or its harness directory. Set the persona in `system_prompts/1-agent.md`, configure/enable its model provider in the console, and set required agent/plugin credentials. Restart the server to discover the new directory, then check agent and plugin states before sending work.
+Write it in `system_prompts/1-agent.md`: who the agent is, its tone, and what it owns. Put step-by-step procedures in skills instead. The change applies from the next batch, with no restart. Don't edit `0-*` files, which the harness owns, or `plugin-*.md` files, which are overwritten on every start. Other agents see this agent's `description` from `agent.json`. Their list of agents is written only once, so delete their `system_prompts/0.1-agent-directory.md` to refresh it.
 
-### What does each top-level `agent.json` parameter control?
+#### Why does my agent mix up conversations from different chats?
 
-| Parameter | What to decide |
-|---|---|
-| `name`, `description` | Human-readable identity and role description; the directory name remains the agent ID. |
-| `model.provider`, `model.id` | Default configured provider and enabled model. |
-| `model.thinkingLevel` | Pi reasoning setting; defaults to `medium` at spawn when absent. Supported configuration values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`; actual model support depends on the selected runtime/model. |
-| `threadIdStrategy` | How ordinary plugin/channel inputs share or separate conversations. |
-| `maxConcurrentSlots` | Active batch capacity per agent; default 1. |
-| `maxAttempts` | Failed-attempt budget before a notification becomes terminally failed; default 3. |
-| `configSchema`, `config` | Shape and values of nonsecret environment configuration. |
-| `secretsSchema` | Agent-owned credential fields and which are required. |
-| `devAgent` | Developer-agent marker written by CLI scaffolding. |
+New agents use `threadIdStrategy: single`, so every source and every chat share one thread. Set `plugin_channel` in `agent.json` to give each chat its own thread. Threads keep separate histories but share the same files ([example](#example-one-agent-two-conversations)).
 
-Use sensible positive integer capacity/retry values; current validation does not enforce a complete schema for every field. Proposed `sandbox` fields in roadmap examples are not implemented settings.
+#### Can I use a different model for one conversation?
 
-### How do I separate customer chats while preserving each chat's history?
+Yes, either from the thread header in the chat or through the thread-model API once the thread exists. It applies from the next batch. Clearing it goes back to the agent default. Changing the default doesn't clear overrides that threads already have.
 
-Use `threadIdStrategy: { "type": "plugin_channel" }` and stable source channel IDs. Plugin routing overrides can still choose another thread. This is conversation routing, not an authorization or filesystem boundary; all threads of the agent can access the same agent files today.
+#### The agent fails after I added a secret or config key. Why?
 
-### Can I change the model for just one conversation?
+Check these, in order:
 
-Yes. Select a per-thread override in chat or use the thread-model API after that thread exists. The override applies to the next batch, not the current model turn. Clearing it restores inheritance from the agent default; changing the default alone does not remove existing thread overrides.
+1. Required schema fields are all filled in.
+2. `config` matches `configSchema`, and you have both or neither.
+3. All `config` values are strings.
+4. The model is enabled.
+5. No two of *secrets, config and model credentials* use the same variable name.
+6. No two secret buckets of this agent use the same key.
 
-### Where should I store a report, durable notes, and private credentials?
+Saving can succeed even though the next start fails, so read the agent's error.
 
-Put work products under `workspace/`, editable knowledge/memory under `knowledge/` in the current layout, and configured credentials in the harness's `.secrets` stores. Current cwd is the agent root, so `workspace/report.md` is an agent-relative path. Credential storage conventions do not hide exported values from the agent's tools; the planned layout/broker changes that boundary.
+#### I edited `.secrets/secrets.json` by hand, but old values are still used.
 
-### Which prompt files should I edit, and when do prompt changes take effect?
+Secrets are cached. Only saving through the Secrets page (or a settings save) clears the cache. The Start and Restart buttons don't. Save through the console, or restart the server.
 
-Use `system_prompts/1-agent.md` for the agent persona. Preserve ownership conventions for harness `0-*` and plugin `plugin-*.md` fragments; plugin copies are reseeded from their definition. The runner assembles sorted prompt files on every new child spawn, so an edit does not rewrite the system prompt of an already-running batch.
+#### I fixed a secret and saved, but the agent is still `failed`.
 
-### How do I add a skill, a helper script, or a Pi extension?
+Saving only reloads agents that are running. Press **Start**.
 
-Place a skill under `skills/<namespace>/<name>/SKILL.md`, a helper under `scripts/<namespace>/`, or an extension at a valid first-level entry in `extensions/`. Skills load recursively; extension discovery does not recursively import arbitrary nested files. The next child loads the configured resources. A skill supplies guidance, while an extension executes code inside Pi; review that distinction before installing one.
+#### How does the agent remember things?
 
-### Can I turn off bash just by changing `agent.json`?
+Only through files. The base prompt tells it to keep notes in `workspace/threads/<thread>/notes.md`, facts in `knowledge/memory.md`, and reference documents in `knowledge/files/`. The harness doesn't check or index these files. Each thread sees only its own history, but all threads share the files. Searching past history is [planned](../plans/08-session-search.md).
 
-There is no per-agent tools field for that today: the runner supplies the fixed seven-tool list. Removing an instruction or adding a bash-guard rule is not an access-control boundary. Restricting execution requires a deliberate runtime/tool policy implementation, with the stronger planned options described in [protection profiles](../plans/07-protection-and-cutover.md).
+#### Will upgrading the harness overwrite my agents?
 
-### Why does the agent fail to start after I add a secret or config key?
+No. Agent folders are yours, and they change only through the [upgrade process](cli.md#upgrades). That process replaces the harness-owned `0-*` prompt files, so keep your own instructions in `1-agent.md`. Plugin seed files are the other exception: they are copied again each time a plugin starts.
 
-Check required schema fields, config-schema validation, provider configuration/model enablement, and environment-key collisions. Agent, plugin, provider, and nonsecret config sources must not ambiguously define the same flattened key. Saving settings can succeed while the resulting agent is failed; read the returned/state error rather than relying on the save alone.
+#### What does resetting a conversation remove?
 
-### I changed secrets on disk. Why does restarting just the agent still use old values?
+That thread's events, session link and session folder, and only when the thread isn't running. It doesn't touch workspace files, plugin state, or anything already sent outside. If several chats share that thread, they all lose that history.
 
-The secrets store caches reads. Use the dedicated secrets API/console, which invalidates the cache during reload, or restart the server to create fresh stores. A plain stop/start of the agent is not the same cache-invalidation path.
+#### How do I copy, rename or delete an agent?
 
-### What happens if bootstrap fails or a helper dependency is missing?
+There's no command for this; only `cognisphere agent new` exists. Stop the server first, because agent folders are only read at boot. Then:
 
-Bootstrap runs at agent startup on the host, and failures are logged/tolerated; an agent may appear running while a helper still fails. Inspect bootstrap and tool output, repair the dependency setup, and restart the agent to rerun it. The versioned approved provisioning in plan 1.2 is not yet the current behavior.
+- **Copy:** copy the folder without `sessions/`, `.venv/` and `plugins/*/state/`. Otherwise the copy would inherit history, a broken Python environment and duplicate schedules. Add a secrets entry for the new ID.
+- **Rename:** rename the folder, since the folder name is the ID. Then rename the agent's entry in `.secrets/secrets.json` and its folder in `.secrets/gws/`.
+- **Delete:** remove the folder, its secrets entry and `.secrets/gws/<id>/`.
 
-### Does upgrading the harness automatically replace all my agent customizations?
+After any of these, delete the other agents' `0.1-agent-directory.md` so it's rebuilt, and fix any `allowMessageFrom` lists that name the agent. `nova` can't be renamed: prompts refer to it by that name.
 
-Agent forks are deployment-owned and require deliberate migration; they are not live subclasses of the package template. Plugin-owned seed files are a separate case and are recopied at plugin start. Follow the [two-phase upgrade process](cli.md#upgrades) and inspect the proposed diff before treating code installation as a completed data migration.
+### Agent authors
 
-### What does resetting a conversation remove? Does it reset the agent's files too?
+#### Skills, scripts or extensions: which should I use?
 
-Thread deletion removes that thread's queued/history event rows, session binding, and session directory, once no batch is active. It does not undo workspace files, plugin state, or external actions. If several channels route to one thread, they share the context being deleted.
+- **Skill** (`skills/**/SKILL.md`): a written procedure. Only its name and description are in the prompt, and the agent reads the full file when a task matches. Use it for workflows and runbooks.
+- **Script** (`scripts/`): a program the agent runs with `bash`. Nothing tells the agent a script exists, so mention it in a skill or in `1-agent.md`.
+- **Extension** (`extensions/`): code loaded into every Pi process. It reacts to Pi events without the agent choosing, like `bash-guard`. Use it only for behavior that must always apply.
+
+See [runtime capabilities](#runtime-capabilities) for how each is loaded.
+
+#### In what order is the system prompt put together, and how do I see it?
+
+Core reads every `.md` file directly in `system_prompts/`, sorted by file name: `0-base_prompt.md`, `0.1-agent-directory.md`, `1-agent.md`, then the `plugin-*.md` files. It then adds the thread ID. Pi adds the list of skills. A new file such as `2-rules.md` lands before the plugin files. The prompt last used by a thread is saved in `sessions/<thread>/.system-prompt.md`, without the skill list.
+
+#### How do I give an agent a new tool? Can I turn off `bash`?
+
+The seven built-in tools are fixed; there's no setting to add or remove one. Prompt rules and bash-guard don't restrict access either ([issue 5](#known-issues-and-suggested-improvements), [protection profiles](../plans/07-protection-and-cutover.md)). To add an ability, put an executable in `scripts/agent/` and describe it in a skill. If it needs an outside service or background listening, write a [plugin](plugins.md) instead.
+
+#### How do I add Python packages or system programs?
+
+Add Python packages to `bootstrap/requirements.txt`. Add other install steps to `bootstrap/bootstrap.sh`. The script runs every time the agent starts, so restart the agent to apply the change. `.venv/bin` goes first on `PATH` for every Pi process. A bootstrap failure is only logged, and the agent still shows `running` ([issue 3](#known-issues-and-suggested-improvements)). Check the server log after a restart.
+
+#### Which environment variables can the agent's scripts use?
+
+- `PI_AGENT_ID`, `PI_THREAD_ID`: which agent and thread are running.
+- `PI_WEBHOOK_BASE`: the base URL for calling this agent's plugins.
+- `HARNESS_BASE_URL`: the server's address.
+- `COGNISPHERE_WEBHOOK_SECRET`: the shared secret that plugin HTTP routes check.
+- `VIRTUAL_ENV`: set only when `.venv` exists.
+- All of the agent's secrets, `config` values and model credentials, plus the server's own variables.
+
+See [what the Pi process can see](#what-the-pi-process-can-see).
+
+#### Can the agent run a server or other long-running process?
+
+No. When a batch ends, the harness kills everything Pi started, including background processes. Start what you need within the turn, or run it outside the harness. A plugin can also run in the background for the agent.
+
+#### How big is the context window, and what happens when it fills?
+
+The model's size comes from Pi's model list. You can override it on the **Models** page. The agent sees `ContextUsage` in the latest message and `Checkpoint` notes before each model call. Pi compacts the history itself when it gets full. To save space, the base prompt tells the agent to hand long reads to task threads.
+
+#### Can an agent start sub-agents or run work in parallel?
+
+There are no sub-agents. The agent can message itself on a new thread ID (a "task thread") or message another agent, both with `scripts/agent-msg/send`. With the default `maxConcurrentSlots: 1`, these threads run one after another, not at the same time. Raising the limit runs them in parallel, but they share files with no lock.
+
+#### How do I test a change to an agent?
+
+Prompt, skill, script and extension changes apply from the next batch. Send a message from the console chat, ideally on a **New Thread** so old history doesn't mix in. Then check the reply, the events list, and `sessions/<thread>/.system-prompt.md`. Changes to `agent.json` apply when you save through the console, or after an agent restart if you edited the file by hand. Bootstrap changes need an agent restart.
+
+#### I removed a plugin folder. Why are its prompt and scripts still there?
+
+Seed copying only adds and overwrites; it never deletes. Remove the plugin's `system_prompts/plugin-<id>.md`, `scripts/<id>/` and `skills/<id>/` yourself.

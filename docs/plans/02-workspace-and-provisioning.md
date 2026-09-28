@@ -1,166 +1,103 @@
-# Plan 1.2: persistent workspace and native provisioning
+# Plan 1.2: agent directories and persistent filesystem
 
-**Status:** planned. **Depends on:** [1.1 execution identities/admission](01-sdk-runtime.md). **Layers:** [core](../low-level/core.md), [agents](../low-level/agents.md), [plugins](../low-level/plugins.md), [API](../low-level/api.md), [CLI](../low-level/cli.md). [Roadmap](../roadmap.md#1-sandbox-implementation). [FAQ](#faq).
+**Status:** planned. **Delivery:** M1 directory/resources/configuration, M2 SDK integration and writer ownership, M5 persistent Docker mounts, M11 image customization. [Delivery order](../roadmap.md#delivery-order). **Depends on:** no runtime migration for the M1 scaffold/resolver; execution uses the [SDK host](01-sdk-runtime.md). **Layers:** agents, core, plugins, API and CLI. [FAQ](#faq).
 
-## Objective and contracts
+## Objective
 
-Give each agent one persistent shared workspace, separate session histories/profiles, immutable approved asset releases, and versioned native dependencies. Every managed workspace reader/writer in an executing turn participates in one agent-wide writer gate. Session capacity is independent of execution permission.
+Start with three clearly owned directories: **base**, **agent-managed**, and **sessions**. Base contains approved defaults, agent-managed contains writable overrides and work products, and Pi directly owns session JSONL on the persistent filesystem. There is no harness session archive, transcript storage adapter, memory provider or per-turn workspace snapshot.
 
-[Plan 1.8](10-agent-simplification.md#1-base-assets-workspace-and-images) extends this layout with all agent/plugin defaults in the selected base release, workspace prompt/skill/script overrides, and post-base image installation steps. It owns resolution/order and base-publication permissions; this plan owns persistence and writer coordination.
-
-[Runtime contracts](runtime-contracts.ts) define `AgentVolumeProvider.prepare/sessionPaths/checkpoint`, `AgentPaths`, `SandboxPaths`, `WorkspaceWriteLease`, `RuntimeRecipe`, `MemoryProvider`, and `PluginWorkspaceManager`. These providers prepare directories and capture revisions; they do not serialize Pi conversations. Lease ownership/fencing is enforced by trusted control state, not a lock file a shell command can ignore.
+M1 delivers the layout, resource resolver and validated main/sub-agent configuration before changing execution. It can scaffold a new agent, preview each role's effective prompts/skills/scripts/model, and produce a migration dry run. Move existing running agents only after M2 can execute against the new layout; preserve original files and customizations during migration.
 
 ## Data boundaries
 
 ```text
 <harnessRoot>/
-  control/
-    runs.db                           queue, singleton, slots, writer leases,
-                                      operation/event records and workspace head
-    plugins/<agent>/<plugin>/         private cursors, schedules, authorization
-    secrets/                          protected credentials / vault references
-    incoming/<agent>/<file-id>/        durable attachment staging
-    archives/                         optional local archive backend
+  control/                              trusted queue/run/task/operation metadata,
+                                        plugin cursors/schedules, vault refs, staging
   runtime-installations/<agent>/<platform>/<recipe-hash>/
-                                      approved versioned Process dependencies
+                                        approved Process dependencies
+  runtime/<agent>/                      nonsecret run specs and temporary scratch
   agents/<agent>/
-    agent.json                        operator-controlled settings
-    assets/releases/<revision>/       approved immutable runtime assets
-    workspace/                        one cwd shared by every session
-      files/ scripts/ skills/ prompts/ shared agent-authored work and overrides
-      install/ config/ resources.json image steps, nonsecret preferences, resource additions
-      memory/ .deps/                  shared notes and project dependencies
-      plugins/<plugin>/               attachments/, files/, rebuildable cache/
-    sessions/<thread>/<session>/       separate live Pi JSONL histories
-    profiles/<thread>/<session>/       separate HOME/browser state; credentials policy applies
-    runs/<run>/spec/                   nonsecret run settings
-    scratch/<session>/<run>/           temporary session files
+    agent.json                          trusted main/sub-agent configuration
+    base/releases/<revision>/           read-only approved resource bundle
+      manifest.json
+      prompts/ skills/ scripts/ install/
+      plugins/<plugin>/                 plugin prompts, skills, scripts, install steps
+    agent-managed/                      shared writable cwd and persistent data
+      resources.json                    ordered permitted resource additions
+      prompts/ skills/ scripts/         new content and same-ID overrides
+      install/ config/                  image-step drafts and nonsecret preferences
+      files/ .deps/                     work products and project dependencies
+      plugins/<plugin>/                 attachments, files, rebuildable cache
+      state/profiles/<thread>/<session>/ separate HOME/browser/config state
+    sessions/<thread>/<session>/        Pi-created and Pi-maintained JSONL
 ```
 
-| Resource | Process | Docker |
+`agent-managed/` is the shared workspace. It can contain ordinary notes as files; no special memory directory, recall hook or memory service is prescribed. Profiles are separated by logical session, but live under persistent agent-managed state. Temporary scratch and harness-produced run specifications stay outside these three durable content roots; no secrets enter them.
+
+| Resource | Process path | Docker path |
 |---|---|---|
-| Assets | Resolved immutable release | `/assets` packaged in read-only image; versioned read-only mount is an alternative |
-| Shared workspace / cwd | Agent `workspace/` | `/workspace`, read-write |
-| Session histories | Agent `sessions/<thread>/<session>` | `/sessions/<thread>/<session>`, Pi-writable |
-| Run specification | Nonsecret per-run directory | Preplanned read-only transfer root or supervisor channel |
-| Session profiles/scratch | Scoped directories | Separate writable roots from the shared cwd |
-| Dependencies | Approved native installation | `/opt/runtime` in a pinned image; project installs use the gate |
+| Base resources | Selected `base/releases/<revision>` | `/assets`, read-only image content or a pinned read-only mount |
+| Agent-managed cwd | `agent-managed/` | `/workspace`, persistent read-write mount |
+| Pi session files | `sessions/<thread>/<session>/` | `/sessions/<thread>/<session>/`, persistent Pi-writable mount |
+| Profiles | `agent-managed/state/profiles/...` | Scoped paths under `/workspace/state/profiles/...` |
+| Run specification/scratch | `runtime/<agent>/...` | Read-only spec transfer or host channel; bounded temporary scratch |
 
-Plan mounts when the sandbox starts; opening a session does not add Docker bind mounts. Never expose the control database, other agents, host HOME, Docker socket or real harness credentials. Build an allowlisted environment instead of spreading `process.env`; disable ambient credential/global Pi discovery.
+Fix parent mounts at sandbox creation. Do not mount trusted control data, host HOME, another agent's roots or a Docker socket. Use explicit environment/resources and disable ambient credential discovery. Process is `[no sandbox]`: same-owner files are not enforceably immutable there. The Docker baseline also does not isolate hostile sessions from each other's readable files. Strict tools would require a separate boundary without session mounts.
 
-Same-agent sessions share trust and can potentially access one another's files or grants under the same OS identity. Paths and routing prevent accidental mixing, not malicious-session isolation. Keep secrets in the trusted broker. Approved Pi extensions come from immutable assets; workspace scripts must never become privileged host hooks.
+[Plan 1.8](10-agent-simplification.md#resolution-and-override-rules) owns exact resource resolution: namespaced IDs, agent-managed-over-base precedence, whole-skill replacement, explicit prompt ordering, permitted additions and role selection. Both main and sub-agent manifests are configured in M1; execution arrives in M2/M3. Base files stay read-only, and later base-update permission publishes a new immutable release.
 
-The Docker baseline allows Pi to write history and ordinary tools share its identity. Strict workspace-only tools need a separate execution identity/service without session mounts. Process is explicitly trusted/unsandboxed and cannot claim host isolation or enforceable immutability for same-owner assets.
+## Pi-owned sessions
 
-## Why a single sandbox alone does not avoid conflicts
+Pi creates, appends, compacts, branches and resumes its JSONL directly in `sessions/`. The harness gives the SDK an explicit session directory, the selected existing session reference when resuming, and the shared cwd. Use Pi's supported session APIs, including cwd override where required for an older header; never rewrite transcript headers to move an agent.
 
-Two processes in the same container can both read version 1 of a file, independently edit it, and overwrite each other's changes. Git operations, package installs, generated output, browser profiles and shared memory files have similar conflicts. A common filesystem removes divergent copies, but it does not serialize multi-step read/modify/write operations.
+The harness retains only routing/control metadata: agent/thread/role identity, Pi session ID/file reference reported by the SDK, active run, input-to-entry correlation and task/operation receipts. This is not another transcript store. Do not copy JSONL after every run, export/import it around a sandbox start, maintain archive/restore heads, or implement a second session serializer/repairer. Session files remain on the same backing filesystem when compute stops or is replaced.
 
-The initial design prevents **overlapping participating writers**, using these rules:
+Before launch, verify the configured persistent roots exist, belong to the expected agent/volume and have the required access. First-time directory provisioning is an explicit action; a missing mount or unexpectedly missing known session must not silently create empty replacement history. If the filesystem is unavailable/full/read-only or Pi reports an open/write error, stop the affected run and expose `recovery_required`; preserve existing bytes, revoke grants and prevent unsafe handoff. Do not replay a completed external action to compensate for a session-file error.
 
-- Acquire the agent-wide writer lease **before reads or agent-code startup** and keep it for the entire tool-enabled turn, including installs, background descendants, workspace checkpointing and finalization. Locking only `write`/`edit` misses arbitrary shell writes and stale reads.
-- Route plugin file publication, shared-memory changes, dependency maintenance and operator edits through the same gate. Downloads may continue in trusted staging; publishing into `/workspace` waits until the active turn releases it.
-- Before handing ownership to the next session, close the prior child and prove workspace-writing descendants have stopped. A detached build or file watcher cannot retain untracked write access. If cleanup cannot be established, stop/fence the sole sandbox before another run.
-- Re-read affected files after acquiring the lease; do not apply edits based only on old conversation snippets. For structured edits, compare the expected content/hash and reject stale updates. These checks protect instrumented edit paths, not every arbitrary shell command or mistaken model assumption. Serialization does not automatically make old model context current.
-- Use safe atomic publication for individual files and durable checkpoints for recovery. Atomic rename prevents partial-file visibility; it does not merge competing semantic changes.
+On restart, reconcile or externally stop old compute before reopening the same files. Pi handles its supported session recovery behavior; the harness surfaces errors and never truncates or repairs JSONL itself. A read-only UI/search consumer may skip an incomplete trailing record and retry later, but never writes the file. Infrastructure backup/restore is an operator concern, not a per-turn archive workflow or a promised filesystem rollback feature.
 
-This prevents the harness from intentionally running conflicting turns concurrently. It is not an absolute guarantee against buggy edits, a hostile process that escapes cleanup, or a person/tool modifying the host-mounted directory outside the gate. Do not expose direct host workspace editing as a supposedly safe parallel path. Keep the workspace private to managed writers; pause/drain before manual maintenance.
+## Execution and the workspace gate
 
-**Trade-off:** sessions share files immediately, but their tool-enabled turns execute sequentially. Concurrent unrestricted turns remain unsafe. Future parallelism would require an enforced read-only execution boundary or a mutation service that coordinates all writes and validates read versions; a prompt instruction or an advisory file lock that arbitrary commands can ignore is insufficient.
+Keep one sandbox per agent and the existing `maxConcurrentSlots: 1`. One reservation covers preparation, execution and finalization; other sessions remain in the durable queue. Acquire the agent-wide writer lease before shared reads or SDK/extension startup. The gate also coordinates plugin file publication, dependency installs, operator edits and maintenance.
 
-## Lease algorithm and example
+Pi settlement is necessary but does not prove detached tools stopped. Revoke grants during bounded shutdown, close the SDK child, establish that its descendants cannot write and commit trusted run/queue outcome metadata before releasing ownership. There is no session-copy, archive receipt or workspace-checkpoint step. If cleanup or the control-state commit is uncertain, retain recovery ownership until reconciled; expiry alone is never permission for another writer.
 
-Persist a workspace head and a lease containing agent identity, workspace fence, owner kind, operation/run identity, and expiry. A run owner also binds the session/run fence and sandbox generation. Acquire history ownership and admission before the workspace gate in a fixed order; do not hold a database transaction while waiting on tools or storage. Renew from trusted control only.
+Two sessions sharing one directory could otherwise overwrite each other's read/modify/write operations. Serialize managed writers, reread current files on each turn, and use expected-content/hash checks for instrumented edits. Arbitrary bash or an external editor can still make a bad semantic edit; the gate does not merge changes or provide a rollback snapshot. Pause/drain before unmanaged host edits.
 
-```mermaid
-sequenceDiagram
-    participant A as Session A
-    participant Gate as Workspace gate
-    participant W as Shared workspace
-    participant B as Session B
-    participant P as Plugin publisher
-    A->>Gate: Acquire whole-turn ownership
-    Gate-->>A: Fence 10
-    A->>W: Read v1 and write report v2
-    B->>Gate: Request turn
-    P->>Gate: Request staged-file publication
-    Gate-->>B: Wait
-    Gate-->>P: Wait
-    A->>A: Close tools and descendants
-    A->>W: Capture checkpoint
-    A->>Gate: Commit receipts and release
-    Gate-->>B: Fence 11 when scheduled
-    B->>W: Re-read v2 before editing
-```
+Plugin downloads may enter trusted staging while a run owns the workspace. Publication validates paths/symlinks, acquires the same gate, atomically places the file where possible, and records a durable publication receipt. An in-turn action must use a coordinated subordinate operation under the current fence or return a pending receipt; it cannot wait for an independent lease held by its own caller. See [ingress/operations](04-ingress-and-operations.md).
 
-Example: A changes `report.md` from hash H1 to H2. B's old conversation remembers H1. B must read H2 after admission; an instrumented edit carrying expected hash H1 is rejected. An arbitrary bash command can still make a bad semantic edit, so serialized execution must not be described as universal stale-write detection.
+## Native provisioning and image builds
 
-Plugin publication, memory changes, dependency installs, background jobs, and operator file APIs must use the same gate. Maintenance gets an auxiliary lease and publishes its checkpoint before release. Work that arrives while a turn runs is staged/queued. Fair scheduling and bounded turns prevent endless steers from starving publication. A turn cannot synchronously wait for another owner to acquire its own held gate: use a coordinated subordinate action at a tool boundary or return a pending receipt, as [plan 1.4](04-ingress-and-operations.md) specifies.
+A versioned recipe pins assets, platform, SDK/Node/Python versions and dependencies. Build approved Process dependencies in a temporary installation path, smoke-test them, then publish a ready installation without mutating the previous one. Agent-managed project dependencies under `.deps/` use the writer gate.
 
-## Native provisioning
+M5 packages the approved base into a read-only image. M11 adds snapshotted agent-managed install steps in an isolated builder after base/plugin setup, with allowlisted dependency outputs and protected runtime/base hashes. Never execute editable installers as trusted host bootstrap. [Plan 1.8](10-agent-simplification.md#1-base-assets-workspace-and-images) owns that build/publication policy.
 
-An approved recipe records asset revision, Pi/Node/Python versions, platform, dependency lockfile/hash, and setup entry point. Provision Process dependencies into `runtime-installations/<agent>/<platform>/<recipe-hash>/` under a provisioning lock. Build in a temporary location, verify required executables/imports and versions, then publish the new installation path. Failed setup must not mark it ready or mutate the previous approved installation.
+## Acceptance and migration
 
-Do not execute workspace-edited bootstrap as trusted host code. Project dependencies under shared `workspace/.deps/` are agent data and install under the workspace gate. Runtime dependencies are approved releases. Docker realizes the same recipe as a digest-pinned image in [plan 1.5](05-docker-runtime.md). Plan 1.8 permits snapshotted workspace installation steps after base/plugin setup in an isolated image builder; that permission never authorizes host bootstrap execution.
-
-## Implementation and migration
-
-1. Add layout manifests and safe path construction; reject traversal/symlink escapes at privileged boundaries.
-2. Add transactional run/auxiliary lease operations and expected-head checkpoint commits. Start with local directories and explicit Process capability reporting.
-3. Move private plugin control data and queue state outside agent-visible roots; preserve one existing workspace without per-session copies or online merges.
-4. Route file APIs, plugin publication, memory hooks, and maintenance through the gate. Operator text edits need expected revision/hash validation; drain before external/manual host maintenance.
-5. Provision approved native recipes, then pass explicit cwd, HOME/config, profiles, scratch, and allowlisted environment to the SDK host.
-
-A snapshot provides capture consistency, not proof a lingering writer stopped. If child containment is uncertain, stop the whole Docker sandbox, confirm termination, checkpoint, and restart for the next turn. Process must disclose or reject guarantees its OS driver cannot enforce. Expiry alone never hands the gate to a competing writer.
-
-## Acceptance
-
-Verify shared files persist across runs while histories/profiles stay distinct; paths/mounts cannot expose trusted control or another agent; assets and native installations resolve to explicit releases. Repeated provisioning reuses a verified recipe and failed provisioning leaves the old installation usable. Race two sessions, a plugin publisher, a memory update, and an operator edit: only one managed owner accesses the workspace for its turn, stale expected-hash writes fail, and descendants/pending checkpoints block handoff. Finalization and storage recovery are completed in [plan 1.3](03-session-archives.md).
+- M1: create/preview base, agent-managed and sessions roots; preserve customizations as overrides; validate main/sub-agent resources, descriptions and model inheritance. Read-only defaults and writable overrides resolve correctly without copying seeds over edits.
+- M2: Pi writes and resumes the same JSONL files across child/harness restarts; original bytes are never transformed by a harness storage layer. Main/sub-agent histories stay separate while work files are shared. A runs while B/C queue; stale edits fail and all managed publishers use the gate.
+- M5: container removal preserves both backing mounts; wrong/missing mounts and Pi file errors are visible failures. No empty-history fallback, overlapping old/new writer or control/credential mount is allowed.
+- Before moving existing data: drain, back up through operator tooling, classify unchanged defaults versus custom edits, map existing session references and move files intact. Verify Pi can reopen them; stop the old runtime before the new one writes. A rollback preserves new queue/operation outcomes and never silently deletes newer files.
 
 ## FAQ
 
-These answers describe the planned shared-workspace contract from the perspectives of agent authors, operators, and storage/runtime developers.
+### Who owns session JSONL?
 
-### Where do shared files, session history, secrets, and temporary files belong?
+Pi alone handles creation, append, compaction and resume. The harness selects the session through Pi's API and stores the reference needed for routing. It does not archive, copy, repair or reconstruct transcripts.
 
-Use the agent's shared `workspace/` for projects, notes, scripts, and project dependencies; separate `sessions/`, `profiles/`, and scratch paths by session/run. Approved capabilities live in versioned asset releases. Queue/private plugin state and credentials stay under trusted control storage. The [boundary table](#data-boundaries) maps these roots to Process paths and Docker mounts.
+### Is another database required to persist sessions?
 
-### If every session has the same cwd, why do we also need a writer gate?
+No. The mounted `sessions/` filesystem is the session store. The harness's existing control database still owns queued inputs, runs, delegated tasks and external operation receipts; these are not transcript storage.
 
-Shared paths prevent divergent copies but do not serialize read-modify-write operations. A and B could both read H1 and overwrite each other's edits. The gate covers the whole tool-enabled turn, including preparation reads, descendants, and checkpointing, so participating sessions do not intentionally overlap those operations.
+### Does persistent storage eliminate the need for a writer gate?
 
-### Can a waiting session read files or run a supposedly read-only shell command?
+No. Persistence controls file lifetime; the gate controls overlapping access. It remains held through verified SDK/tool cleanup and trusted outcome recording, without a per-turn snapshot.
 
-The baseline does not start arbitrary agent/tool code before it owns the gate. A shell command or extension described as read-only may still write or start a process, and even a stale read can later cause an overwrite. Parallel read-only execution would need an enforced boundary and a separate design, not just a prompt instruction.
+### What happens when a mount is missing or Pi cannot write?
 
-### What do `assetRevision`, `recipeHash`, workspace fence, and expected hash identify?
+Fail visibly, preserve the expected session reference/files, reconcile the old writer and enter recovery. Do not create an empty replacement history or implement a custom JSONL repair path.
 
-`assetRevision` selects approved immutable capabilities; `recipeHash` identifies the dependency recipe/platform realization to provision or reuse. The workspace fence identifies the current trusted owner. An expected file hash/content check validates an instrumented edit's base. These checks complement one another; a valid lease does not prove an edit was based on current content.
+### What replaces the memory implementation?
 
-### My old conversation remembers a previous file version. What should it do?
-
-Reread the actual file after acquiring its turn's gate, then compute the edit from the current contents. If an instrumented edit expects H1 but the file is H2, reject/rebase the edit. This protects checked paths; it does not make every arbitrary shell command or model assumption semantically correct.
-
-### How can a plugin download an attachment while another session is working?
-
-Download into trusted staging and persist its publication intent. Publishing the final agent-visible path waits for the shared gate and checkpoint. Ingestion can therefore continue without racing the active workspace writer; the [ingress plan](04-ingress-and-operations.md#faq) explains ready-state and notification ordering.
-
-### What if a turn calls a plugin action that also needs the workspace lock?
-
-Do not have that action independently wait for the caller's already-held lock. Use a coordinated subordinate action under the current fence at a serialized tool boundary, or stage the result and return a pending receipt. The turn must not wait synchronously for a handoff it prevents from happening.
-
-### Can I edit the host-mounted workspace directly or leave a file watcher running?
-
-Unmanaged host edits bypass the planned coordination guarantee, so drain/pause before manual maintenance. A background writer must retain explicit ownership or stop before the next turn. If descendants cannot be proven stopped, recovery blocks handoff and can stop the whole container; a parent process's exit alone is insufficient.
-
-### What happens when a lease expires or storage fails?
-
-Expiry triggers recovery, not permission for a second writer: trusted control must establish that the previous writer can no longer act. A failed required checkpoint retains ownership and recoverable files as persistence pending. New turns wait while storage/recovery completes; see [archive recovery](03-session-archives.md#faq).
-
-### How do I add a native dependency without running an agent-edited installer on the host?
-
-Change the approved recipe, provision under its lock into a new versioned installation, verify readiness, and publish that installation. Failure leaves the previous approved installation intact. Project dependencies are a separate workspace concern and install under the gate; workspace-edited bootstrap must never become a trusted host provisioning hook.
-
-### If I restore one older conversation, do its old workspace files come back?
-
-No. Its history restore selects that session's JSONL, while the shared workspace follows its independent latest validated head. Restoring the whole workspace is a drained exclusive recovery operation with an explicitly selected revision. This prevents one session from silently rolling back another's newer files.
+Nothing is required. The agent may keep ordinary files/notes in its writable directory. No MemoryProvider, extraction, automatic recall or memory lifecycle is part of this roadmap.

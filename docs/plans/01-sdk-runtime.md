@@ -1,24 +1,23 @@
 # Plan 1.1: shared execution contract and Pi SDK host
 
-**Status:** planned; no provider cutover has shipped. **Depends on:** none for contract/parity work; production activation also requires plans 1.2–1.4 and the cutover checks. **Layers:** [core](../low-level/core.md), [agents](../low-level/agents.md), [CLI](../low-level/cli.md). [Roadmap](../roadmap.md#1-sandbox-implementation). [FAQ](#faq).
+**Status:** planned. **Delivery:** M2 SDK/Process execution after M1 directory/resource configuration; M3 local delegation, M5 Docker and M10 final migration. [Delivery order](../roadmap.md#delivery-order). **Depends on:** the configured [base/agent-managed/sessions layout](02-workspace-and-provisioning.md), then the broker/protection features required by the selected release. Pi directly owns session files; no archive backend is required. **Layers:** [core](../low-level/core.md), [agents](../low-level/agents.md), [CLI](../low-level/cli.md). [Roadmap](../roadmap.md#1-agent-foundation-and-sandbox-implementation). [FAQ](#faq).
 
 ## Objective and design decision
 
 Replace `AgentRunner.spawnPi()` and `PiRpcClient` with shared orchestration, `AgentSandboxManager`, a `RuntimeProvider` registry, and `AgentHostClient`. Integrate the pinned Pi SDK directly inside the execution child. Do not build a remote stock `pi --mode rpc` stage or run the untrusted SDK/tool loop inside the trusted server.
 
-The Process adapter is the first parity target and is labeled **Process [no sandbox]**. Docker uses the same host and commands. Queueing, delivery correlation, routing, steering, cancellation, retries, and persistence sequencing stay above the adapter. The current RPC path stays only until verified cutover, then is removed; there is no automatic fallback to RPC or host execution after a runtime failure.
+The Process adapter is the first parity target and is labeled **Process [no sandbox]**. Docker uses the same host and commands. Queueing, delivery correlation, routing, steering, cancellation, retries, and trusted outcome recording stay above the adapter. The current RPC path serves only deployments not yet migrated; a migrated agent never falls back to it. Remove it in M10 after supported deployments have SDK parity and verified migration/rollback.
 
 ## Session placement and capacity
 
 A **logical session** is an agent/thread conversation with its own Pi history. A **run** is one batch/turn of that session. A **sandbox** is the sole Process supervisor or Docker container assigned to the agent. Workspace identity belongs to the agent, independently of any session, run or sandbox generation.
 
-Proposed `agent.json` settings (not accepted by the shipped runtime yet):
+Retain the existing top-level `maxConcurrentSlots` setting; do not introduce a second `maxSessionsPerSandbox` limit. Proposed sandbox settings and stricter shared-workspace validation are not yet shipped:
 
 ```json
 {
   "maxConcurrentSlots": 1,
   "sandbox": {
-    "maxSessionsPerSandbox": 4,
     "lifecycle": { "mode": "idle", "idleMinutes": 15 }
   }
 }
@@ -26,22 +25,25 @@ Proposed `agent.json` settings (not accepted by the shipped runtime yet):
 
 | Setting / invariant | Meaning |
 |---|---|
-| One sandbox per agent | At most one allocated/provisioning/live sandbox generation for `(harnessId, agentId)`. This is mandatory, not an autoscaling setting. No `maxSandboxesPerAgent` option. |
-| `sandbox.maxSessionsPerSandbox` | Positive integer; proposed default **4**. Limits admitted live session reservations in the sole sandbox. Excess sessions remain queued. It does not permit concurrent workspace writers. |
-| `maxConcurrentSlots` | **1**, required by the initial shared-workspace profile. Reject larger values rather than imply arbitrary concurrent shell commands are conflict-safe. |
-| `sandbox.lifecycle` | `idle` (proposed default, 15 minutes), `per_turn`, or `always_on`. Compute lifetime is independent of workspace and history lifetime. |
+| One sandbox per agent | At most one allocated/provisioning/live generation for `(harnessId, agentId)`. This is placement, not an execution count; there is no sandbox autoscaling setting. |
+| `maxConcurrentSlots` | Existing per-agent active-batch limit. The shared-workspace baseline requires **1**; validate/reject higher values rather than imply concurrent unrestricted turns are safe. |
+| Durable queue | All other sessions wait here without reserved sandbox capacity, Pi children or run grants. Stored conversations/history do not count as active slots. |
+| Workspace writer gate | Coordinates the active batch with plugin publication and maintenance. It remains necessary even with one active agent slot. |
+| `sandbox.lifecycle` | `idle` (eventual proposed default, 15 minutes), `per_turn`, or `always_on`. Compute lifetime is independent of workspace/history lifetime; M5 initially supports explicit `per_turn`. |
 
-Admitted slots include reserved, waiting-for-workspace, starting, running, finalizing and `persistence_pending` sessions. Archived/inactive history does not consume capacity. Workspace execution is a separate permit: several session slots may wait while one run holds it. Waiting sessions receive no tool capability and run no agent extensions, shell commands or initialization code. Closing a turn releases its session slot after required persistence; subsequent events can reopen the same logical history in the same sandbox.
+One execution reservation spans `reserved`, `waiting_for_workspace`, `starting`, `running`, `finalizing` and `recovery_required`. Keep the slot occupied until Pi closes, descendants stop and trusted outcome metadata commits. A reservation may wait for an auxiliary publisher/maintenance owner to release the workspace gate; other sessions remain in the durable queue. There is no separate pool of admitted-but-waiting sessions inside the sandbox.
 
-1. Persist the event and resolve its trusted agent/thread/logical-session key. An event for an already admitted session reuses its slot; an actively executing session receives a steer or queued follow-up under the existing rules.
-2. Under a trusted database transaction, reserve the agent's singleton sandbox if absent, or attach to its existing/provisioning record. Provider calls run outside the transaction; concurrent arrivals observe the reservation instead of creating duplicates.
-3. Reserve a session slot if capacity permits. Otherwise retain work in the queue. A new session waits for the workspace permit even when it has a slot. Avoid starvation with FIFO ordering within existing priority classes; finalize turns before admitting an unlimited stream of steers.
-4. When the permit becomes available, reconcile prior writers, acquire the workspace lease, then prepare/read current files and start that session's Pi child. Check both sandbox and child readiness before prompting.
-5. Preserve the session binding through settlement, child cleanup and persistence. Events arriving during finalization stay queued. Release the permit and slot only after successful durability and verified writer cleanup, then schedule the next session.
+A single sandbox could technically contain concurrent Pi processes, so the singleton does not replace the execution limit or writer gate. In this baseline, all waiting work already belongs in the queue, making another session-capacity knob unnecessary. Keep `maxConcurrentSlots`'s execution meaning; do not repurpose it as a history or queue-length limit. Existing configurations above one are unsupported by the new shared-workspace profile and must migrate to the validated value of one. Future parallelism requires a separately enforced workspace design.
 
-With `maxSessionsPerSandbox: 2`, S1 runs in A-box-1 and S2 can wait there. S3 stays in the queue. When S1 persists and closes, S2 runs in **the same A-box-1 and cwd**, sees S1's saved changes, and S3 can take the free admission slot. Another event for S1 never creates A-box-2. Agent B has its own singleton and workspace.
+1. Persist input and resolve its trusted agent/thread/session key. Input for the active binding follows existing steer/queue policy without allocating another slot.
+2. When the agent's sole execution slot is free, atomically reserve it and reserve/reuse its singleton sandbox. All other session inputs stay durably queued. Provider calls run outside the transaction; concurrent arrivals cannot allocate another sandbox or active slot.
+3. Reconcile prior writers, then acquire the workspace lease before shared reads, preparation or SDK startup. A reserved run waiting for an auxiliary writer has no executing child or tool grant. Fair scheduling prevents a stream of steers from starving queued sessions or publications.
+4. Open the session directly through Pi after readiness/filesystem checks, execute its turn, revoke grants, close the SDK child and establish descendant cleanup. Input arriving during finalization stays queued.
+5. Commit the trusted run/queue outcome before releasing the slot and writer lease, then select the next queued session. Pi writes directly to the persistent session mount throughout the run; no copy or checkpoint step follows. File/cleanup/control-commit errors enter recovery without replaying completed external actions.
 
-Record each sandbox's launch capacity. Effective admission capacity is the smaller of launch capacity and the current configured limit. Reductions drain without killing sessions; increases beyond launch capacity require a drained replacement. Profile/image/asset updates also drain the old generation. A replacement starts only after provider-confirmed termination/resource release of the old generation; no overlapping warm replacement is allowed. Stopped historical records and durable data may remain.
+Example: A runs in A-box-1 while B and C remain in the durable queue. A closes and releases its slot; B then opens its own history in **the same sandbox and cwd**, seeing A's saved files. Another event for active A can steer or queue on A's existing binding. No event creates A-box-2; agent B has its own singleton and execution slot.
+
+Profile/image/asset changes drain the current binding and stop the old generation before replacement. There is no independent supervisor launch-capacity setting to resize. Provider-confirmed termination/resource release is required; stopped historical records and durable data may remain.
 
 ## Shared interfaces and ownership
 
@@ -50,13 +52,13 @@ Record each sandbox's launch capacity. Effective admission capacity is the small
 | Component | Proposed responsibility |
 |---|---|
 | `AgentRunner` | Select durable work and execute one full workspace turn using the shared services. |
-| `AgentSandboxManager` | Reserve/reuse one sandbox, admit bounded sessions, route later events to existing reservations, coordinate drain/recovery. |
+| `AgentSandboxManager` | Reserve/reuse one sandbox, admit one active batch, queue other sessions, route later input and coordinate drain/recovery. |
 | `AgentSandboxStore` | Transactional singleton/slot state, generation and fence checks, receipt-based release. |
 | `RuntimeProvider` | `ensureRuntime`, `start`, `inspect`, `stop`, `dispose`, `listOwned` for the entire supervisor. |
 | `AgentHostClient` | Session open/start/steer/abort/state/close; sandbox drain/shutdown; normalized events. |
 | `PiSdkSessionHost` | File-backed SDK session, approved resources/extensions, nonblocking command processing, delivery/settlement observations. |
 
-Proposed control records include singleton identity/compatibility/provider reference, launch capacity, state, session reservations, run IDs, and fences. Enforce uniqueness on `(harnessId, agentId)` for the allocated singleton and on live session binding; do not include profile/image in singleton uniqueness. Persist reservations before provider calls and keep those calls outside database transactions. See [workspace fencing](02-workspace-and-provisioning.md) and [archive receipts](03-session-archives.md).
+Proposed control records include singleton identity/compatibility/provider reference, state, the active session reservation, run IDs, and fences. Enforce uniqueness on `(harnessId, agentId)` for the allocated singleton and on live session binding; do not include profile/image in singleton uniqueness. Persist reservations before provider calls and keep those calls outside database transactions. See [workspace fencing](02-workspace-and-provisioning.md) and [Pi-owned session files](02-workspace-and-provisioning.md#pi-owned-sessions).
 
 ```mermaid
 sequenceDiagram
@@ -74,21 +76,21 @@ sequenceDiagram
         Runner->>Store: Attach runtime identity
     end
     Runner->>Store: Acquire agent workspace permit
-    Runner->>Host: Open A after restore and preparation
+    Runner->>Host: Open Pi session A after preparation
     Host-->>Runner: Session ready
     Runner->>Host: Start run with request ID
     Host-->>Runner: Accepted, entry mapping, progress, settled
     Runner->>Host: Close A and verify writers stopped
-    Runner->>Store: Commit persistence receipts and release A
+    Runner->>Store: Commit run outcome and release A
 ```
 
 ## Pi host and transport
 
 Use the SDK directly **inside the execution environment**, not inside the trusted harness server. In Docker this is a child process within the agent's sole container; Process runs the same child as an explicitly trusted local runtime. Keep `AgentHostClient` as a narrow versioned transport across that boundary. It is our command/event channel, not the stock Pi CLI RPC protocol. Local pipes or an authenticated remote stream can carry it without changing session behavior.
 
-Use a small file-backed SDK host in both providers. Each session has its own Pi instance and history, while `SessionManager.open(file, sessionDir, cwdOverride)` receives the **same agent workspace cwd**. Pi continues to own serialization, compaction and conversation history. Restoring one session's JSONL never rolls back the shared workspace to that session's older view.
+Use a small file-backed SDK host in both providers. Each session has its own Pi instance and history, while `SessionManager.open(file, sessionDir, cwdOverride)` receives the **same agent workspace cwd**. Pi continues to own serialization, compaction and conversation history. Reopening a session through Pi uses the current shared files; the harness neither restores a transcript copy nor rolls back the workspace.
 
-The supervisor accepts session open/prompt/steer/abort/state/close commands plus distinct sandbox drain/shutdown commands. Frames identify sandbox generation, logical session, run/fence, request and per-run event sequence. Reject delayed frames after reuse; bound buffers and frame sizes. Preserve the existing delivery mapping and `doNotSteer`/silent-input behavior. Transport acknowledgments, SDK input acceptance, session settlement and durable run completion are distinct states; a reconnect must not blindly replay an uncertain prompt.
+The supervisor accepts session open/prompt/steer/abort/state/close commands plus distinct sandbox drain/shutdown commands. Frames identify sandbox generation, logical session, run/fence, request and per-run event sequence. Reject delayed frames after reuse; bound buffers and frame sizes. Preserve the existing delivery mapping and `doNotSteer`/silent-input behavior. Transport acknowledgments, SDK input acceptance, session settlement and recorded run completion are distinct states; a reconnect must not blindly replay an uncertain prompt.
 
 The initial SDK integration targets the installed/locked `@earendil-works/pi-coding-agent@0.84.4`. Keep the host, SDK and runtime image versions compatible; exercise changes through the same integration fixtures before upgrading.
 
@@ -101,29 +103,29 @@ The initial SDK integration targets the installed/locked `@earendil-works/pi-cod
 | State | Read the SDK session state and active session/file/leaf identifiers; expose only the fields needed by the harness. |
 | Abort / close | Use bounded SDK abort/shutdown/disposal, then verify child/descendant termination externally before releasing the workspace gate. `dispose()` alone is not proof that background writers stopped. |
 
-Configure resources explicitly so SDK defaults cannot discover ambient global credentials or unapproved workspace extensions. Model credentials remain brokered. Do not implement a second conversation serializer, compactor or model loop in the host. If a future feature replaces the active SDK session object, rebind its event subscription and approved extensions before admitting input.
+Configure resources explicitly so SDK defaults cannot discover ambient global credentials or unapproved workspace extensions. Before M4, exercise M2/M3 development fixtures with an explicit mock/test model runtime; this does not claim production credential isolation. Protected execution uses brokered model credentials from M4 onward. Do not implement a second conversation serializer, compactor or model loop in the host. If a future feature replaces the active SDK session object, rebind its event subscription and approved extensions before admitting input.
 
-Wait for session-level `agent_settled`; `agent_end` can precede automatic retries or compaction. Capture active file/session/leaf mappings before orderly child close. Waiting sessions cannot execute tools while another owns the gate. If dormant SDK children are retained later, they need an enforceable quiescence boundary; the baseline keeps waiting sessions as supervisor metadata and starts agent code only after permit acquisition.
+Wait for session-level `agent_settled`; `agent_end` can precede automatic retries or compaction. Retain the active Pi file/session reference reported by the SDK before orderly child close; do not capture/copy JSONL. Waiting sessions cannot execute tools while another owns the gate. If dormant SDK children are retained later, they need an enforceable quiescence boundary; the baseline keeps queued sessions in the harness and starts agent code only after slot and permit acquisition.
 
-Use distinct per-session HOME/config, browser profiles, socket names and temporary paths; allocate ports rather than assuming every session owns the same listener. Project files, memory and project dependencies are shared. Long-lived processes with workspace write access must retain explicit ownership or stop before handoff. Multiple logical sessions do not imply multiple simultaneously executing Pi turns.
+Use distinct per-session HOME/config, browser profiles, socket names and temporary paths; allocate ports rather than assuming every session owns the same listener. Project files, ordinary notes and project dependencies are shared. Long-lived processes with workspace write access must retain explicit ownership or stop before handoff. Multiple logical sessions do not imply multiple simultaneously executing Pi turns.
 
 ## Implementation sequence
 
-[Plan 1.8](10-agent-simplification.md#3-main-agent-and-sub-agent-configuration) builds on this host with exact role-specific resource manifests and asynchronous specialist delegation. The parent closes/persists and releases admission before a child takes the same sandbox's writer gate, including at capacity one; it is not a parallel SDK execution path.
+[Plan 1.8](10-agent-simplification.md#3-main-agent-and-sub-agent-configuration) builds on this host with exact role-specific resource manifests and asynchronous specialist delegation. The parent closes, records its trusted outcome and releases admission before a child takes the same sandbox's writer gate, including at capacity one; it is not a parallel SDK execution path.
 
 1. Extract runner policy from child creation while preserving current notification/attempt fixtures.
 2. Implement transactional admission and the SDK host/transport with explicit protocol version, generation, run fence, request ID, frame limit, and event sequence validation.
 3. Implement the Process driver with PID plus start identity, declared capabilities, and verified stop behavior. An anonymous stdio connection is not reconnectable; use an authenticated reconnect channel or stop the orphan before replacement.
 4. Add input correlation: initial prompt groups, steers, continuation nudges, undelivered input, and late frames after close. Tie entry evidence to the actual persisted user entry rather than a receipt acknowledgment.
-5. Wire volume, archive, broker, and event services from later plans. Cut over only after the full lifecycle contract passes; remove RPC launch/reporting code after parity.
+5. Wire persistent roots, durable ingress, minimal status and the model broker for the first supported pilot. Apply the selected profile's lifecycle/recovery checks before activation; integrations and SSE ship independently. Remove RPC launch/reporting code in M10 after supported migration paths pass parity and file-preserving rollback checks.
 
 ## Failure handling and acceptance
 
-An uncertain provider creation holds the singleton reservation until owned process/container identity is reconciled. A disconnected accepted prompt is not blindly replayed. A stale frame cannot change a newer run. Waiting sessions execute no extension/bootstrap/tool code. Capacity reductions drain; increasing past launch capacity requires a drained replacement with confirmed old-process exit.
+An uncertain provider creation holds the singleton reservation until owned process/container identity is reconciled. A disconnected accepted prompt is not blindly replayed. A stale frame cannot change a newer run. Waiting sessions execute no extension/bootstrap/tool code. Reject concurrency above one for the shared-workspace profile. Incompatible runtime updates drain and confirm old-process exit before replacement.
 
-Acceptance fixtures must cover restored host-path JSONL with runtime cwd override, initial and steered input mappings, silent/no-steer behavior, cancellation, compaction/retry before `agent_settled`, prompt uncertainty, child crash, late frames, and cleanup. With capacity 2, A and B share one runtime, C waits, and a second event for A reuses its slot. Assert at most one singleton and one workspace writer through admission races, finalization, and restart.
+Acceptance fixtures must cover existing host-path JSONL with runtime cwd override, initial and steered input mappings, silent/no-steer behavior, cancellation, compaction/retry before `agent_settled`, prompt uncertainty, child crash, late frames, and cleanup. With `maxConcurrentSlots: 1`, A executes while B/C queue, each later reuses the same runtime, and a second event for active A reuses its binding. Assert at most one singleton and one workspace writer through admission races, finalization, and restart.
 
-The SDK baseline is the installed/locked 0.84.4 behavior, not a promise about future versions. Revalidate event ordering and resource/credential discovery against the actual locked package whenever it changes. Session capacity and idle defaults remain proposed settings until schema/API implementation lands.
+The SDK baseline is the installed/locked 0.84.4 behavior, not a promise about future versions. Revalidate event ordering and resource/credential discovery against the actual locked package whenever it changes. The stricter shared-workspace concurrency validation and sandbox lifecycle settings remain planned until schema/API implementation lands.
 
 ## FAQ
 
@@ -131,30 +133,30 @@ These answers explain the proposed SDK runtime for implementers and operators. I
 
 ### Why import the Pi SDK instead of first putting today's RPC process in Docker?
 
-The chosen target needs explicit session/resource/model ownership and a lifecycle boundary that includes settlement and persistence. A direct SDK host provides that integration point while one harness-owned transport works for Process and Docker. Building a remote stock-RPC layer first would add an intermediate architecture to migrate away from; current RPC remains only for verified cutover.
+The chosen target needs explicit session/resource/model ownership and a lifecycle boundary that includes Pi settlement and verified cleanup. A direct SDK host provides that integration point while one harness-owned transport works for Process and Docker. Building a remote stock-RPC layer first would add an intermediate architecture to migrate away from; current RPC remains only for verified cutover.
 
 ### What do the proposed capacity and lifecycle parameters mean?
 
 | Parameter | Intended effect |
 |---|---|
-| `sandbox.maxSessionsPerSandbox` | Positive admission limit; proposed default 4. Includes reserved, waiting, starting, running, finalizing, and persistence-pending sessions. |
-| `maxConcurrentSlots` | Must be 1 in the initial shared-workspace profile; bounds executing turns separately from admission. |
+| `maxConcurrentSlots` | Existing active-batch setting, validated as 1 for the shared-workspace profile. The reservation remains occupied through Pi close, cleanup and trusted outcome recording. |
+| Queued sessions | Wait in durable harness storage with no SDK child or separate admitted-session quota. |
 | `sandbox.lifecycle.mode` | `idle`, `per_turn`, or `always_on` controls whole-sandbox compute lifetime. |
-| `sandbox.lifecycle.idleMinutes` | Proposed default 15 in idle mode; timer begins only when all ownership/persistence obligations are clear. |
+| `sandbox.lifecycle.idleMinutes` | Proposed default 15 in idle mode; timer begins only when all ownership/recovery obligations are clear. |
 
-There is no `maxSandboxesPerAgent` scaling option: the single sandbox is an invariant. These are proposed semantics, not extra settings today's runner will enforce.
+There is no `maxSandboxesPerAgent` scaling option: the single sandbox is an invariant. The field `maxConcurrentSlots` already exists; the singleton, strict validation and sandbox lifecycle semantics are planned.
 
-### If capacity is 2 and three sessions arrive, what happens?
+### If three sessions arrive, what happens?
 
-A and B reserve the same agent sandbox; only the current workspace owner executes. C stays durably queued until an admission slot is released. A follow-up for an already admitted A reuses A's reservation and follows steering/queue policy; it does not consume another slot or create another sandbox.
+A takes the sole execution slot; B and C stay in the durable queue. After A closes and its outcome is recorded, the next session uses the same sandbox/workspace with its own history. A follow-up for active A follows steering/queue policy without another slot or sandbox.
 
 ### Does an old conversation permanently occupy a session slot?
 
-No. Archived/inactive history consumes storage but no live admission capacity. A reservation lasts through waiting, execution, cleanup, and required persistence; later input can reopen the logical history. Releasing capacity must not discard the stable conversation identity or its history.
+No. Inactive history consumes storage but no live admission capacity. A reservation lasts through waiting, execution, cleanup, and trusted outcome recording; later input can reopen the logical history. Releasing capacity must not discard the stable conversation identity or its history.
 
-### Can I lower capacity, raise it, or change assets while work is running?
+### Can I increase concurrency or change assets while work is running?
 
-A reduction stops further admission as needed and drains without evicting existing sessions. Effective capacity is bounded by the smaller of configured and launch capacity; increasing beyond launch capacity requires drained replacement. Incompatible asset/profile changes also wait for the old generation to stop before a replacement starts.
+The initial shared-workspace profile accepts only `maxConcurrentSlots: 1`; larger values fail validation. Asset/profile changes drain the active run, confirm old-generation stop and then replace it. There is no separate sandbox session-capacity setting to update.
 
 ### Why are there sandbox generations, run IDs, and multiple fences?
 
@@ -162,15 +164,15 @@ They identify different ownership lifetimes. Sandbox generation distinguishes co
 
 ### When may an SDK child start, and can waiting sessions preload extensions?
 
-Only after admission, workspace permission, restore, and approved preparation. Waiting sessions are supervisor metadata in the baseline and do not run Pi initialization, extensions, or tools. Preloading arbitrary session code before the gate could read stale shared files or create uncontrolled writers, even if no prompt has been sent.
+Only after admission, workspace permission, expected-root verification and approved preparation. Queued sessions remain harness metadata in the baseline and do not run Pi initialization, extensions, or tools. Preloading arbitrary session code before the gate could read stale shared files or create uncontrolled writers, even if no prompt has been sent.
 
 ### Why is `agent_settled` different from `agent_end` or a prompt acknowledgment?
 
-A command acknowledgment shows acceptance, while `agent_end` can precede automatic retries or compaction-related continuation. The host waits for session-level settlement before closing/capturing the run. Even settlement is not durable completion: descendant cleanup and archive/workspace receipts still have to finish.
+A command acknowledgment shows acceptance, while `agent_end` can precede automatic retries or compaction-related continuation. The host waits for session-level settlement before closing the run. Even settlement does not prove cleanup: the child/descendants must stop and trusted run metadata must commit. Pi session writes stay on the mounted filesystem; the harness creates no archival receipt.
 
 ### How should I correlate queued inputs with Pi history entries?
 
-Preserve the mapping from initial input groups and steers to actual persisted user-entry IDs. For the target 0.84.4 behavior, sweep `sessionManager.getEntries()` at verified post-append points; ordinary message events occur before persistence, and `entry_appended` does not report every ordinary message. Cover restored history and mixed initial/steered inputs in parity tests before removing the current reporting bridge.
+Preserve the mapping from initial input groups and steers to actual persisted user-entry IDs. For the target 0.84.4 behavior, sweep `sessionManager.getEntries()` at verified post-append points; ordinary message events occur before persistence, and `entry_appended` does not report every ordinary message. Cover resumed history and mixed initial/steered inputs in parity tests before removing the current reporting bridge.
 
 ### What if the command channel disconnects after my prompt was accepted?
 
