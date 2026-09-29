@@ -1,7 +1,6 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { Ajv, type ErrorObject } from "ajv";
 import type { ServerConfig } from "./config.js";
 import { agentDir, agentsRoot, secretsRoot } from "./config.js";
@@ -12,6 +11,7 @@ import { CORE_PLUGIN_IDS } from "./plugin-registry.js";
 import { AgentDb } from "./queue.js";
 import { AgentRunner } from "./runner.js";
 import { findProviderInCatalog } from "./models-catalog.js";
+import { modelUnavailableReason } from "./model-access.js";
 import { ModelsStore } from "./models-store.js";
 import { syncPiModelOverrides } from "./pi-models-sync.js";
 import { AGENT_BUCKET, SecretsStore } from "./secrets.js";
@@ -490,6 +490,8 @@ export class AgentManager {
       envSecrets,
       resolveProviderEnv: (providerId) =>
         resolveProviderEnv(this.models, providerId, dir, this.log),
+      modelUnavailableReason: (providerId, modelId) =>
+        modelUnavailableReason(this.models, providerId, modelId),
       log: childLogger(`agent:${inst.id}`),
     });
     // When a stale-reload is pending and the last active batch finishes,
@@ -769,10 +771,10 @@ const VERTEX_SA_FILE = ".vertex-sa.json";
 
 /**
  * Validate the agent's chosen provider/model against operator settings and
- * return the env vars pi should see. Throws if the provider isn't configured,
- * the model isn't enabled, or required credentials are missing — but only
- * when a model id is specified; an agent.json with provider but no model
- * passes through silently (preserves the pre-merge permissive behavior).
+ * return the env vars pi should see. Throws with the shared
+ * `modelUnavailableReason()` when the model can't be used — but only when a
+ * model id is specified; an agent.json with provider but no model passes
+ * through silently (preserves the pre-merge permissive behavior).
  *
  * Special case: google-vertex's `serviceAccountKey` field is paste-blob
  * JSON — we write it to <agentDir>/.vertex-sa.json (0600) and point
@@ -792,47 +794,11 @@ function resolveAndValidateProvider(
 ): Record<string, string> {
   const providerId = agentJson.model?.provider;
   if (!providerId) return {};
-  const entry = findProviderInCatalog(providerId);
-  if (!entry) return {};
-  // Subscription OAuth (tokens in pi's own auth.json) substitutes for
-  // models.json credentials — pi children resolve auth.json themselves,
-  // so nothing extra is injected; only the model allowlist still applies.
-  const oauthConnected =
-    entry.oauth === true && readStoredCredential(providerId)?.type === "oauth";
-  const cfg =
-    models.getProvider(providerId) ??
-    (oauthConnected ? { credentials: {}, enabledModels: [] } : undefined);
   const modelId = agentJson.model?.id;
-
-  if (!cfg) {
-    if (modelId) {
-      throw new Error(
-        `agent ${agentId}: provider ${providerId} is not configured in Models settings`,
-      );
-    }
-    return {};
-  }
-
   if (modelId) {
-    if (cfg.enabledModels.length === 0 || !cfg.enabledModels.includes(modelId)) {
-      throw new Error(
-        `agent ${agentId}: model ${providerId}/${modelId} is not enabled in Models settings`,
-      );
-    }
-    const missing = entry.credentials
-      .filter((f) => f.required)
-      .filter((f) => {
-        const v = cfg.credentials[f.key];
-        return typeof v !== "string" || v.length === 0;
-      })
-      .map((f) => f.label);
-    if (missing.length > 0 && !oauthConnected) {
-      throw new Error(
-        `agent ${agentId}: provider ${providerId} is missing required credentials: ${missing.join(", ")} (set them in Models settings)`,
-      );
-    }
+    const reason = modelUnavailableReason(models, providerId, modelId);
+    if (reason) throw new Error(`agent ${agentId}: ${reason}`);
   }
-
   return resolveProviderEnv(models, providerId, agentDir, log);
 }
 

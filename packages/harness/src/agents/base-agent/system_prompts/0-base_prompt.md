@@ -136,6 +136,7 @@ Timestamp: Fri 2026-04-17 14:30:05 IST
 Plugin: telegram
 Channel: 12345
 ThreadId: telegram-12345
+EventId: 42
 [IsSilent: true]
 [Retry: true]
 [Continuation: true]
@@ -154,6 +155,8 @@ ThreadId: telegram-12345
   so the result routes back here. It is a harness routing id — distinct from
   plugin-side ids like a Telegram chat id or Gmail thread id, which appear in
   the plugin-contributed fields.
+- **EventId** — the harness's id for this message, used to track its delivery.
+  You can ignore it.
 - **IsSilent: true** — appears only on silent messages (background updates).
   Do not act on a silent message alone; treat it as ambient context.
 - **Retry: true** — a previous delivery of _this_ message failed or was

@@ -9,7 +9,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentDb } from "./queue.js";
 import { PiRpcClient } from "./rpc.js";
 import type { PiMessage } from "./rpc.js";
@@ -22,11 +23,18 @@ import type {
 import { AGENT_TOOLS } from "./types.js";
 import type { Logger } from "./logger.js";
 
+/** Loaded into every pi child (see spawnPi). Same extension as this file, so it
+ *  resolves whether the harness runs from `.ts` sources or compiled `.js`. */
+const DELIVERY_RECEIPTS_EXTENSION = fileURLToPath(
+  new URL(`./pi-delivery-receipts${extname(fileURLToPath(import.meta.url))}`, import.meta.url),
+);
+
 const RESERVED_META = new Set([
   "Timestamp",
   "Plugin",
   "Channel",
   "ThreadId",
+  "EventId",
   "IsSilent",
   "Retry",
   "Continuation",
@@ -74,6 +82,7 @@ export function buildHarnessMetadata(m: BatchMessage, tz: string): string {
     `Plugin: ${m.pluginId}`,
     `Channel: ${m.channelId}`,
     `ThreadId: ${m.threadId}`,
+    `EventId: ${m.id}`,
   ];
   if (m.isSilent) lines.push("IsSilent: true");
   if (m.attempts > 0) lines.push("Retry: true");
@@ -145,13 +154,9 @@ function endOfTurn(messages: PiMessage[]): { complete: boolean; errorTag: string
 
 interface ActiveBatch {
   threadId: string;
-  /** User-message groups in dispatch order. `[0]` is the prompt's rows (the
-   *  resend + fresh rows; empty on a continue batch, whose prompt is just the
-   *  nudge). `[k≥1]` is the k-th steer's rows — a single-row group for a live
-   *  `notify` steer, or the whole drained resend+fresh set for a continue
-   *  batch's combined steer. Maps each user-message entry pi appends to the
-   *  row ids sharing it (stdin is serial → append order = dispatch order). */
-  messageGroups: number[][];
+  /** Rows sent this batch, in the prompt or as a steer (resend + fresh rows;
+   *  continue rows are tracked in `continueIds`). */
+  sentIds: Set<number>;
   /** Canonical pi session id for this thread; assigned in processBatch
    *  before spawn, used to locate the JSONL post-batch. */
   sessionId: string;
@@ -168,25 +173,13 @@ interface ActiveBatch {
    *  via {@link AgentRunner.drainQueuedAsSteers}. */
   isContinue: boolean;
   /** Continue rows — already delivered on a prior batch (their `pi_entry_id`
-   *  is set). NOT part of `messageGroups`: their text is not re-rendered (only
-   *  the continuation nudge) and they keep their prior entry id, so they map to
-   *  no user-message index this batch. Counted as delivered unconditionally. */
+   *  is set). Not in `sentIds`: their text is not re-rendered (only the
+   *  continuation nudge) and they keep their prior entry id. Counted as
+   *  delivered unconditionally. */
   continueIds: Set<number>;
-  /** Count of user messages pi has appended this batch (prompt = 1, then one
-   *  per delivered steer). Drives the post-batch delivery split. */
-  deliveredCount: number;
-  /** entryIds already bound to a row this batch. The harness-bridge sweeps
-   *  pi's *entire* session JSONL (one file reused across all of a thread's
-   *  batches), so on batch ≥2 it re-reports every historical user entry at a
-   *  session-absolute index. We therefore ignore the reported index and bind
-   *  each genuinely-new entryId — one not seen before for this batch — to the
-   *  next unfilled message group in arrival order. This dedup is the seen-set;
-   *  `nextGroupForEntry` is the arrival-order cursor into `messageGroups`. */
-  seenEntryIds: Set<string>;
-  /** Index of the next `messageGroups` slot to bind a new entryId to. Advances
-   *  in dispatch order (group 0 = prompt, then steers), mirroring the order pi
-   *  appends user entries to the session. */
-  nextGroupForEntry: number;
+  /** Sent rows pi confirmed saving: a delivery receipt named them. The only
+   *  delivery signal — the same receipt sets the row's `pi_entry_id`. */
+  deliveredIds: Set<number>;
 }
 
 export interface RunnerOpts {
@@ -211,6 +204,9 @@ export interface RunnerOpts {
    * `ModelsStore`, so newly-added provider keys work without an agent reload.
    */
   resolveProviderEnv?: (providerId: string) => Record<string, string>;
+  /** The shared model check (`model-access.ts`); a thread override it
+   *  rejects falls back to the agent default at spawn. */
+  modelUnavailableReason?: (providerId: string, modelId: string) => string | null;
   log: Logger;
 }
 
@@ -336,8 +332,7 @@ export class AgentRunner extends EventEmitter {
         attempts: 0,
       };
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
-      const group = [id];
-      active.messageGroups.push(group);
+      active.sentIds.add(id);
       try {
         active.rpc.sendSteer(steerText);
         // The row was enqueued as 'queued' but dequeueBatch never saw it;
@@ -349,10 +344,8 @@ export class AgentRunner extends EventEmitter {
           "steer dispatched",
         );
       } catch (err) {
-        // Drop the group we just pushed. Safe under single-threaded JS because
-        // notify() runs to completion before the next call interleaves.
-        const idx = active.messageGroups.indexOf(group);
-        if (idx >= 0) active.messageGroups.splice(idx, 1);
+        // Not sent: the row stays queued for the next batch.
+        active.sentIds.delete(id);
         this.opts.log.error({ err, threadId, id }, "steer failed; row kept pending");
       }
       return id;
@@ -421,12 +414,9 @@ export class AgentRunner extends EventEmitter {
       }
       const active: ActiveBatch = {
         threadId,
-        // messageGroups[0] = the prompt's rows (resend + fresh; empty on a
-        // continue batch). Steers append groups [1..]. Continue rows are
-        // tracked separately in continueIds (see the ActiveBatch doc).
-        messageGroups: [
+        sentIds: new Set(
           batch.filter((m) => m.retryMode !== "continue").map((m) => m.id),
-        ],
+        ),
         sessionId,
         phase: "spawning",
         cancelled: false,
@@ -436,12 +426,7 @@ export class AgentRunner extends EventEmitter {
         continueIds: new Set(
           batch.filter((m) => m.retryMode === "continue").map((m) => m.id),
         ),
-        deliveredCount: 0,
-        // Pre-seed with entryIds already bound on this thread (prior batches),
-        // so the bridge's re-report of historical entries from the reused
-        // session JSONL is skipped — only this batch's new entries bind.
-        seenEntryIds: new Set(this.opts.db.entryIdsForThread(threadId)),
-        nextGroupForEntry: 0,
+        deliveredIds: new Set(),
       };
       this.active.set(threadId, active);
       try {
@@ -486,27 +471,15 @@ export class AgentRunner extends EventEmitter {
         childExited = true;
       });
 
-      // Real-time delivery + entry-id capture from the pi event stream:
-      //  - each user message pi appends (the prompt, then each steer) fires
-      //    onUserMessageStart → we count deliveries in dispatch order;
-      //  - the harness-bridge extension reports each user entry's id, which we
-      //    bind to the matching row immediately (so a row that later fails
-      //    still carries its pi_entry_id → it retries as 'continue').
-      rpc.onUserMessageStart(() => {
-        active.deliveredCount++;
-      });
-      // The bridge's reported `index` is session-absolute and unusable here:
-      // pi reuses one session JSONL across a thread's batches, so on batch ≥2
-      // it re-reports every historical user entry. We ignore the index and
-      // instead bind each genuinely-new entryId — deduped via seenEntryIds —
-      // to the next unfilled message group in arrival order (which matches the
-      // order pi appends entries: prompt, then each steer).
-      rpc.onHarnessEntry(({ entryId }) => {
-        if (active.seenEntryIds.has(entryId)) return;
-        active.seenEntryIds.add(entryId);
-        const group = this.rowsForUserIndex(active, active.nextGroupForEntry);
-        active.nextGroupForEntry++;
-        for (const id of group) {
+      // Delivery receipts (pi-delivery-receipts.ts): each user message pi
+      // saves is reported with the `EventId`s it contains. A receipt both marks
+      // the row delivered and links it to the entry, so a row that later fails
+      // retries as 'continue'. Receipts for rows outside this batch are history
+      // from earlier batches (pi reuses one session file per thread).
+      rpc.onDeliveryReceipt(({ entryId, eventIds }) => {
+        for (const id of eventIds) {
+          if (!active.sentIds.has(id)) continue;
+          active.deliveredIds.add(id);
           this.opts.db.setRowEntryId(id, sessionId, entryId);
         }
       });
@@ -583,7 +556,7 @@ export class AgentRunner extends EventEmitter {
         // batch — requeue rather than cancel. Delivered rows already carry
         // their pi_entry_id, so they retry as continue; the rest as resend.
         const r = this.opts.db.markBatchFailed(
-          [...active.continueIds, ...active.messageGroups.flat()],
+          [...active.continueIds, ...active.sentIds],
           "[shutdown] runner stopped mid-batch",
           this.maxAttempts,
           sessionId,
@@ -594,7 +567,7 @@ export class AgentRunner extends EventEmitter {
         );
       } else if (active.cancelled) {
         this.opts.db.markBatchCancelled(
-          [...active.continueIds, ...active.messageGroups.flat()],
+          [...active.continueIds, ...active.sentIds],
           sessionId,
         );
         log.info({ threadId }, "batch cancelled");
@@ -603,7 +576,7 @@ export class AgentRunner extends EventEmitter {
         const tagged = msg.startsWith("[") ? msg : `[runner_error] ${msg}`;
         const errFull = stderr ? `${tagged}\n--stderr--\n${stderr}` : tagged;
         const r = this.opts.db.markBatchFailed(
-          [...active.continueIds, ...active.messageGroups.flat()],
+          [...active.continueIds, ...active.sentIds],
           errFull,
           this.maxAttempts,
           sessionId,
@@ -652,27 +625,10 @@ export class AgentRunner extends EventEmitter {
     rpc.killGroup();
   }
 
-  /**
-   * Map a user-message dispatch index to the row id(s) sharing that entry.
-   * Index 0 is the prompt (the resend/fresh rows on a non-continue batch;
-   * empty on a continue batch, whose prompt is just the nudge). Index N≥1 is
-   * the N-th steer — a single-row group for a live `notify` steer, or the
-   * whole drained resend+fresh group for a continue batch.
-   */
-  private rowsForUserIndex(active: ActiveBatch, index: number): number[] {
-    return active.messageGroups[index] ?? [];
-  }
-
-  /** Rows that actually reached the model this batch: continue rows (delivered
-   *  on a prior batch) plus every user-message index pi appended. */
+  /** Rows that actually reached the model this batch: continue rows
+   *  (delivered on a prior batch) plus every row a receipt confirmed. */
   private deliveredRowIds(active: ActiveBatch): Set<number> {
-    const delivered = new Set<number>(active.continueIds);
-    // messageGroups[k] is delivered once pi has appended k+1 user messages, so
-    // every group index < deliveredCount has landed (group 0 = prompt).
-    for (let k = 0; k < active.deliveredCount; k++) {
-      for (const id of active.messageGroups[k] ?? []) delivered.add(id);
-    }
-    return delivered;
+    return new Set([...active.continueIds, ...active.deliveredIds]);
   }
 
   /**
@@ -687,7 +643,7 @@ export class AgentRunner extends EventEmitter {
     errorTag: string,
     log: Logger,
   ): void {
-    const allIds = [...active.continueIds, ...active.messageGroups.flat()];
+    const allIds = [...active.continueIds, ...active.sentIds];
     const delivered = this.deliveredRowIds(active);
     const undelivered = allIds.filter((id) => !delivered.has(id));
     const deliveredIds = allIds.filter((id) => delivered.has(id));
@@ -729,15 +685,15 @@ export class AgentRunner extends EventEmitter {
    * once the batch is streaming — covers a continue batch's left-behind
    * resend+fresh rows and any batch's spawn-window arrivals. `excludeDoNotSteer`
    * leaves `doNotSteer` rows queued for the next batch (they opt out of being
-   * steered into a live turn). The rows are tracked as one group in
-   * `messageGroups` before sending, so a broken pipe leaves them classified as
+   * steered into a live turn). The rows are added to `sentIds` before
+   * sending, so a broken pipe leaves them classified as
    * not-delivered (→ resend) by the post-batch split rather than orphaned
    * in_flight. resend rows carry `Retry: true` via their metadata.
    */
   private drainQueuedAsSteers(active: ActiveBatch, log: Logger): void {
     const rows = this.opts.db.dequeueBatch(active.threadId, { excludeDoNotSteer: true });
     if (rows.length === 0) return;
-    active.messageGroups.push(rows.map((m) => m.id));
+    for (const m of rows) active.sentIds.add(m.id);
     const steerText = rows
       .map((m) => `${buildHarnessMetadata(m, this.opts.timezone)}\n${m.text}`)
       .join("\n\n");
@@ -745,8 +701,8 @@ export class AgentRunner extends EventEmitter {
       active.rpc!.sendSteer(steerText);
       log.debug({ threadId: active.threadId, drained: rows.length }, "drained queued as one steer");
     } catch (err) {
-      // Pipe broke; pi is gone. The group stays in messageGroups — the delivery
-      // split marks it not-delivered → resend on the next batch.
+      // Pipe broke; pi is gone. The rows stay in sentIds with no receipt, so
+      // the delivery split marks them not-delivered → resend on the next batch.
       log.error({ err, threadId: active.threadId, count: rows.length }, "drain steer failed");
     }
   }
@@ -780,10 +736,17 @@ export class AgentRunner extends EventEmitter {
     // directory from `resolve(path, "..")` so we don't need `--session-dir`.
     // We drop `--continue` because the explicit path makes "continue" implicit.
     const sessionFile = join(sessionDir, `${sessionId}.jsonl`);
-    // Per-thread model override (set via the UI); falls back to the agent's
-    // agent.json model for any unset field. A cross-provider override has its
-    // credentials injected into `env` below.
-    const override = this.opts.db.getThreadModel(threadId);
+    // Per-thread model override (set via the UI). One the operator can no
+    // longer use (signed out, key removed, model disabled) falls back to the
+    // agent's agent.json model instead of failing every attempt. A
+    // cross-provider override has its credentials injected into `env` below.
+    let override = this.opts.db.getThreadModel(threadId);
+    const unusable =
+      override && this.opts.modelUnavailableReason?.(override.provider, override.modelId);
+    if (unusable) {
+      log.warn({ threadId, reason: unusable }, "thread model unavailable; using agent default");
+      override = null;
+    }
     const provider = override?.provider ?? this.opts.agentJson.model.provider;
     const modelId = override?.modelId ?? this.opts.agentJson.model.id;
     const thinking =
@@ -814,10 +777,16 @@ export class AgentRunner extends EventEmitter {
     // No recursion — so we pass each first-level child of `extensions/` as its
     // own `--extension`. We verify the entry point exists before passing the
     // path to pi; otherwise pi crashes the whole run on a missing module.
+    // Delivery receipts load from the package, never the agent folder: the
+    // runner can't tell which rows reached pi without them.
+    args.push("--extension", DELIVERY_RECEIPTS_EXTENSION);
     const extensionsRoot = join(agentDir, "extensions");
     if (existsDir(extensionsRoot)) {
       for (const entry of readdirSync(extensionsRoot, { withFileTypes: true })) {
         if (entry.name.startsWith(".")) continue;
+        // ponytail: agents created before delivery receipts still carry this copy of the
+        // old entry-id reporter; the receipts replace it.
+        if (entry.name === "harness-bridge.ts") continue;
         const path = join(extensionsRoot, entry.name);
         if (entry.isDirectory()) {
           const hasEntry =

@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type { Logger } from "./logger.js";
+import { STATUS_KEY as DELIVERY_STATUS_KEY } from "./pi-delivery-receipts.js";
 
 interface RpcResponse {
   type: "response";
@@ -16,14 +17,14 @@ interface ExtensionUiRequest {
   id: string;
   method: string;
   title?: string;
-  /** Present on fire-and-forget `setStatus` requests (the harness-bridge
-   *  extension uses these to report session entry ids — see {@link onHarnessEntry}). */
+  /** Present on fire-and-forget `setStatus` requests (the delivery-receipts
+   *  extension uses these — see {@link onDeliveryReceipt}). */
   statusKey?: string;
   statusText?: string;
 }
 
 /**
- * Minimal shape of an entry in `agent_end.messages` / `message_start.message`.
+ * Minimal shape of an entry in `agent_end.messages`.
  * The harness only inspects the final message's `role` and (for assistants)
  * `stopReason` / `errorMessage` to decide turn completion; the full pi message
  * type isn't needed here.
@@ -34,11 +35,11 @@ export interface PiMessage {
   errorMessage?: string;
 }
 
-/** Reported by the harness-bridge extension via `setStatus("cognisphere", …)`. */
-export interface HarnessEntryReport {
-  kind: "user_entry";
-  index: number;
+/** Reported by the delivery-receipts extension (`pi-delivery-receipts.ts`):
+ *  pi saved the queue rows `eventIds` as session entry `entryId`. */
+export interface DeliveryReceipt {
   entryId: string;
+  eventIds: number[];
 }
 
 type RpcMessage =
@@ -46,7 +47,6 @@ type RpcMessage =
   | ExtensionUiRequest
   | { type: "agent_start" }
   | { type: "agent_end"; messages?: PiMessage[] }
-  | { type: "message_start"; message?: PiMessage }
   | { type: string; [k: string]: unknown };
 
 /**
@@ -70,8 +70,7 @@ export class PiRpcClient {
   >();
   private nextId = 1;
   private agentEndHandler: ((messages: PiMessage[]) => void) | undefined;
-  private userMessageStartHandler: (() => void) | undefined;
-  private harnessEntryHandler: ((report: HarnessEntryReport) => void) | undefined;
+  private deliveryReceiptHandler: ((receipt: DeliveryReceipt) => void) | undefined;
   private exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 
   constructor(child: ChildProcess, log: Logger) {
@@ -118,17 +117,10 @@ export class PiRpcClient {
     this.agentEndHandler = h;
   }
 
-  /** Fires each time pi appends a *user* message (the initial prompt and each
-   *  steer). The caller counts these in dispatch order to know which rows
-   *  actually reached the model. */
-  onUserMessageStart(h: () => void): void {
-    this.userMessageStartHandler = h;
-  }
-
-  /** Fires when the harness-bridge extension reports a user-message session
-   *  entry id over the `setStatus("cognisphere", …)` channel. */
-  onHarnessEntry(h: (report: HarnessEntryReport) => void): void {
-    this.harnessEntryHandler = h;
+  /** Fires when the delivery-receipts extension reports that pi saved a user
+   *  message containing these queue rows. */
+  onDeliveryReceipt(h: (receipt: DeliveryReceipt) => void): void {
+    this.deliveryReceiptHandler = h;
   }
 
   waitExit() {
@@ -295,11 +287,6 @@ export class PiRpcClient {
       this.agentEndHandler?.(messages);
       return;
     }
-    if (p.type === "message_start") {
-      const role = (p as { message?: PiMessage }).message?.role;
-      if (role === "user") this.userMessageStartHandler?.();
-      return;
-    }
     if (p.type === "extension_ui_request") {
       this.handleExtensionUi(p as ExtensionUiRequest);
       return;
@@ -336,22 +323,17 @@ export class PiRpcClient {
   }
 
   private handleExtensionUi(req: ExtensionUiRequest): void {
-    // The harness-bridge extension reports session entry ids as a
-    // fire-and-forget `setStatus` keyed "cognisphere". Intercept those and
-    // route to the harness-entry handler instead of treating them as UI.
-    if (req.method === "setStatus" && req.statusKey === "cognisphere") {
+    // Delivery receipts arrive as a fire-and-forget `setStatus`. Route them
+    // to the runner instead of treating them as UI.
+    if (req.method === "setStatus" && req.statusKey === DELIVERY_STATUS_KEY) {
       if (req.statusText == null) return;
       try {
-        const report = JSON.parse(req.statusText) as HarnessEntryReport;
-        if (
-          report.kind === "user_entry" &&
-          typeof report.index === "number" &&
-          typeof report.entryId === "string"
-        ) {
-          this.harnessEntryHandler?.(report);
+        const r = JSON.parse(req.statusText) as DeliveryReceipt;
+        if (typeof r.entryId === "string" && Array.isArray(r.eventIds)) {
+          this.deliveryReceiptHandler?.(r);
         }
       } catch {
-        this.log.debug({ statusText: req.statusText }, "bad cognisphere setStatus payload");
+        this.log.debug({ statusText: req.statusText }, "bad delivery receipt payload");
       }
       return;
     }

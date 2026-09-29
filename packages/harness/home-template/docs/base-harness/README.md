@@ -143,7 +143,10 @@ Both under `harness/.secrets/` (0600, gitignored, editable via the console):
   plugin id. All keys are injected into the agent's environment.
 - `models.json` — per-provider credentials + the allowlist of enabled model
   ids. Subscription OAuth logins (Claude Pro/Max, Codex) are connected from
-  the console's Models page instead of pasting keys.
+  the console's Models page instead of pasting keys. A model is usable when
+  its provider has its keys or a connected sign-in and the model is enabled.
+  A thread's own model (set from the chat header) that stops being usable
+  falls back to the agent's model until it is usable again.
 - `gws/` — Google sign-in for agents with the **gws** plugin. The shared
   "Web application" OAuth client (from your GCP project, with
   `<console origin>/api/gws/oauth/callback` as a redirect URI) is saved

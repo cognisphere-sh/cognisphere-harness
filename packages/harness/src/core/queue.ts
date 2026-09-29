@@ -68,8 +68,8 @@ export interface EventRow {
 /**
  * Derive a re-dispatch {@link RetryMode} from a row's persisted state. No
  * dedicated column: a row that was delivered to the model has its
- * `pi_entry_id` written in real time (by the runner, from the harness-bridge
- * extension), so its presence on a retried row means "already in pi's
+ * `pi_entry_id` written in real time (by the runner, from a delivery receipt),
+ * so its presence on a retried row means "already in pi's
  * history → continue, don't resend".
  */
 function deriveRetryMode(row: EventRow): RetryMode | undefined {
@@ -278,17 +278,13 @@ export class AgentDb {
 
   /**
    * Bind a row to its position in pi's session JSONL. Called by the runner in
-   * real time as the harness-bridge extension reports each user-message entry
-   * id (so the link exists even for rows whose batch later fails, and without
-   * waiting for pi to exit). COALESCE on the session id preserves a value from
-   * a prior attempt; the entry id is written outright (the latest delivery
-   * wins).
+   * real time as delivery receipts name the row (so the link exists even for
+   * rows whose batch later fails, and without waiting for pi to exit).
+   * COALESCE on the session id preserves a value from a prior attempt.
    */
   setRowEntryId(rowId: number, sessionId: string, entryId: string): void {
-    // Defensive: never rebind a row whose pi_entry_id is already set. The
-    // runner already dedups entryIds per batch, but this guards against a row
-    // being bound twice (e.g. a stale absolute-index report or a logic error)
-    // — once a row carries an entry id it stays put.
+    // Never rebind: receipts re-report history on every batch, so the first
+    // (earliest) saved copy of a row keeps the link.
     this.db
       .prepare(
         `UPDATE events
@@ -298,20 +294,6 @@ export class AgentDb {
           WHERE id = ? AND pi_entry_id IS NULL`,
       )
       .run(sessionId, entryId, Date.now(), rowId);
-  }
-
-  /** All distinct `pi_entry_id`s already bound to rows on this thread. The
-   *  runner pre-seeds its per-batch seen-set with these so the harness-bridge's
-   *  re-report of historical entries (it sweeps the whole reused session JSONL)
-   *  is ignored — only entryIds new to this thread bind to this batch's rows. */
-  entryIdsForThread(threadId: string): string[] {
-    const rows = this.db
-      .prepare<unknown[], { pi_entry_id: string }>(
-        `SELECT DISTINCT pi_entry_id FROM events
-          WHERE thread_id = ? AND pi_entry_id IS NOT NULL`,
-      )
-      .all(threadId);
-    return rows.map((r) => r.pi_entry_id);
   }
 
   /**

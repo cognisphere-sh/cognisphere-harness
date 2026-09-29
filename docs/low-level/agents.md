@@ -166,11 +166,10 @@ Every agent has the same seven tools: `read`, `bash`, `edit`, `write`, `grep`, `
 Pi's own automatic discovery of prompts, context files, skills and extensions is turned off. Instead, core tells Pi exactly what to load:
 
 - **Skills:** every `SKILL.md` under `skills/`, at any depth.
-- **Extensions:** each `.ts` or `.js` file directly inside `extensions/`, or each folder there that has an entry file. Deeper files aren't loaded on their own.
+- **Extensions:** each `.ts` or `.js` file directly inside `extensions/`, or each folder there that has an entry file. Deeper files aren't loaded on their own. Core also always loads its own [delivery-receipts](../../packages/harness/src/core/pi-delivery-receipts.ts) extension from the package, which tells it which inputs Pi saved ([core](core.md#end-to-end)). It isn't in the agent folder, so the agent can't remove it. Agents created before it replaced `harness-bridge.ts` may still have that file; core skips it, and it can be deleted.
 
 | Base extension | What it does and why |
 |---|---|
-| [harness-bridge](../../packages/harness/src/agents/base-agent/extensions/harness-bridge.ts) | Tells core the ID of each user message Pi actually saved. Core uses this to link inputs to history and to choose between a "please continue" nudge and a full resend on retry. |
 | [context-meta](../../packages/harness/src/agents/base-agent/extensions/context-meta.ts) | Records how much of the context window is used and shows it to the model on each call. It only adds this mid-run when another model call is coming, so it can't cause extra turns. |
 | [bash-guard](../../packages/harness/src/agents/base-agent/extensions/bash-guard.ts) | Adds `set -u` to shell commands and explains unset-variable errors, which prevents silent text corruption. It can be turned off and is **not** a security control. |
 | [skill-update-notice](../../packages/harness/src/agents/base-agent/extensions/skill-update-notice.ts) | Remembers which skill versions the agent has read and tells it when a skill changes, with a short changelog. |
@@ -236,7 +235,7 @@ New agents use `threadIdStrategy: single`, so every source and every chat share 
 
 #### Can I use a different model for one conversation?
 
-Yes, either from the thread header in the chat or through the thread-model API once the thread exists. It applies from the next batch. Clearing it goes back to the agent default. Changing the default doesn't clear overrides that threads already have.
+Yes, either from the thread header in the chat or through the thread-model API once the thread exists. It applies from the next batch. Clearing it goes back to the agent default. Changing the default doesn't clear overrides that threads already have. If the thread's model later can't be used (signed out, key removed, model disabled), its batches run on the agent's model until it can ([model check](core.md#model-check)).
 
 #### The agent fails after I added a secret or config key. Why?
 

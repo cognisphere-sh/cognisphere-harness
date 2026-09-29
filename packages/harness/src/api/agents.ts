@@ -18,7 +18,7 @@ import { agentDir, secretsRoot } from "../core/config.js";
 import type { ServerConfig } from "../core/config.js";
 import { ModelsStore } from "../core/models-store.js";
 import { findProviderInCatalog } from "../core/models-catalog.js";
-import { requiredCredentialsPresent } from "./credentials.js";
+import { modelUnavailableReason } from "../core/model-access.js";
 
 /**
  * /api/agents/* surface for the web UI.
@@ -284,18 +284,8 @@ export function agentsRouter(am: AgentManager, cfg: ServerConfig): Hono {
 
     const entry = findProviderInCatalog(provider);
     if (!entry) return c.json({ error: `unknown provider "${provider}"` }, 400);
-    const pcfg = models.getProvider(provider);
-    const configured =
-      !!pcfg && requiredCredentialsPresent(entry.credentials, pcfg.credentials);
-    if (!configured) {
-      return c.json({ error: `provider "${provider}" is not configured` }, 400);
-    }
-    if (!pcfg.enabledModels.includes(modelId)) {
-      return c.json(
-        { error: `model "${modelId}" is not enabled for ${provider}` },
-        400,
-      );
-    }
+    const unavailable = modelUnavailableReason(models, provider, modelId);
+    if (unavailable) return c.json({ error: unavailable }, 400);
     if (thinkingLevel !== null && !THINKING_LEVELS.has(thinkingLevel)) {
       return c.json({ error: "invalid thinkingLevel" }, 400);
     }

@@ -6,6 +6,7 @@ import type { ServerConfig } from "../core/config.js";
 import { secretsRoot } from "../core/config.js";
 import type { Logger } from "../core/logger.js";
 import { PROVIDER_CATALOG } from "../core/models-catalog.js";
+import { providerAuthenticated } from "../core/model-access.js";
 import { ModelsStore } from "../core/models-store.js";
 import { OAuthLoginManager } from "../core/oauth-logins.js";
 import { syncPiModelOverrides } from "../core/pi-models-sync.js";
@@ -14,7 +15,6 @@ import {
   applyMaskedPut,
   MASK,
   maskCredential,
-  requiredCredentialsPresent,
 } from "./credentials.js";
 
 /**
@@ -124,16 +124,10 @@ export function modelsRouter(
       for (const field of entry.credentials) {
         values[field.key] = maskCredential(stored[field.key], field.secret);
       }
-      const requiredOk = requiredCredentialsPresent(entry.credentials, stored);
       const oauthConnected =
         entry.oauth === true &&
         readStoredCredential(entry.id)?.type === "oauth";
-      // OAuth-only providers (no cred fields) are configured iff connected;
-      // otherwise OAuth connection satisfies missing required fields.
-      const configured =
-        entry.credentials.length === 0
-          ? oauthConnected
-          : requiredOk || oauthConnected;
+      const configured = providerAuthenticated(entry, stored);
       return {
         id: entry.id,
         displayName: entry.displayName,

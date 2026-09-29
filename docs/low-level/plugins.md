@@ -102,6 +102,16 @@ flowchart TB
 | [gws](../../packages/harness/src/plugins/gws/index.ts) | Polls Gmail through the GWS CLI; polls never overlap. The thread is `<Subject> [<gmailThreadId>]`, and `routes.json` rules can change it. Unread mail is marked read. Settings in `state/` are re-read on every poll. `pollIntervalSec: -1` turns polling off. In backlog mode, the first email of each thread wakes the agent, and later ones arrive as silent (without `doNotSteer`, so they *can* join a running turn). Already-seen threads are listed in `ingested-threads.jsonl`. | `email_received`, `email_silent`, `gws_settings` (channel `main`) | Copied `scripts/gws/*` helpers and the GWS CLI. |
 | [artifacts](../../packages/harness/src/plugins/artifacts/index.ts) | Serves agent-written HTML pages. The agent publishes by having a copied script write `state/<slug>.<public\|private>.html`; the file name holds the visibility. | — | The copied `scripts/artifacts/artifact` script. Serving rules are in [API §10](api.md#10-plugin-webhooks--webhook). |
 
+### Why core plugins can't be copied
+
+`admin`, `scheduler` and `agent-messaging` are *core* plugins: every agent runs them, and `cognisphere plugin add` refuses them (the code calls a copy "a footgun"). The other plugins are a *catalog* you may copy and edit. The reasons:
+
+1. **The server calls `admin` directly.** `POST /admin/:id/send` fetches the running `admin` instance with `getAdminPlugin()` and calls its `deliver()` method as the packaged class. An edited copy without that method breaks console sends, and the type checker can't see it because the copy loads at runtime.
+2. **A copy replaces the plugin for every agent at once.** Core plugins run on every agent, and a copy in `<harnessRoot>/plugins/` wins over the package for all of them. `agent-messaging` is how agents reach each other's webhooks, so a broken copy breaks agent-to-agent messages across the deployment.
+3. **Copies miss upgrades.** A copied plugin no longer gets package updates. That's the point for catalog plugins, but for core plugins it leaves new server code talking to an old plugin.
+
+To change what a core plugin tells the agent, add your own prompt file (such as `1-agent.md`) rather than editing its seed. The refusal is only in the CLI: a copy made by hand is still loaded ([known issue 15](#known-issues-and-suggested-improvements)).
+
 ## Example: a Telegram attachment and an explicit reply
 
 ```mermaid
@@ -181,6 +191,7 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | 12 | Cleanup | Low | The shipped `create-plugin` skill says the notification name isn't delivered to the agent (it is, as `Notification: <name>`), lists only `admin` and `scheduler` as always-on (it misses `agent-messaging`), and links a stale `docs/server.md`. | Agents that write plugins follow wrong guidance. | Update the skill. |
 | 13 | Cleanup | Low | The `scheduler-cli` help says `--once` deletes the schedule after it fires; the plugin actually pauses it. | Agents and operators expect it to disappear. | Fix the help text (or make the behavior match). |
 | 14 | Cleanup | Low | A comment in the Telegram plugin says pending updates are dropped at start; the code doesn't do that. | Misleading for contributors; relates to the redelivery risk above. | Fix the comment, or implement it deliberately. |
+| 15 | Risk | Medium | Only `plugin add` refuses core plugin IDs. `PluginRegistry.scan()` doesn't, so a hand-made `<harnessRoot>/plugins/admin/` (or `scheduler`, `agent-messaging`) silently replaces the packaged plugin for every agent. The only sign is `scope: user` in the "plugin loaded" log line. | Can break console sends (`getAdminPlugin()` expects the packaged class), agent-to-agent messages, or scheduling for the whole deployment, and the copy misses upgrades. | Have the registry skip deployment copies of core IDs with a clear warning, or fail boot loudly. |
 
 ## FAQ
 

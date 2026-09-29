@@ -1,5 +1,3 @@
-import type { CredField } from "../core/types.js";
-
 /**
  * Shared credential masking/merge helpers for /api/models and /api/secrets.
  *
@@ -26,17 +24,4 @@ export function applyMaskedPut(
   else if (v === MASK) {
     // unchanged — keep existing value
   } else if (typeof v === "string") target[key] = v;
-}
-
-/** Every required credential field has a non-empty stored value. */
-export function requiredCredentialsPresent(
-  fields: CredField[],
-  stored: Record<string, string>,
-): boolean {
-  return fields
-    .filter((f) => f.required)
-    .every((f) => {
-      const v = stored[f.key];
-      return typeof v === "string" && v.length > 0;
-    });
 }

@@ -128,6 +128,60 @@ stateDiagram-v2
 - **`running`** means "the runner is on and the plugins were started". It does not mean a Pi process exists.
 - **Stop is not remembered.** The next server boot starts every agent again.
 
+### The agent folder
+
+The folder `<harnessRoot>/agents/<id>/` *is* the agent: its name is the agent ID, and no other list of agents exists. The full layout is in [agents](agents.md#persistent-layout); this section covers when things appear in it.
+
+**Created.** `cognisphere init` (the developer agent, `nova`) and `cognisphere agent new <name> [--dev]` both call `scaffoldAgent()` in [cli/agent.ts](../../packages/harness/src/cli/agent.ts). It refuses an existing folder, then:
+
+1. copies the template `src/agents/base-agent/` (`system_prompts/0-base_prompt.md` and `1-agent.md`, `bootstrap/`, `extensions/`, `scripts/`, `knowledge/`, `workspace/`);
+2. with `--dev`, copies the developer persona on top;
+3. copies shipped skills into `skills/agent/` (`create-skill` for every agent, the full set for `nova`);
+4. writes a starter `agent.json` (Anthropic Sonnet, `single` thread).
+
+A folder made by hand or copied from another agent works the same way.
+
+**Found.** Only at server boot: `AgentManager.boot()` lists `agents/*` (skipping hidden folders) and starts each one. A folder added while the server runs is ignored until the next restart.
+
+**Filled in over time:**
+
+| When | Written into the agent folder |
+|---|---|
+| Every start (boot, Start, Restart, settings swap) | `system_prompts/0.1-agent-directory.md` if missing; every plugin's `seed/` files (overwritten); `plugins/<id>/state/` and `inbox/`; `.venv/` from bootstrap |
+| First start after server boot | `sessions/` and `sessions/.events.db` |
+| Each batch | `sessions/<threadId>/<sessionId>.jsonl` and `.system-prompt.md` |
+| While the agent works | Whatever it writes itself (`workspace/`, new skills, notes) |
+
+**Removed.** No command; stop the server and delete the folder ([FAQ](#how-do-i-delete-or-rename-an-agent)).
+
+#### Which plugins an agent has
+
+Decided by folders, on every start (`startAgent()`):
+
+```text
+plugins = core plugins (admin, scheduler, agent-messaging)   ← always, folder or not
+        + every folder under agents/<id>/plugins/
+```
+
+- **Turn a plugin on:** create `agents/<id>/plugins/<pluginId>/`, empty or with a `config.json`, then restart the agent. The name must match a plugin ID the registry knows, or that plugin is `failed` with "unknown plugin id".
+- **Turn it off:** delete that folder. Its seeded prompt, scripts and skills stay in the agent folder; nothing removes them.
+- `agent.json` doesn't list plugins.
+- `cognisphere plugin add <id>` **doesn't turn a plugin on for any agent.** It only copies the plugin's code into the deployment (below).
+
+#### Where plugin code and prompts come from
+
+| Place | Holds | Applies to |
+|---|---|---|
+| `packages/harness/src/plugins/<id>/` | Built-in code: `index.ts` + `seed/` | Every deployment |
+| `<harnessRoot>/plugins/<id>/` | A copy made by `plugin add`, or your own plugin | **Every agent** in the deployment |
+| `agents/<id>/plugins/<pluginId>/` | Turns the plugin on; its `config.json`, `state/`, `inbox/` | One agent |
+
+- **Which code runs.** `PluginRegistry.scan()` runs once at server boot. It reads the built-in folder, then `<harnessRoot>/plugins/`; on the same ID the deployment's copy wins for every agent. One agent can't use the built-in copy while another uses the edited one. Core plugins can't be copied, so they always come from the package. Code changes need a server restart; a reload doesn't re-read code.
+- **Plugin prompts and scripts.** A plugin's `seed/` mirrors the agent layout (`system_prompts/plugin-<id>.md`, `scripts/<id>/…`, `skills/<id>/…`) and is copied over the agent folder on **every** start of that plugin. An edit to `agents/nova/system_prompts/plugin-telegram.md` is lost on the next start. To change it for good, edit the `seed/` file in `<harnessRoot>/plugins/<id>/` (run `plugin add` first for a built-in plugin); that affects every agent using it. For one agent only, put the change in its own file (`1-agent.md`, or a new `2-….md`).
+- **The agent's own prompts.** Before each batch the runner joins every `system_prompts/*.md` sorted by name, so the order is `0-base_prompt.md`, `0.1-agent-directory.md`, `1-agent.md`, then the `plugin-*.md` files. `0-base_prompt.md` is copied **once**, at creation; updating the harness package never refreshes it (`cognisphere upgrade` leaves that to the `/cognisphere-upgrade` skill). Plugin prompts are the opposite: refreshed on every start.
+
+**Example.** Nova has `agents/nova/plugins/telegram/config.json`, and `cognisphere plugin add telegram` was run. At boot the registry picks `<harnessRoot>/plugins/telegram/index.ts` over the built-in one. When Nova starts, that copy's `seed/` overwrites `agents/nova/system_prompts/plugin-telegram.md` and `scripts/telegram/*`, then Telegram starts with Nova's `config.json`.
+
 ### Startup steps
 
 These run on every start: at boot, when you press Start or Restart, and when saved settings are swapped in.
@@ -136,7 +190,7 @@ These run on every start: at boot, when you press Start or Restart, and when sav
 |---|---|---|
 | 1 | If there are two or more agents and `system_prompts/0.1-agent-directory.md` is missing, write it (a list of the other agents). Copy model overrides into Pi. Make the plugin list: the core plugins (`admin`, `scheduler`, `agent-messaging`) plus every folder under `plugins/`. All plugins start as `stopped`, so their settings are visible. | — |
 | 2 | Read `agent.json` and check it: the model and provider, the agent's secrets, and `config` against `configSchema`. | The agent becomes `failed` with the reason. Two sources defining the same environment variable name also fail. |
-| 3 | Open the agent's database (once per server boot) and fill in any missing thread links from existing session files. | The same database is reused on every restart. Nothing is reset. |
+| 3 | Open `sessions/.events.db` the first time this agent starts after server boot; later starts reuse the open connection. At that first open, any thread folder with session files but no `threads` row is linked to its most recently changed `.jsonl`, so older deployments keep their history instead of starting a new session. | Nothing is reset on Stop, Start, Restart or a settings swap. |
 | 4 | Run `bootstrap/bootstrap.sh` if it exists, and wait for it. | A non-zero exit is logged and ignored. There is no time limit. |
 | 5 | Create the runner with the settings, database and a snapshot of the environment variables. | — |
 | 6 | Start plugins **one after another**. For each one: copy its `seed/` files into the agent, validate its config, look up its secrets, create it, create `state/` and `inbox/`, then call `start()`. | Only that plugin becomes `failed`. The others and the runner carry on. A folder under `plugins/` with no matching code fails with "unknown plugin id". |
@@ -224,12 +278,12 @@ sequenceDiagram
    It then claims that thread's rows in one transaction and marks them `in_flight`.
 
    If some rows are **retries of inputs Pi already saw**, only those are claimed first, and the prompt is a short "please continue" nudge. The other queued rows are fed in together right after Pi accepts the prompt. `doNotSteer` rows wait for the next batch.
-3. **Start Pi.** The model is the thread's own setting if it has one, otherwise the agent default. The runner builds the system prompt and starts Pi on the thread's session file ([details](#execution-and-example)).
-4. **Prompt.** The claimed rows are joined into one prompt, with a metadata block per input. Pi must accept the prompt within 60 seconds. This timer pauses while Pi compacts old history first. Anything that arrived while Pi was starting is fed in as one combined follow-up once the prompt is accepted.
-5. **Link.** A small Pi extension, [harness-bridge](../../packages/harness/src/agents/base-agent/extensions/harness-bridge.ts), reports the ID of each user message Pi actually saved. The runner writes that ID onto the matching rows, filling it in once and never overwriting. Rows joined into one prompt share one ID.
+3. **Start Pi.** The model is the thread's own setting if it has one and it can still be used, otherwise the agent default ([model check](#model-check)). The runner builds the system prompt and starts Pi on the thread's session file ([details](#execution-and-example)).
+4. **Prompt.** The claimed rows are joined into one prompt, with a metadata block per input. Each block carries `EventId: <row id>`. Pi must accept the prompt within 60 seconds. This timer pauses while Pi compacts old history first. Anything that arrived while Pi was starting is fed in as one combined follow-up once the prompt is accepted.
+5. **Receipt.** A small Pi extension, [delivery-receipts](../../packages/harness/src/core/pi-delivery-receipts.ts), reads the `EventId` lines of each user message Pi saves and reports `{entryId, eventIds}`. That one receipt marks those rows *delivered* and links them to the saved message (filled in once, never overwritten). Rows joined into one prompt share one entry. The runner loads the extension from the package, not the agent folder, so an agent can't remove or edit it.
 6. **Follow-ups.** A new input for the same running thread is saved, marked `in_flight`, and sent straight into the turn. There is no reply to confirm it arrived. If sending fails, the row stays `queued`. Inputs for other threads wait for a free worker.
 7. **Finish.** Pi sends `agent_end`. The batch **succeeded** only if the very last message is from the assistant with `stopReason: stop`. A trailing tool result means Pi stopped part-way, and `stopReason: error` is recorded as `[agent_error]`. The runner then closes Pi's input, waits for it to exit (after 5 seconds it kills Pi's whole process group), and kills any processes Pi left behind.
-8. **Record.** Inputs Pi received are marked `done`. Inputs that failed or never reached Pi are retried or marked `failed` ([rules](#queue-and-recovery)). The thread is freed and the workers look for more work.
+8. **Record.** Inputs with a receipt are marked `done`. Inputs that failed or never reached Pi are retried or marked `failed` ([rules](#queue-and-recovery)). The thread is freed and the workers look for more work.
 
 The answer is in Pi's session file. **Nothing is sent back to Telegram or email automatically**; the agent has to run the plugin's send script.
 
@@ -259,6 +313,8 @@ The thread is `threadIdOverride` if given. Otherwise it depends on the agent's `
 | `plugin_channel` | `telegram:42` (one per chat) |
 
 Follow-ups are matched by thread only. If two sources end up on the same thread, one can be fed into the other's running turn.
+
+**Thread ID = folder name.** The thread ID is used unchanged as a folder name: `sessions/<threadId>/<sessionId>.jsonl`, for example `sessions/telegram:42/3f2a….jsonl`. On a thread's first batch the runner creates a random session ID and saves it in the `threads` table; later batches look it up there. So the folder is implied by the thread ID, and the `threads` row picks which `.jsonl` in that folder Pi continues (older files may sit alongside it). The ID isn't checked for path safety when the input is written ([known issue 18](#known-issues-and-suggested-improvements)).
 
 ### Queue and recovery
 
@@ -299,7 +355,7 @@ stateDiagram-v2
 
 **Good to know:**
 
-- Two different signals are used. Pi's `message_start` events decide which inputs were *delivered*. The bridge's saved-message IDs decide whether a retry is a *nudge or a resend*. A row can be marked done without having a message link.
+- One signal decides both *delivered* and *nudge or resend*: the delivery receipt. So a `done` row always has a message link. Receipts also re-report earlier batches' history; the runner ignores rows outside the current batch, and a row whose earlier copy is in the history is linked to that copy.
 - There is no wait between retries, and **no exactly-once guarantee**: a failed attempt may already have sent an email or changed a file.
 - Requeueing, or forcing any non-running row back to `queued`, sets attempts to 1. So the row gets `maxAttempts − 1` more tries.
 - You can change the status of any row except `in_flight` ones. Deleting an event only deletes the queue record, not the conversation. Deleting a thread deletes both.
@@ -327,7 +383,7 @@ The thread stays "busy" until clean-up is finished. So a row that already shows 
   - the system prompt file;
   - the model;
   - the seven fixed tools;
-  - the agent's skills and extensions, listed explicitly.
+  - the package's delivery-receipts extension, then the agent's skills and extensions, listed explicitly (an old `extensions/harness-bridge.ts` copy is skipped).
 
   Pi's own discovery of prompts, templates, themes and context files is turned off.
 - **Environment:** the server's own environment variables, plus `PI_AGENT_ID`, `PI_THREAD_ID`, `PI_WEBHOOK_BASE`, `HARNESS_BASE_URL` and `VIRTUAL_ENV` (with `.venv/bin` added to `PATH` if it exists). Then the agent's secrets, config and model credentials are applied on top, so a secret with the same name as one of those variables wins. If a thread uses another provider, that provider's credentials are added too.
@@ -360,7 +416,7 @@ The fields themselves are described in [agents](agents.md#configuration-and-cred
 | `configSchema` and `config` | — | Non-secret environment variables. **Both or neither**: either one alone fails, even an empty `config: {}`. Values must be strings, and empty strings are dropped. | Next swap |
 | `secretsSchema` | — | The agent's own secret fields. A missing *required* one stops the agent starting. | Next start or swap |
 | Plugin `config.json` | `{}` plus schema defaults | Becomes the plugin's `ctx.config`. | Reload of that plugin |
-| A thread's own model (SQLite) | none (use the agent's) | Provider, model and thinking level for one thread. | That thread's next batch |
+| A thread's own model (SQLite) | none (use the agent's) | Provider, model and thinking level for one thread. Checked when set and again at each batch; if it can no longer be used, the batch runs on the agent's model and logs `thread model unavailable; using agent default`. | That thread's next batch |
 
 Only some fields are validated; `agent.json` doesn't have a full schema. The planned shared-workspace design will require `maxConcurrentSlots: 1`; today's runner doesn't.
 
@@ -376,6 +432,16 @@ Only some fields are validated; `agent.json` doesn't have a full schema. The pla
 ```
 
 With this file, Telegram chats 42 and 43 each have their own conversation, but only one runs at a time. A new chat-42 message is fed into chat 42's running turn, while chat 43 waits.
+
+#### Model check
+
+One rule, `modelUnavailableReason()` in [model-access.ts](../../packages/harness/src/core/model-access.ts), decides whether a provider and model can be used. Agent startup, the thread-model endpoint and every batch call it. A model can be used when its provider has its required credentials stored *or* a connected subscription sign-in (a provider with no credential fields, like `openai-codex`, needs the sign-in), and the model is enabled on the Models page. Providers outside the catalog always pass; Pi reads their keys from the environment.
+
+| Where | If the model can't be used |
+|---|---|
+| Agent startup (default model) | The agent is `failed` with the reason. |
+| Setting a thread's model | `400` with the reason. |
+| Each batch (thread's model) | The batch uses the agent's own model instead, and logs a warning. The thread's setting is kept, so it applies again once the model is usable. |
 
 ### Models, secrets and other inputs
 
@@ -495,12 +561,12 @@ What changes later: [plan 1.1](../plans/01-sdk-runtime.md) replaces how Pi is ru
 
 ## Known issues and suggested improvements
 
-Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High* = lost work, security exposure or a wrong result; *Medium* = confusing or wasteful behavior; *Low* = cleanup. None of these is fixed yet. When one is fixed or scheduled, update this table and the [roadmap](../roadmap.md).
+Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High* = lost work, security exposure or a wrong result; *Medium* = confusing or wasteful behavior; *Low* = cleanup. Rows marked *Fixed* stay so their numbers don't change. When one is fixed or scheduled, update this table and the [roadmap](../roadmap.md).
 
 | # | Type | Severity | Problem | Why it matters | Suggested change |
 |---|---|---|---|---|---|
 | 1 | Bug | High | Plugins start before the runner. While the runner isn't running, `notify()` throws and the plugin context swallows the error, so the input is **lost**. This happens on every Start, Restart and settings swap. | Messages that arrive in that window disappear with only a log line. GWS works around it with a 5 s delay. | Start the runner (without claiming work) before plugins, or queue the row even when the runner is stopped. Longer term, the durable intake in [plan 1.4](../plans/04-ingress-and-operations.md). |
-| 2 | Bug | Medium | Agent startup accepts an OAuth-connected provider, but the thread-model endpoint checks only credential fields. A provider with no fields (e.g. `openai-codex`) passes the thread check even when not signed in. | A thread can be switched to a model that then fails at spawn, or the two checks disagree in the console. | One shared model resolver ([simplification review](#simplification-review-proposed)). |
+| 2 | Fixed | — | ~~Agent startup and the thread-model endpoint checked providers differently, and a thread's model wasn't re-checked at batch time.~~ | — | Fixed: one [model check](#model-check) everywhere; an unusable thread model falls back to the agent's model. |
 | 3 | Risk | Medium | Reloading a stopped or failed agent only clears the secrets cache. It doesn't start the agent. | After fixing a secret or completing a Google sign-in, the operator expects the agent to recover, but it stays `failed`. | On reload, try to start agents that are `failed` (not ones the operator stopped), or show a clear "press Start" hint in the console. |
 | 4 | Risk | Medium | Start and Restart don't clear the secrets cache. | Hand edits to `secrets.json` are ignored until a server restart, even after pressing Restart. | Clear the cache in `restartAgent` and `manualStart`. |
 | 5 | Risk | Medium | Operator Stop and Restart count as failed attempts. | Repeated restarts during a deploy can push healthy inputs to `failed` without any real error. | Requeue interrupted work without incrementing attempts when the interruption was operator- or shutdown-initiated. |
@@ -516,6 +582,7 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | 15 | Risk | Medium | GWS sign-in has no PKCE, takes `redirectUri` and `returnTo` from the caller, and prunes expired states only when a new sign-in starts. | Weaker than current OAuth guidance; an attacker with operator access could send a user to another site after sign-in. | Allow-list callback origins and return paths, add PKCE, prune on each request ([reusable plugin OAuth](#reusable-plugin-oauth-proposed)). |
 | 16 | Risk | Medium | There is no automated test suite for the queue, retry and lifecycle logic. | Changes to the most delicate code (retries, steering, reloads) can't be checked automatically. | Add focused tests for the event state machine and startup/reload ordering, using a fake Pi process. |
 | 17 | Risk | Medium | The default `maxConcurrentSlots` is 1, so one busy conversation blocks every other conversation of that agent. | With many users on one agent, messages queue behind a long turn. | Document this clearly for product apps; use several agents, or wait for per-agent capacity in the planned runtime. |
+| 18 | Risk | Medium | Thread IDs become folder names (`sessions/<threadId>/`) but are only checked (`isSafeId` in `api/agents.ts`) on read routes. The `threadId` on `POST /admin/:id/send`, a plugin's `threadIdOverride`, and a `channelId` joined into `<plugin>:<channel>` aren't checked. | A `/` creates nested folders whose thread the API can never read (the read check rejects it). A `../` puts Pi's session file outside `sessions/`. Only an operator or plugin code can set these, so it isn't public. `:` and `[` are fine on macOS and Linux but not on Windows. | Check the thread ID in `AgentRunner.notify()` using the same rule as `isSafeId`, and reject it (or clean it up) before the row is saved. |
 
 ## Simplification review (proposed)
 
@@ -526,19 +593,10 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | Manager and runner | Keep both. Move file resolution and provisioning out of the manager, and process launching out of the runner, behind the provider boundary. | [1.1](../plans/01-sdk-runtime.md), [1.2](../plans/02-workspace-and-provisioning.md) |
 | Registry, config, types, logger, `AgentInstance` | Leave as they are. Merging them saves files, not work. | — |
 | Pi RPC | Remove `PiRpcClient` and `spawnPi()` once the SDK path matches it; Process and Docker share one `AgentHostClient`. | [1.1](../plans/01-sdk-runtime.md) |
-| Model decisions | One resolver for startup, thread selection and the console; take metadata from Pi; drop the copied provider list. Remove `pi-models-sync.ts` once the SDK host and console share resolved config. | [1.1](../plans/01-sdk-runtime.md) |
+| Model decisions | The shared [model check](#model-check) exists. Next: take metadata from Pi and drop the copied provider list. Remove `pi-models-sync.ts` once the SDK host and console share resolved config. | [1.1](../plans/01-sdk-runtime.md) |
 | Secrets | One `SecretProvider` and typed broker actions; `ModelsStore` keeps only policy and references. | [1.4](../plans/04-ingress-and-operations.md), [1.8](../plans/10-agent-simplification.md#4-secret-vault-and-operation-broker) |
 | Bootstrap and seed copying | Replace with approved provisioning plus base files and agent-managed overrides, through one resolver. | [1.2](../plans/02-workspace-and-provisioning.md), [1.8](../plans/10-agent-simplification.md#resolution-and-override-rules) |
 | Intake | A durable intake outside the runner, used by both the API and plugins. | [1.4](../plans/04-ingress-and-operations.md) |
-
-**A real bug that shows why one resolver is needed.** Agent startup and the thread-model endpoint check a provider differently:
-
-| Check | Accepts |
-|---|---|
-| Agent startup: `resolveAndValidateProvider()` | A connected sign-in. |
-| [Thread-model endpoint](../../packages/harness/src/api/agents.ts) | Only credential fields. A provider with no fields (such as `openai-codex`) passes even when not signed in. |
-
-So the two can disagree. Before replacing them, test these cases: API key, sign-in only, disabled model, custom provider, overrides.
 
 **Keeping the planned core small:**
 

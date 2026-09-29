@@ -174,7 +174,7 @@ All routes require auth. Mutations call `AgentManager` operations described in [
 | GET | `/api/agents/:id/sessions` | Threads under `<agent>/sessions/` and their `.jsonl` files, newest first. |
 | GET | `/api/agents/:id/sessions/:threadId/:sessionId?limit=N` | Parsed JSONL entries; `limit` returns the newest N (invalid or ≤ 0 → 100; capped at 100,000). |
 | GET | `/api/agents/:id/sessions/:threadId/usage` | Per-model tokens and cost for the thread. |
-| PUT | `/api/agents/:id/sessions/:threadId/model` | Set/clear the thread model override; next batch, no reload. |
+| PUT | `/api/agents/:id/sessions/:threadId/model` | Set/clear the thread model override; next batch, no reload. `400` with the reason when the [model check](core.md#model-check) rejects it. |
 | DELETE | `/api/agents/:id/sessions/:threadId` | Delete the thread's `events` rows, `threads` row and `sessions/<threadId>/` dir. 409 if a batch is in flight. |
 
 Thread list item:
@@ -252,7 +252,7 @@ When the agent has no open `AgentDb` (early startup validation failure or shutdo
 
 `total` is the filtered count before paging. `search` matches input text and metadata, not transcripts.
 
-`piSessionId` + `piEntryId` locate the delivered user entry in `<agentDir>/sessions/<threadId>/<piSessionId>.jsonl`. The harness-bridge Pi extension writes `piEntryId` in real time, so it can be set while `in_flight` and on rows whose batch later failed; it is `null` if never captured or cleared for resend. Rows concatenated into one prompt share an entry; each live steer gets its own. A set `piEntryId` marks the row as delivered: an automatic retry sends a short *continue* nudge instead of the original text.
+`piSessionId` + `piEntryId` locate the delivered user entry in `<agentDir>/sessions/<threadId>/<piSessionId>.jsonl`. The runner writes `piEntryId` in real time from the delivery-receipts Pi extension, so it can be set while `in_flight` and on rows whose batch later failed; it is `null` until Pi saves the row, and after a requeue clears it. A `done` row always has one. Rows concatenated into one prompt share an entry; each live steer gets its own. A set `piEntryId` marks the row as delivered: an automatic retry sends a short *continue* nudge instead of the original text.
 
 ## 5. Filesystem — `/api/agents/:id/fs/*`
 
@@ -447,11 +447,11 @@ Generic file writes (`PUT fs/file`) never reload. `restartRequired: false` is a 
 
 ## Known issues and suggested improvements
 
-Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High* = lost work, security exposure or a wrong result; *Medium* = confusing or wasteful behavior; *Low* = cleanup. None of these is fixed yet. When one is fixed or scheduled, update this table and the [roadmap](../roadmap.md).
+Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High* = lost work, security exposure or a wrong result; *Medium* = confusing or wasteful behavior; *Low* = cleanup. Rows marked *Fixed* stay so their numbers don't change. When one is fixed or scheduled, update this table and the [roadmap](../roadmap.md).
 
 | # | Type | Severity | Problem | Why it matters | Suggested change |
 |---|---|---|---|---|---|
-| 1 | Bug | Medium | The thread-model PUT ignores OAuth: a provider with no credential fields passes even when not signed in (`GET /api/models` checks this correctly). | The override is accepted and then fails when the batch starts. | Use the same resolver as agent startup ([core](core.md#known-issues-and-suggested-improvements)). |
+| 1 | Fixed | — | ~~The thread-model PUT ignored OAuth sign-ins.~~ | — | Fixed: it uses the shared [model check](core.md#model-check). |
 | 2 | Risk | High | The app bearer secret and the console cookie both give full operator access; `X-App-User` isn't checked against anything. | A leaked app secret controls every agent, file and credential. | Scoped tokens (per agent, per action) and per-user authorization for product apps. |
 | 3 | Risk | High | Without a terminal, the first login attempt creates `admin / changeme`; passwords are stored in plain text. | A server started under systemd without running `server.sh secrets` is open to the default password. | Refuse to start (or refuse logins) while the default is in place, and store password hashes. |
 | 4 | Risk | Medium | GWS `start` accepts any `redirectUri` and `returnTo` from the caller. | Open-redirect after sign-in. | Allow-list origins and return paths. |
