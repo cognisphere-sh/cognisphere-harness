@@ -1,6 +1,6 @@
 # Core low-level design
 
-**Status:** implemented (local processes). [High-level design](../high-level-design.md) · [Roadmap](../roadmap.md) · [FAQ](#faq). Future runtime interfaces are in [plan 1.1](../plans/01-sdk-runtime.md).
+**Status:** implemented (local processes). [High-level design](../high-level-design.md) · [Roadmap](../roadmap.md) · [FAQ](#faq). The planned runtime is in the [roadmap](../roadmap.md).
 
 ## In one minute
 
@@ -196,7 +196,7 @@ These run on every start: at boot, when you press Start or Restart, and when sav
 | 6 | Start plugins **one after another**. For each one: copy its `seed/` files into the agent, validate its config, look up its secrets, create it, create `state/` and `inbox/`, then call `start()`. | Only that plugin becomes `failed`. The others and the runner carry on. A folder under `plugins/` with no matching code fails with "unknown plugin id". |
 | 7 | Start the runner. It first marks any rows still `in_flight` from last time as a failed attempt, then begins picking work. The agent is now `running`. | — |
 
-> **Watch out:** plugins start *before* the runner. While the runner isn't running, `notify()` throws and the plugin's context silently swallows the error, **so that input is lost**. This window opens on every Start, Restart and settings swap: anything a plugin sends between its own `start()` and the runner starting is dropped. (The GWS plugin waits 5 seconds before its first poll for this reason.) While an agent is fully stopped its plugins aren't running, and the console's send route answers 503, so nothing is silently lost then. Once the runner is running, `notify()` writes the row to SQLite before returning; but if something fails, the plugin still isn't told. [Plan 1.4](../plans/04-ingress-and-operations.md) fixes this with a separate intake.
+> **Watch out:** plugins start *before* the runner. While the runner isn't running, `notify()` throws and the plugin's context silently swallows the error, **so that input is lost**. This window opens on every Start, Restart and settings swap: anything a plugin sends between its own `start()` and the runner starting is dropped. (The GWS plugin waits 5 seconds before its first poll for this reason.) While an agent is fully stopped its plugins aren't running, and the console's send route answers 503, so nothing is silently lost then. Once the runner is running, `notify()` writes the row to SQLite before returning; but if something fails, the plugin still isn't told. [Phase 2](../roadmap/phase-02-reliable-intake.md) fixes this.
 
 ### Commands
 
@@ -557,7 +557,7 @@ sequenceDiagram
 | Settings swap after current work | Running work finishes with the settings it started with. | "Saved" is not the same as "active". |
 | Queue kept separate from Pi's history | No second copy of the conversation. | Rows and history must be matched up across partial delivery and retries. |
 
-What changes later: [plan 1.1](../plans/01-sdk-runtime.md) replaces how Pi is run; [plan 1.2](../plans/02-workspace-and-provisioning.md) defines the folders and one-turn-at-a-time workspace; [plan 1.4](../plans/04-ingress-and-operations.md) moves intake out of the runner.
+What changes later: [phase 2](../roadmap/phase-02-reliable-intake.md) saves inputs while the runner is stopped; [phase 3](../roadmap/phase-03-agent-layout-and-assets.md) defines the folders; [phase 6](../roadmap/phase-06-agent-host-split.md) moves the runner, queue and Pi into a per-agent process.
 
 ## Known issues and suggested improvements
 
@@ -565,7 +565,7 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 
 | # | Type | Severity | Problem | Why it matters | Suggested change |
 |---|---|---|---|---|---|
-| 1 | Bug | High | Plugins start before the runner. While the runner isn't running, `notify()` throws and the plugin context swallows the error, so the input is **lost**. This happens on every Start, Restart and settings swap. | Messages that arrive in that window disappear with only a log line. GWS works around it with a 5 s delay. | Start the runner (without claiming work) before plugins, or queue the row even when the runner is stopped. Longer term, the durable intake in [plan 1.4](../plans/04-ingress-and-operations.md). |
+| 1 | Bug | High | Plugins start before the runner. While the runner isn't running, `notify()` throws and the plugin context swallows the error, so the input is **lost**. This happens on every Start, Restart and settings swap. | Messages that arrive in that window disappear with only a log line. GWS works around it with a 5 s delay. | Start the runner (without claiming work) before plugins, or queue the row even when the runner is stopped. Planned in [phase 2](../roadmap/phase-02-reliable-intake.md). |
 | 2 | Fixed | — | ~~Agent startup and the thread-model endpoint checked providers differently, and a thread's model wasn't re-checked at batch time.~~ | — | Fixed: one [model check](#model-check) everywhere; an unusable thread model falls back to the agent's model. |
 | 3 | Risk | Medium | Reloading a stopped or failed agent only clears the secrets cache. It doesn't start the agent. | After fixing a secret or completing a Google sign-in, the operator expects the agent to recover, but it stays `failed`. | On reload, try to start agents that are `failed` (not ones the operator stopped), or show a clear "press Start" hint in the console. |
 | 4 | Risk | Medium | Start and Restart don't clear the secrets cache. | Hand edits to `secrets.json` are ignored until a server restart, even after pressing Restart. | Clear the cache in `restartAgent` and `manualStart`. |
@@ -577,8 +577,8 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | 10 | Risk | Low | Shutdown has no guard against a second signal and never closes the HTTP server. | A double Ctrl-C can run shutdown twice; requests can still arrive while agents are stopping. | Add a shutdown-once guard and call `server.close()` first. |
 | 11 | Risk | Low | Saving the Models page reloads every agent whose provider appears in the request, even when nothing changed. | Unneeded swaps and bootstrap runs. | Reload only agents whose provider settings actually changed. |
 | 12 | Risk | Low | Invalid JSON in `secrets.json` makes every agent fail validation. | One typo takes down all agents. | Report the parse error once, clearly, in the console and logs. |
-| 13 | Risk | High | With `maxConcurrentSlots` above 1, different threads edit the same folder with no lock. | Lost or mixed edits to shared files. | Keep 1 as the default; the planned workspace gate ([plan 1.2](../plans/02-workspace-and-provisioning.md)) serializes turns. |
-| 14 | Risk | High | Secrets and model keys are stored in plain text and handed to Pi as environment variables. | Anything the agent runs can read every credential. | The vault and broker in [plan 1.4](../plans/04-ingress-and-operations.md) and [1.8](../plans/10-agent-simplification.md#4-secret-vault-and-operation-broker). |
+| 13 | Risk | High | With `maxConcurrentSlots` above 1, different threads edit the same folder with no lock. | Lost or mixed edits to shared files. | Keep 1 as the default; the planned runtime keeps one active turn per agent ([phase 6](../roadmap/phase-06-agent-host-split.md)). |
+| 14 | Risk | High | Secrets and model keys are stored in plain text and handed to Pi as environment variables. | Anything the agent runs can read every credential. | Connections, grants and the egress proxy ([phase 10](../roadmap/phase-10-secrets-broker.md)). |
 | 15 | Risk | Medium | GWS sign-in has no PKCE, takes `redirectUri` and `returnTo` from the caller, and prunes expired states only when a new sign-in starts. | Weaker than current OAuth guidance; an attacker with operator access could send a user to another site after sign-in. | Allow-list callback origins and return paths, add PKCE, prune on each request ([reusable plugin OAuth](#reusable-plugin-oauth-proposed)). |
 | 16 | Risk | Medium | There is no automated test suite for the queue, retry and lifecycle logic. | Changes to the most delicate code (retries, steering, reloads) can't be checked automatically. | Add focused tests for the event state machine and startup/reload ordering, using a fake Pi process. |
 | 17 | Risk | Medium | The default `maxConcurrentSlots` is 1, so one busy conversation blocks every other conversation of that agent. | With many users on one agent, messages queue behind a long turn. | Document this clearly for product apps; use several agents, or wait for per-agent capacity in the planned runtime. |
@@ -586,26 +586,25 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 
 ## Simplification review (proposed)
 
-**Not built yet.** The [roadmap](../roadmap.md) tracks delivery. The idea: remove duplicated decisions and setup paths, but keep the four separate jobs (manage agents, run work, record inputs, run Pi).
+**Not built yet.** The [roadmap](../roadmap.md) tracks delivery. How today's core maps onto the planned split into a coordinator and one agent unit per agent:
 
-| Area | Proposal | Plan |
+| Area today | Planned | Phase |
 |---|---|---|
-| Manager and runner | Keep both. Move file resolution and provisioning out of the manager, and process launching out of the runner, behind the provider boundary. | [1.1](../plans/01-sdk-runtime.md), [1.2](../plans/02-workspace-and-provisioning.md) |
-| Registry, config, types, logger, `AgentInstance` | Leave as they are. Merging them saves files, not work. | — |
-| Pi RPC | Remove `PiRpcClient` and `spawnPi()` once the SDK path matches it; Process and Docker share one `AgentHostClient`. | [1.1](../plans/01-sdk-runtime.md) |
-| Model decisions | The shared [model check](#model-check) exists. Next: take metadata from Pi and drop the copied provider list. Remove `pi-models-sync.ts` once the SDK host and console share resolved config. | [1.1](../plans/01-sdk-runtime.md) |
-| Secrets | One `SecretProvider` and typed broker actions; `ModelsStore` keeps only policy and references. | [1.4](../plans/04-ingress-and-operations.md), [1.8](../plans/10-agent-simplification.md#4-secret-vault-and-operation-broker) |
-| Bootstrap and seed copying | Replace with approved provisioning plus base files and agent-managed overrides, through one resolver. | [1.2](../plans/02-workspace-and-provisioning.md), [1.8](../plans/10-agent-simplification.md#resolution-and-override-rules) |
-| Intake | A durable intake outside the runner, used by both the API and plugins. | [1.4](../plans/04-ingress-and-operations.md) |
+| `AgentManager` + `AgentRunner` in one server | The manager becomes the coordinator's unit lifecycle. The runner, queue and Pi launch move into a per-agent `agent-host` process (later a container), unchanged in behavior. | [phase 6](../roadmap/phase-06-agent-host-split.md) |
+| Registry, config, types, logger | Leave as they are. Merging them saves files, not work. | — |
+| Pi RPC (`PiRpcClient`, `spawnPi()`) | Kept. It runs inside the agent host with a turn deadline, process-group cleanup and an environment allowlist. No SDK host. | [phase 6](../roadmap/phase-06-agent-host-split.md) |
+| Model decisions | The shared [model check](#model-check) exists. Model calls go through the coordinator's model proxy later. | [phase 10](../roadmap/phase-10-secrets-broker.md) |
+| Secrets | Connections and grants in the coordinator; units get placeholders, and the egress proxy injects real values. | [phase 10](../roadmap/phase-10-secrets-broker.md) |
+| Bootstrap and seed copying | Seeds stop being copied: read-only `assets/base/` plus selection in `agent.json`. Dependencies move into per-agent images. | [phase 3](../roadmap/phase-03-agent-layout-and-assets.md), [phase 9](../roadmap/phase-09-docker-per-agent.md) |
+| Intake | `notify()` saves even while the agent is stopped; later the coordinator's outbox holds events until the unit acknowledges them. | [phase 2](../roadmap/phase-02-reliable-intake.md), [phase 6](../roadmap/phase-06-agent-host-split.md) |
 
 **Keeping the planned core small:**
 
-- **One queue and one owner of execution.** `AgentSandboxManager` handles admission and recovery, not scheduling.
-- **Pi keeps its sessions on persistent files,** with no archive or snapshot copies ([plan 1.2](../plans/02-workspace-and-provisioning.md#pi-owned-sessions)).
-- **Keep both the writer gate and the broker.** One slot doesn't stop plugins writing files, and a vault doesn't decide which actions are allowed.
-- **Editable automation comes later.** Script routers, cron and daemons are not needed for the first runtime.
+- **One active turn per agent unit,** with a fixed container name per agent. No sandbox store, fences or writer gate.
+- **Pi keeps its sessions on persistent files.** Checkpoints are a storage feature ([phase 11](../roadmap/phase-11-juicefs-and-checkpoints.md)), not a copy pipeline.
+- **The coordinator runs no agent code.** Agent logic (routing, scheduled scripts) runs as handlers inside the unit ([phase 7](../roadmap/phase-07-events-and-handlers.md)).
 
-[Search](../plans/08-session-search.md) reads Pi's files directly.
+[Search](../roadmap/phase-13-session-search.md) reads Pi's files directly.
 
 ### Reusable plugin OAuth (proposed)
 

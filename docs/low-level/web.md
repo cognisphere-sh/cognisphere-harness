@@ -129,8 +129,9 @@ The **file editor** works differently from settings forms. It saves the whole fi
 
 ## Planned changes
 
-- [Plan 1.6](../plans/06-live-interface.md): live updates over SSE, with reconnect and separate "running" and "saved" indicators.
-- [Plan 2](../plans/08-session-search.md): search across history.
+- [phase 12](../roadmap/phase-12-live-console.md): live updates over SSE, falling back to polling, with no duplicate bubbles after a reconnect.
+- [phase 13](../roadmap/phase-13-session-search.md): search across history.
+- [phase 3](../roadmap/phase-03-agent-layout-and-assets.md), [phase 7](../roadmap/phase-07-events-and-handlers.md), [phase 9](../roadmap/phase-09-docker-per-agent.md), [phase 11](../roadmap/phase-11-juicefs-and-checkpoints.md): views for assets, dead-lettered events, image builds and checkpoints.
 
 Neither exists today.
 
@@ -142,7 +143,7 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 |---|---|---|---|---|---|
 | 1 | Bug | Low | The comment in `lib/api.ts` says a 401 calls `onUnauthenticated` "once", but it fires on every 401. | Misleading for contributors; several parallel 401s trigger several redirects. | Fix the comment, or actually debounce the redirect. |
 | 2 | Risk | Medium | Upload and send are separate requests with no idempotency. | A failed send leaves an orphaned file; retrying can duplicate the message or overwrite the upload. | Send with an idempotency key and a unique upload name (depends on the API change). |
-| 3 | Risk | Medium | Polling only, at 2–5 s per open view. | Delayed feedback and constant load with many tabs open. | Live updates over SSE ([plan 1.6](../plans/06-live-interface.md)). |
+| 3 | Risk | Medium | Polling only, at 2–5 s per open view. | Delayed feedback and constant load with many tabs open. | Live updates over SSE ([phase 12](../roadmap/phase-12-live-console.md)). |
 | 4 | Risk | Medium | The file editor saves the whole file with no conflict check. | Silently overwrites changes the agent made while you were editing. | Send the loaded file's hash and show a conflict dialog (needs the API change). |
 | 5 | Risk | Low | Tool results whose tool call is outside the loaded window are hidden; non-message entries are never shown. | The chat can look incomplete compared with the raw history. | Show a "load earlier context" marker for orphaned tool results. |
 | 6 | Risk | Low | The sidebar polls the agent list every 30 s but the home page every 5 s. | Agent state can look different in two places at once. | Use one interval for the shared `['agents']` query. |

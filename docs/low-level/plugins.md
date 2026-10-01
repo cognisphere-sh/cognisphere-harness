@@ -167,8 +167,11 @@ Keep in mind:
 
 **Planned** (none of this exists yet):
 
-- [Plan 1.4](../plans/04-ingress-and-operations.md): a durable intake with receipts, scoped broker actions, and safe file publishing.
-- [Plan 1.2](../plans/02-workspace-and-provisioning.md): moves private plugin state out of the agent's reach.
+- [phase 2](../roadmap/phase-02-reliable-intake.md): `notify()` returns a receipt, inputs are saved while the agent is stopped, and an optional `sourceKey` drops duplicates.
+- [phase 3](../roadmap/phase-03-agent-layout-and-assets.md): plugin seeds are no longer copied into agent folders; plugin state moves to `plugin-data/<id>/`.
+- [phase 4](../roadmap/phase-04-core-prompt-and-capabilities.md) and [phase 6](../roadmap/phase-06-agent-host-split.md): each plugin becomes a capability (prompts, skills, scripts, dependencies) plus a coordinator part (receivers, OAuth, routes).
+- [phase 7](../roadmap/phase-07-events-and-handlers.md): events and agent-owned handlers replace fixed notifications; schedules run agent scripts; Gmail polling becomes a script.
+- [phase 10](../roadmap/phase-10-secrets-broker.md): connections, grants and an egress proxy, so agents never hold plugin credentials.
 - The [reusable OAuth proposal](core.md#reusable-plugin-oauth-proposed): lets a plugin register sign-in on its code, so it works before the plugin can run.
 
 ## Known issues and suggested improvements
@@ -182,7 +185,7 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | 3 | Risk | Medium | Seed copying only adds and overwrites; it never deletes, and a seed can write anywhere in the agent folder. | Removed plugins leave prompts and scripts behind that still instruct the agent; a bad seed can overwrite agent files. | Record which files each plugin seeded and remove them when the plugin is removed; restrict seeds to namespaced paths. |
 | 4 | Risk | Medium | The Telegram bot token isn't a required secret. Without it (or if Telegram rejects it) the plugin logs a warning and shows `running` while doing nothing. | Looks healthy but receives nothing. | Make the token required, or report a `failed` state with the reason. |
 | 5 | Risk | Medium | Telegram keeps its poll position only in memory. | After a restart, Telegram may resend recent updates, and the queue doesn't dedupe them, so the agent can answer twice. | Save the offset in `state/` after each successful `notify()`. |
-| 6 | Risk | Medium | The queue never removes duplicates by source ID. | Any plugin that re-delivers causes repeated work and repeated replies. | Add an optional dedup key to `NotifyPayload` (planned with the intake in [plan 1.4](../plans/04-ingress-and-operations.md)). |
+| 6 | Risk | Medium | The queue never removes duplicates by source ID. | Any plugin that re-delivers causes repeated work and repeated replies. | Add an optional dedup key to `NotifyPayload` (planned in [phase 2](../roadmap/phase-02-reliable-intake.md)). |
 | 7 | Risk | Low | GWS backlog emails arrive as `isSilent` without `doNotSteer`. | Old emails can be fed into an unrelated running turn on the same thread. | Set `doNotSteer` on backlog rows too, unless steering is intended. |
 | 8 | Risk | Low | Saving config for a plugin the agent hasn't loaded returns 404; `reloadPlugin` does nothing while the agent is stopped. | Newly added plugins seem "stuck" until the agent is restarted. | Allow the config save to load a newly added plugin, or tell the operator to restart the agent. |
 | 9 | Risk | Low | The registry creates a throwaway instance of each plugin at scan time to read its manifest. | Constructor side effects run once at boot for every plugin, even unused ones. | Read the manifest from a static export instead of an instance. |

@@ -176,12 +176,12 @@ The full lists, with suggested fixes, are in each layer's "Known issues and sugg
 
 | Risk | Where | Suggested direction |
 |---|---|---|
-| Inputs a plugin sends while its agent is starting or swapping settings are silently dropped. | [Core](low-level/core.md#known-issues-and-suggested-improvements), [plugins](low-level/plugins.md#known-issues-and-suggested-improvements) | Persist before the runner starts; durable intake ([plan 1.4](plans/04-ingress-and-operations.md)). |
-| Every agent can read all its credentials, its database and every thread's history. | [Agents](low-level/agents.md#known-issues-and-suggested-improvements) | Workspace-only view and a credential broker ([plan 1.2](plans/02-workspace-and-provisioning.md), [1.4](plans/04-ingress-and-operations.md)). |
+| Inputs a plugin sends while its agent is starting or swapping settings are silently dropped. | [Core](low-level/core.md#known-issues-and-suggested-improvements), [plugins](low-level/plugins.md#known-issues-and-suggested-improvements) | Save inputs even while the runner is stopped ([phase 2](roadmap/phase-02-reliable-intake.md)). |
+| Every agent can read all its credentials, its database and every thread's history. | [Agents](low-level/agents.md#known-issues-and-suggested-improvements) | One container per agent and a secrets broker ([phase 9](roadmap/phase-09-docker-per-agent.md), [phase 10](roadmap/phase-10-secrets-broker.md)). |
 | One app secret or cookie gives full operator access; a server without a terminal can start with `admin / changeme`. | [API](low-level/api.md#known-issues-and-suggested-improvements) | Scoped tokens; refuse the default password. |
 | No duplicate protection anywhere (send, plugins, retries), and no maximum turn time. | [Core](low-level/core.md#known-issues-and-suggested-improvements), [API](low-level/api.md#known-issues-and-suggested-improvements) | Idempotency keys, source dedup, turn deadline. |
 | A failed agent doesn't recover when its settings are fixed; operator restarts use up retry attempts. | [Core](low-level/core.md#known-issues-and-suggested-improvements) | Restart failed agents on reload; don't count operator interruptions. |
-| More than one slot lets threads overwrite each other's files. | [Core](low-level/core.md#known-issues-and-suggested-improvements) | Keep one slot until the workspace gate lands. |
+| More than one slot lets threads overwrite each other's files. | [Core](low-level/core.md#known-issues-and-suggested-improvements) | Keep one slot; the planned runtime keeps one active turn per agent. |
 
 ## Deployment and trust
 
@@ -191,44 +191,41 @@ The server, plugins and Pi children all run on one **trusted host**. A Pi child 
 
 ## Planned architecture
 
-This is not implemented; the [roadmap](roadmap.md) tracks delivery. The local RPC launch path is replaced by one shared orchestration flow, small Process/Docker adapters, and a Pi SDK host running inside the execution environment.
+This is not implemented; the [roadmap](roadmap.md) tracks delivery, one file per phase in [roadmap/](roadmap/). The single server splits into a **coordinator** and one **agent unit** per agent. A unit is a process at first, then one container per agent, and later possibly a remote host or a short-lived sandbox.
 
 ```mermaid
 flowchart TB
-    Input[API and plugin listeners] --> Ingress[Durable ingress]
-    subgraph Control[Trusted harness]
-        Ingress --> Runner[Shared orchestration]
-        Runner --> Singleton[One sandbox per agent + session admission]
-        Runner --> Gate[Workspace writer gate]
-        Broker[Credential and operation broker]
-        Runner --> Events[Authorized event stream]
+    Outside[Telegram, webhooks, OAuth, console, API] --> Coord
+    subgraph Coord[Coordinator: trusted, runs no agent code]
+        Recv[Receivers and timers] --> Outbox[Per-agent outbox]
+        Relay[Agent-to-agent relay]
+        Secrets[Connections, grants and egress proxy]
+        Life[Unit lifecycle and console API]
     end
-    Singleton --> Provider[Process or Docker provider]
-    Provider --> Host[Pi SDK session host]
-    Gate -->|one executing turn| Host
-    Host --> Workspace[Persistent workspace]
-    Host --> Histories[Pi-owned JSONL on sessions mount]
-    Host --> Broker
-    Events --> UI[Web / product clients]
+    Outbox -->|one outbound WebSocket, unit token| Unit
+    subgraph Unit[Agent unit: one per agent]
+        Events[Events] --> Handlers[Agent-owned handlers] --> Queue[Message queue] --> Pi[Pi RPC child]
+    end
+    Unit -->|credentialed calls with placeholders| Secrets
+    Unit --> Storage[AgentStorage: assets, workspace, plugin-data, deps, sessions]
 ```
-
-Each agent gets **one sandbox and one workspace**. `maxConcurrentSlots` must be 1, so one turn runs at a time and other sessions wait in the durable queue. The writer gate covers file preparation, tools, plugin publication and cleanup. Pi writes history straight to the persistent sessions mount, with no transcript copies.
 
 | Decision | Why | Cost |
 |---|---|---|
-| Shared orchestration + provider adapters | The same queue/retry/delivery behavior on every runtime. | Needs provider conformance tests. |
-| Pi SDK owns live history | Keeps native history, compaction and entry IDs. | Needs SDK version fixtures. |
-| One sandbox + workspace per agent | Files are shared across conversations with no merging. | Tool-enabled turns run one at a time. |
-| Broker outside the sandbox | Credentials and privileged actions stay trusted. | Each integration needs a typed adapter. |
-| Stop writers before handoff | Detached tools can't race the next turn. | Cleanup errors go into visible recovery. |
-| Process provider labelled `[no sandbox]` | Honest about local execution. | No host isolation; Docker needs a protection profile. |
-| Read-only search over Pi files | Evidence links point at real entries. | No memory service or archive. |
+| One unit per agent; the coordinator only coordinates | A crash, busy loop or bad plugin in one agent can't hurt the others or the API. Units can later run anywhere. | A unit protocol, and console reads go through the unit. |
+| Every trigger enters through the coordinator and is turned into an event | Agents can sleep or restart without losing input, which keeps short-lived sandboxes possible. | An outbox plus an events table. |
+| Agents own their handlers | Routing, polling and scheduled work are agent scripts instead of fixed plugin code. | Scripts can fail; failed events are retried, then shown as dead letters. |
+| Read-only `assets/base/`, selection in `agent.json`, explanations in `assets.json` | Upgrades never overwrite agent changes, and the coding agent can see why each change exists. | Upgrades need a review step. |
+| Capabilities as the unit of packaging | Each agent gets only the prompts, skills and dependencies it needs. | The base prompt has to be split. |
+| Secrets stay in the coordinator; units get placeholders | Agent code and Pi can't read or leak credentials. | An egress proxy, and connector specs per integration. |
+| Pi RPC kept inside the unit | The receipts, steering and flags already work. | — |
+| Storage behind `AgentStorage` (local disk, then JuiceFS) | The same agent works as a process, a container or on another host, with checkpoints where supported. | A second backend to operate. |
 
-[Agent simplification](plans/10-agent-simplification.md) adds a read-only `base/`, a writable `agent-managed/`, Pi-owned `sessions/`, resource overrides, sub-agent delegation, durable ingress for scripts/cron/daemons, and vault access only through trusted adapters. The [runtime contracts](plans/runtime-contracts.ts) are type-checked references, not installed code. Proposed core cleanups are in the [core simplification review](low-level/core.md#simplification-review-proposed).
+Process units are labeled `[no sandbox]`. Real isolation starts with one container per agent ([phase 9](roadmap/phase-09-docker-per-agent.md)) and secrets leave the unit in [phase 10](roadmap/phase-10-secrets-broker.md). How today's core maps onto this is in the [core simplification review](low-level/core.md#simplification-review-proposed).
 
 ## Maintaining these docs
 
-Each concern has one owning layer document. When behavior changes, update that document (and its FAQ). When a planned feature lands, record the evidence in the roadmap instead of relabeling the plan. User-facing deployment instructions live in the shipped [app-home reference](../packages/harness/home-template/docs/base-harness/README.md).
+Each concern has one owning layer document. When behavior changes, update that document (and its FAQ). When a planned phase lands, record the evidence in the roadmap's status column and update the layer documents to describe the new behavior. User-facing deployment instructions live in the shipped [app-home reference](../packages/harness/home-template/docs/base-harness/README.md).
 
 ## FAQ
 
@@ -264,7 +261,7 @@ The list of what a backup must contain is in [core operations](low-level/core.md
 
 #### Is this a multi-tenant sandbox?
 
-No. Plugins run inside the server, and agent tools run on the host with the agent's credentials. Anyone with the console login or the app secret has full operator access. Run it on a host you trust, for people you trust. See [deployment and trust](#deployment-and-trust) and the [protection plan](plans/07-protection-and-cutover.md).
+No. Plugins run inside the server, and agent tools run on the host with the agent's credentials. Anyone with the console login or the app secret has full operator access. Run it on a host you trust, for people you trust. See [deployment and trust](#deployment-and-trust) and the planned [container boundary](roadmap/phase-09-docker-per-agent.md).
 
 ### Integrators
 
@@ -300,6 +297,6 @@ Yes. Each thread has its own history, and all threads share one agent folder. Wi
 
 There is no automated test suite. Run `pnpm check` for types and lint, then run the server with `pnpm dev` (and `pnpm dev:web` for the console) against a scratch data folder, and try the change by hand. Details are in the [core FAQ](low-level/core.md#how-do-i-run-and-debug-core-locally).
 
-#### Why does the roadmap say "Pi SDK" when these docs say "RPC"?
+#### Will Pi's RPC mode be replaced by the Pi SDK?
 
-Today's runner starts Pi as a separate process in RPC mode. The SDK host is the target described in [plan 1.1](plans/01-sdk-runtime.md). Until it lands, these docs describe RPC.
+No. The roadmap keeps `pi --mode rpc`. It moves into each agent's own process or container ([phase 6](roadmap/phase-06-agent-host-split.md)), where it already supports explicit prompts, skills and extensions, steering, abort and delivery receipts.

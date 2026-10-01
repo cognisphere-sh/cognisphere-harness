@@ -91,7 +91,7 @@ curl --cookie /tmp/cognisphere.cookies \
 | Masked credential merge | UI can round-trip secrets it cannot read. | Credentials are plaintext on disk; masking is display-only. |
 | Agent-relative file paths | Blocks ordinary lexical traversal. | No symlink resolution, writer serialization, or revision check. |
 
-Planned route families — runtime grants (`/runtime/v1/*`, [plan 1.4](../plans/04-ingress-and-operations.md)) and SSE (`/api/agents/:id/stream`, [plan 1.6](../plans/06-live-interface.md)) — do not exist today. The rest of this document is the authoritative current route reference.
+Planned route families — the unit connection and calls (`/units/v1/*`, [phase 6](../roadmap/phase-06-agent-host-split.md)), egress and connections ([phase 10](../roadmap/phase-10-secrets-broker.md)) and SSE ([phase 12](../roadmap/phase-12-live-console.md)) — do not exist today. The rest of this document is the authoritative current route reference.
 
 ---
 
@@ -455,7 +455,7 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | 2 | Risk | High | The app bearer secret and the console cookie both give full operator access; `X-App-User` isn't checked against anything. | A leaked app secret controls every agent, file and credential. | Scoped tokens (per agent, per action) and per-user authorization for product apps. |
 | 3 | Risk | High | Without a terminal, the first login attempt creates `admin / changeme`; passwords are stored in plain text. | A server started under systemd without running `server.sh secrets` is open to the default password. | Refuse to start (or refuse logins) while the default is in place, and store password hashes. |
 | 4 | Risk | Medium | GWS `start` accepts any `redirectUri` and `returnTo` from the caller. | Open-redirect after sign-in. | Allow-list origins and return paths. |
-| 5 | Risk | Medium | `/admin/:id/send` returns no event ID and has no idempotency key. | Clients can't track their message, and retries after a timeout create duplicates. | Return the event ID from the durable intake and accept an idempotency key ([plan 1.4](../plans/04-ingress-and-operations.md)). |
+| 5 | Risk | Medium | `/admin/:id/send` returns no event ID and has no idempotency key. | Clients can't track their message, and retries after a timeout create duplicates. | Return the event ID and accept an idempotency key (`sourceKey`, [phase 2](../roadmap/phase-02-reliable-intake.md)). |
 | 6 | Risk | Medium | File paths are checked lexically; symlinks aren't resolved. | A symlink inside the agent folder can expose files outside it. | Resolve real paths before the containment check. |
 | 7 | Risk | Medium | File writes and uploads overwrite with no revision check, and different upload names can map to the same file. | Operator edits and agent edits can silently overwrite each other. | Accept an expected hash on writes and avoid overwriting uploads (add a suffix). |
 | 8 | Risk | Low | Logout doesn't revoke the cookie; it stays valid for up to 7 days. | A copied cookie keeps working. | Keep a server-side session list or a revocation counter. |
@@ -490,7 +490,7 @@ Rows that were batched together share one entry. If no row shows up, check the a
 
 #### How often should I poll? Is there a stream or a callback when the answer is ready?
 
-There is no stream and no outbound callback. The console polls events every 2 s and the open session every 3 s; similar intervals are fine. Poll only while a row is `queued` or `in_flight`, and use `updatedFrom` to fetch only rows that changed. Live updates over SSE are planned in [plan 1.6](../plans/06-live-interface.md) and don't exist yet.
+There is no stream and no outbound callback. The console polls events every 2 s and the open session every 3 s; similar intervals are fine. Poll only while a row is `queued` or `in_flight`, and use `updatedFrom` to fetch only rows that changed. Live updates over SSE are planned in [phase 12](../roadmap/phase-12-live-console.md) and don't exist yet.
 
 #### How do I give each of my users their own conversation?
 
@@ -524,7 +524,7 @@ Abort reports whether a batch was running; "nothing to abort" is a valid answer.
 
 #### Can two writers clobber each other's file?
 
-Yes. `PUT fs/file` and uploads overwrite with no revision check or lock, and different upload names can clean up to the same file name. Use distinct names and folders. The planned fix is in [plan 1.2](../plans/02-workspace-and-provisioning.md).
+Yes. `PUT fs/file` and uploads overwrite with no revision check or lock, and different upload names can clean up to the same file name. Use distinct names and folders. No fix is planned yet; the roadmap keeps one active turn per agent, which doesn't cover console writes.
 
 #### How do external services send webhooks to an agent?
 
@@ -536,7 +536,7 @@ Your app exposes `/public/artifacts/<slug>` and `/private/artifacts/<slug>` and 
 
 #### Is the API versioned? Will an upgrade break my app?
 
-There is no version prefix and no compatibility promise; routes change with harness releases. Breaking changes are listed in each release's changelog, which your app home keeps in `docs/base-harness/CHANGELOG.md`. Pin the version in `harness/package.json` and read the changelog before upgrading. The planned `/runtime/v1/*` routes ([plan 1.4](../plans/04-ingress-and-operations.md)) don't exist yet.
+There is no version prefix and no compatibility promise; routes change with harness releases. Breaking changes are listed in each release's changelog, which your app home keeps in `docs/base-harness/CHANGELOG.md`. Pin the version in `harness/package.json` and read the changelog before upgrading. The planned `/units/v1/*` routes ([phase 6](../roadmap/phase-06-agent-host-split.md)) don't exist yet.
 
 ### Running the server
 

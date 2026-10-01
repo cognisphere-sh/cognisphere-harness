@@ -1,151 +1,118 @@
-# Core implementation roadmap
+# Roadmap
 
-This is the sole delivery/status tracker. The [high-level design](high-level-design.md) owns boundaries, current layer docs describe shipped behavior, and the [owning plans](#plan-ownership) hold detailed target contracts. Plan IDs are topic references; **M1–M15 below define implementation order**.
+This is the only delivery and status tracker. Each phase has its own file in [roadmap/](roadmap/) with the requirement in plain language, the design, open questions and "done when" checks. The [high-level design](high-level-design.md) and the layer documents in [low-level/](low-level/) describe what is built today. Update them when a phase lands, and record the evidence (the commit or PR, and what was verified) in the phase's **Status** cell below.
 
-**Current status:** all increments are planned and unchecked. The shipped runtime still uses local Pi RPC and filesystem session files. This change updates the design; it does not migrate running agents.
+**Current status:** every phase is planned. The phases are still under review, so expect them to change before implementation starts.
 
-## Delivery rules
+## What we are building
 
-Start with **agent directory reconfiguration**, agent-managed prompt/skill overrides and main/sub-agent configuration, including model selection. Then integrate those resources with the Pi SDK and prove local delegation before adding sandbox deployment and external integrations. Keep one shared runner with small Process/Docker adapters; do not add an intermediate remote Pi RPC implementation.
+1. **Clear agent files.** Shipped defaults are read-only. Everything the agent creates or changes lives in its own folders. A config file decides which prompts and skills the agent and each of its sub-agents get.
+2. **Small, composable agents.** The base prompt is split into a short core prompt plus **capabilities** (skills, scripts and their dependencies), so each agent gets only what it needs.
+3. **Sub-agents.** Specialist roles of one agent, each with its own model, prompts and skills, working on the same files.
+4. **One container per agent.** Each agent runs as a unit containing its queue, event handlers, Pi and capability code. The harness becomes a coordinator.
+5. **Agent-owned event handling.** The coordinator only says *something happened* (a timer, a Telegram update, a message). The agent's own scripts decide what it means and which thread it goes to.
+6. **Agents never hold real credentials.** The coordinator injects them on the way out.
+7. **Storage behind an interface.** Local disk first, JuiceFS next. Checkpoints and shared folders work wherever the backend supports them.
+8. **Later:** a live console, session search, agent self-review, remote hosts and short-lived sandboxes (e2b, Vercel).
 
-Use three durable content roots per agent: read-only `base/`, writable `agent-managed/`, and Pi-owned `sessions/`. Docker exposes them as `/assets`, `/workspace`, and `/sessions`. Pi creates, appends, compacts and resumes JSONL directly on the persistent mount. The harness stores only routing/run/task metadata and operation receipts; there is no session archive/copy/restore service, per-turn workspace snapshot or memory implementation.
+## Target architecture
 
-Keep one sandbox per agent and reuse `maxConcurrentSlots: 1`. Other sessions stay in the durable queue. Hold the writer gate from preparation through Pi/tool shutdown, descendant cleanup and trusted outcome recording. The same gate coordinates file publication and maintenance. Missing mounts, known-session file errors or uncertain old writers cause visible recovery; never silently start empty history or another sandbox.
-
-Apply [protection/migration checks](plans/07-protection-and-cutover.md) when each feature is enabled. Process development is explicitly `[no sandbox]`. A Docker release needs enforced mounts/network/resource boundaries and brokered credentials, but does not wait for every plugin, automation feature or SSE. Existing-agent migration additionally needs backup, continued-input accounting and verified rollback.
-
-Apply the [core simplification review](low-level/core.md#simplification-review-proposed) within these increments: M1/M2 share resource and model resolution across preview, startup and thread selection; M4 separates durable input acceptance and credential use from live runners; M10 removes the superseded paths after parity. Check API-key and OAuth-only model selection through the same resolver. Keep one queue/runner, a small lifecycle manager and small provider adapters; admission/storage interfaces do not require separate deployed services. Editable routing, cron and daemons add capabilities and remain later increments.
-
-## Delivery order
-
-Each increment has a demonstrable result and a completion gate. Dependencies are explicit; an extension does not depend on every earlier row. Attach implementation links, validation evidence and remaining limits beside its checkbox. Keep current/shipped docs factual until the code lands.
-
-```mermaid
-flowchart TB
-    M1[M1 Directories, overrides and role config] --> M2[M2 SDK and Pi-owned files]
-    M2 --> M3[M3 Local sub-agent delegation]
-    M2 --> M4[M4 Durable ingress and secret broker]
-    M4 --> M5[M5 Docker pilot]
-    M5 --> M6[M6 Telegram and first migration]
-    M5 --> M7[M7 Script workers and routing]
-    M7 --> M8[M8 Cron scripts and GWS]
-    M7 --> M9[M9 Editable daemons]
-    M6 --> M9
-    M6 --> M10[M10 Remaining migration]
-    M8 --> M10
-    M9 --> M10
-    M5 --> Warm[Independent idle and always-on modes]
-    M5 --> M11[M11 Image customization]
-    M5 --> M12[M12 Streaming console]
-    M2 --> M13[M13 Read-only session search]
-    M13 --> M14[M14 Review-only improvement]
-    M14 --> M15[M15 Approved application]
-    M11 --> M15
+```text
+Coordinator (always on, trusted, runs no agent code)
+  API + console · agent lifecycle · per-agent outbox · timers (agent-registered schedules)
+  receivers (Telegram webhook/poll, OAuth callbacks, public webhooks) · agent-to-agent relay
+  connections + secrets · egress proxy (phase 10)
+        ▲  one outbound WebSocket per unit, authenticated by the unit token
+        ▼
+Agent unit (process now → one container per agent → later remote or short-lived)
+  agent host: events → handlers → message queue → Pi (RPC child) → delivery receipts
+  /agent/assets/{base (read-only), prompts, skills, scripts, assets.json}
+  /agent/workspace  /agent/plugin-data/<id>  /agent/deps  /agent/sessions  /shared/<space>
+        ▼
+AgentStorage: local disk → JuiceFS (checkpoints, multiple hosts)
 ```
 
-## 1. Agent foundation and sandbox implementation
-
-| Increment | Depends on | Working result and acceptance gate | Owning plans |
-|---|---|---|---|
-| **M1. Agent directories, overrides and role configuration** | None | Scaffold `base/`, `agent-managed/`, `sessions/`; classify existing defaults/customizations without overwriting them. Resolve agent-managed-over-base prompts/whole skill bundles, ordered prompts and selected plugins/scripts. Configure main/sub-agent descriptions, catalogues and per-role models. Preview exact effective manifests and a migration dry run. Keep existing agents operational until M2 can use the layout. | [Directories](plans/02-workspace-and-provisioning.md), [resources/roles](plans/10-agent-simplification.md) |
-| **M2. Pi SDK with persistent session files** | M1 | One opt-in Process agent uses the resolved resources, shared cwd and Pi-owned session directory. Verify prompt/steer/abort, input-entry correlation, cwd override, settlement and restart/resume of the same files. Add singleton/slot/writer ownership and control-state reconciliation. Missing mounts/files fail visibly. No archive step or transcript rewriting. Process remains `[no sandbox]`. | [SDK](plans/01-sdk-runtime.md), [filesystem](plans/02-workspace-and-provisioning.md#pi-owned-sessions) |
-| **M3. Local sub-agent delegation** | M2 | Execute one narrow specialist with the M1 resources/model. Use durable parent/task/result records and the validated control channel; parent closes/releases its slot before child starts. Test restart, duplicate result, parent-only messaging, explicit/inherited model and no fallback on unsupported selections. Runs remain on the same agent workspace/runtime; no external integration or Docker dependency. | [Roles/models](plans/10-agent-simplification.md#3-main-agent-and-sub-agent-configuration), [SDK](plans/01-sdk-runtime.md) |
-| **M4. Durable ingress, vault and model broker** | M2 | Persist operator/API inputs while compute is stopped; expose basic queued/running/recovery status through REST/polling. Implement one encrypted secret provider, scoped grants and one brokered model-provider path. Keep upstream secrets outside protected guest execution; test revocation, forged grants, vault outage and errors. Reuse task/control metadata from M3 when enabled. | [Ingress/broker](plans/04-ingress-and-operations.md), [secrets](plans/10-agent-simplification.md#4-secret-vault-and-operation-broker) |
-| **M5. First usable Docker agent** | M4 | Run the same SDK host in a pinned read-only image with persistent agent-managed and sessions mounts. Start with operator input and explicit `per_turn` lifecycle. Verify actual isolation, container removal/restart with the same Pi files, cancellation, uncertain create/stop and filesystem failure. No second writer or empty-history fallback. | [Docker](plans/05-docker-runtime.md), [release checks](plans/07-protection-and-cutover.md) |
-| **M6. Telegram and first existing-agent migration** | M5 | Deliver receive while compute sleeps → durable input → agent turn → brokered reply/file operation with its own receipt. Keep a trusted upstream receiver; a shipped consumer can precede editable daemon support. Migrate one eligible existing agent with intact files, backup and rollback evidence. Unsupported integrations stay explicitly unavailable. | [Operations](plans/04-ingress-and-operations.md), [capabilities](plans/10-agent-simplification.md#2-small-core-prompt-and-capability-plugins), [migration](plans/07-protection-and-cutover.md) |
-| **M7. Isolated workers and script routing** | M5; M6 for Telegram route migration | Publish immutable script/config revisions and execute bounded one-shot workers with automation grants and authenticated IPC. Replace one source's static routing with validated, replay-safe delivery batches. Authorized edits activate automatically within policy; invalid updates preserve the working revision. No cron/daemon lifecycle required yet. | [Routing/workers](plans/10-agent-simplification.md#5-script-routing), [operations](plans/04-ingress-and-operations.md) |
-| **M8. Scheduled scripts and Gmail monitoring** | M7 | Add at/cron occurrence records, retry/misfire policy and scoped producer state. Add typed GWS operations; an agent-authored script filters mail and emits notifications. Preserve pending one-shots/cursors and stop the old GWS monitor before replacement. | [Scheduler](plans/10-agent-simplification.md#6-scheduler-daemons-and-editable-automation), [operations](plans/04-ingress-and-operations.md) |
-| **M9. Editable daemon lifecycle** | M6, M7 | Add worker leases, heartbeat, bounded stop, restart limits and safe reload. Move Telegram consumer/filter logic into a published daemon; keep its token-bearing transport adapter and durable inbox trusted. No overlapping consumer generations. | [Daemons](plans/10-agent-simplification.md#6-scheduler-daemons-and-editable-automation) |
-| **M10. Remaining integrations and migration completion** | M6, M8, M9; each retained feature's gate | Migrate messaging/artifacts and other enabled operations, then existing agents, one at a time. Verify selected provider/platform/lifecycle behavior. Retire obsolete RPC, static routing, seed overwrites, direct-secret CLIs and old monitors only after parity and file-preserving migration. Rollback is explicit; no automatic host/RPC fallback. | [SDK](plans/01-sdk-runtime.md), [operations](plans/04-ingress-and-operations.md), [migration](plans/07-protection-and-cutover.md) |
-
-- [ ] **M1:** Three-root layout, prompt/skill overrides and main/sub-agent resource/model manifests demonstrated.
-- [ ] **M2:** SDK execution and Pi-owned files survive restart; slot/gate/cleanup and missing-file recovery checks pass.
-- [ ] **M3:** Narrow sub-agent delegation, model selection and durable parent continuation demonstrated locally.
-- [ ] **M4:** Durable ingress, basic status and one vault/model-broker path verified.
-- [ ] **M5:** Fresh Docker pilot preserves mounted work/session files and passes its protection/recovery checks.
-- [ ] **M6:** Telegram round trip and one existing-agent migration/rollback verified.
-- [ ] **M7:** Isolated editable routing and revision publication/replay verified.
-- [ ] **M8:** Script scheduling/GWS monitoring preserve occurrences, cursors and delivery receipts.
-- [ ] **M9:** Editable daemons restart/reload without overlapping consumers.
-- [ ] **M10:** Supported existing agents/integrations migrated and obsolete paths removed.
-
-M3 and M4 can proceed independently after M2. M8 and M9 share the worker substrate but neither requires the other's whole implementation. Local directory/SDK/delegation work remains trusted development until the selected Docker protection profile is verified. M2/M3 can use explicit mock/test model runtimes before the M4 credential broker exists; they do not claim production secret isolation.
-
-## Capability extensions
-
-| Increment | Depends on | Working result and acceptance gate | Owning plans |
-|---|---|---|---|
-| **M5 extension. Idle and always-on** | M5 | Warm reuse and idle timers respect queued work, writer ownership, cleanup and recovery. No dependency on Gmail or editable daemons. | [Docker](plans/05-docker-runtime.md) |
-| **M11. Agent-managed installers and base publication** | M1, M4, M5 | Build exact agent-managed installer inputs in an isolated stage; protect base/runtime hashes and export only allowed dependency outputs. Publish authorized immutable base/image revisions through drain/stop/replace. Failed builds preserve the prior image and mounted data. | [Images](plans/10-agent-simplification.md#1-base-assets-workspace-and-images), [provisioning](plans/02-workspace-and-provisioning.md) |
-| **M12. Streaming console** | M4, M5 | Add authorized SSE/reconnect and source-entry reconciliation to working REST/polling. Execution state, external delivery and Pi session visibility remain distinct. Test audience boundaries, duplicate frames and cursor expiry. | [Live interface](plans/06-live-interface.md) |
-
-- [ ] **M5 warm lifecycle:** Idle/always-on pass lifecycle and recovery tests independently.
-- [ ] **M11:** Agent-managed image customization and authorized base publication verified.
-- [ ] **M12:** Streaming/reconnect and UI reconciliation verified.
-
-## 2. Session search
-
-**M13. Read-only session search.** Depends on M2 and authorized file access. Search existing Pi JSONL and link to original entries; an optional disposable text index may follow if needed. This feature does not copy transcripts into an archive, affect Pi resume, inject recall or implement memory. It does not block the directory/runtime/sandbox rollout. [Owning plan](plans/08-session-search.md).
-
-- [ ] **M13:** Scoped search, source links, bounded reads and changed/deleted/partially appended file handling pass without any JSONL writes.
-
-## 3. Agent improvement
-
-**M14. Review-only reports.** Depends on M13; manual review runs can ship first and scheduling uses M8 when available. Produce evidence-linked reports and exact proposed diffs without changing active assets. Source references point to existing Pi files/entries, with missing or changed evidence shown explicitly. [Owning plan](plans/09-agent-improvement.md).
-
-- [ ] **M14:** Useful scoped reports and draft diffs are produced without active-resource changes.
-
-**M15. Approved application.** Depends on M14 plus M11's validated publication workflow and applicable migration checks. Publish only an approved exact diff/base, record outcomes and retain a release rollback target. Workspace edits use expected-content checks; no per-turn workspace snapshot service is introduced.
-
-- [ ] **M15:** Approved application rejects stale proposals and failed builds; exclusive release rollback preserves mounted files and trusted input/operation outcomes.
-
-## Plan ownership
-
-| Owning plan | Delivery |
+| Term | Meaning |
 |---|---|
-| [1.2 Agent directories/filesystem](plans/02-workspace-and-provisioning.md) | M1 first; M2/M5 direct Pi filesystem integration; M11 provisioning |
-| [1.8 Resources, roles and automation](plans/10-agent-simplification.md) | M1 resources/config, M3 delegation, M4 secrets, M6–M9 plugins/automation, M11 images |
-| [1.1 SDK runtime](plans/01-sdk-runtime.md) | M2, M3, M5, M10 |
-| [1.4 Ingress/operations](plans/04-ingress-and-operations.md) | M4 and each enabled integration/worker |
-| [1.5 Docker](plans/05-docker-runtime.md) | M5 pilot/warm extension, M10 migration, M11 image updates |
-| [1.6 Live interface](plans/06-live-interface.md) | M4 polling status, M12 SSE |
-| [1.7 Protection/migration](plans/07-protection-and-cutover.md) | Applicable checks at every activation; existing-data migration starts M6 |
-| [2 Read-only search](plans/08-session-search.md) | M13 |
-| [3 Improvement](plans/09-agent-improvement.md) | M14 review, M15 approved application |
+| **Coordinator** | Today's harness server, made smaller. It never runs agent code or agent-written scripts. |
+| **Agent unit** | One agent's runtime: the agent host process and the Pi it starts. A process in phases 6–8, and a container from phase 9. |
+| **Unit token** | The credential a unit uses to prove "I am agent X" to the coordinator. Scoped to one agent and expires when the unit stops. |
+| **Event** | A raw trigger delivered to a unit, such as `timer`, `telegram.update` or `message`. Stored in the unit's **events** table until a handler processes it. |
+| **Message queue** | Today's per-thread queue. Thread messages that Pi processes with batching, steering, retries and receipts. |
+| **Handler** | A builtin, or an agent-owned script, that turns an event into zero or more queue messages. |
+| **Capability** | A bundle of prompts, skills (with their scripts), dependencies and default handlers. Its dependencies go into the agent's single Python and Node environment. A plugin is a capability plus a coordinator part. |
+| **Definition / state** | Definition is `agent.json`, owned by the operator, and is copied when an agent is cloned. State is `assets/`, `workspace/`, `plugin-data/`, `deps/` and `sessions/`, which are created during the agent's life and can be checkpointed. |
 
-The session-archive plan is removed. Archive adapters, JSONL capture/restore pipelines, raw-history database backfill, memory providers, memory extraction and automatic recall are not implementation tasks. Pi's direct mounted filesystem is the session persistence contract. Script publication snapshots and integration cursor checkpoints are separate, still-required operations; they do not snapshot sessions or the workspace each turn.
+## Decisions so far
 
-## Layer ownership
-
-| Current layer design | Responsibility |
+| Topic | Decision |
 |---|---|
-| [Agents](low-level/agents.md) | Layout, ordered resource/model configuration, overrides and role context. |
-| [Core](low-level/core.md) | Queue/run/task metadata, singleton/gate, SDK lifecycle, provider/worker supervision. |
-| [Plugins](low-level/plugins.md) | Capability bundles, ingress, staging, broker adapters and producer state. |
-| [API](low-level/api.md) | Authorized input/operations, read-only session inspection, status/config/publication. |
-| [CLI](low-level/cli.md) | Scaffolding/preview first, then provisioning, migration and release tools. |
-| [Web](low-level/web.md) | Configuration/preview and accurate polling first; streaming/search as their APIs ship. |
+| Sandbox boundary | One container per agent, running its capability code and Pi. The coordinator only coordinates. Short-lived sandboxes stay possible later, because every trigger already comes from the coordinator. |
+| Agent files | One `assets/` folder for reading and editing. `assets/base/` is read-only. Agent files use new names (no shadowing). `agent.json` selects and orders prompts and skills for the main role and each sub-agent. `assets.json` records what each agent-made asset is for, why it exists, and which base file it replaces. Changes require `allowAssetChanges` and go through the harness, which may only change selection fields. |
+| Upgrades of changed assets | Handled by the coding agent using `assets.json` and base diffs. No automatic merge. |
+| Package installs | pip, npm and similar go into persistent `deps/`. No root by default. `sandbox.root: true` gives a container root so apt works during a session. |
+| Queue location | Inside the agent unit. The coordinator keeps only an outbox of events the unit hasn't acknowledged yet. |
+| Event model | coordinator outbox → unit **events** → handler → **message queue**. Handlers are agent-owned and configured in assets. |
+| Polling (Gmail etc.) | A capability ships instructions plus a default polling script. The agent registers when to run it. |
+| Replies after a forward | Relayed through the agent that owns the channel. |
+| Storage | An `AgentStorage` interface. Local disk first, JuiceFS next. Checkpoints only where the backend supports them, and never including the message queue. |
+| Extending agents | **Pi extensions first.** Agent-side features such as memory, a skill selector, context trimming and notes enforcement are built as Pi extensions packaged in capabilities. The runner, queue or coordinator change only when an extension can't reach what the feature needs. |
+| Auth backend (Composio, Nango, built-in) | **Deferred.** Phase 10 defines the broker interface. The backend is chosen later. |
 
-Update current layer docs and the shipped app-home reference when behavior actually lands. Record evidence only here; keep algorithms in their owning plans.
+## Phases
 
-## FAQ
+Each phase depends only on earlier phases and leaves the system working.
 
-### What do we implement first?
+| # | Phase | Delivers | Status |
+|---|---|---|---|
+| 0 | [Pi 0.99 upgrade](roadmap/phase-00-pi-upgrade.md) | Move from Pi 0.84.4 to 0.99.x, re-verify our extensions, receipts and model sign-ins, and pick up the fixes and features since. | Planned |
+| 1 | [Test harness](roadmap/phase-01-test-harness.md) | Automated tests for the queue and runner, using a fake Pi process. | Planned |
+| 2 | [Reliable intake](roadmap/phase-02-reliable-intake.md) | No lost messages while an agent is stopped. Duplicates ignored. Thread IDs validated. | Planned |
+| 3 | [Agent layout and assets](roadmap/phase-03-agent-layout-and-assets.md) | State folders, a read-only base, prompt and skill selection in `agent.json`, `assets.json` explanations, and migration of existing agents. | Planned |
+| 4 | [Core prompt and capabilities](roadmap/phase-04-core-prompt-and-capabilities.md) | The base prompt split into core plus capabilities. `agent.json` selects capabilities and Pi tools. | Planned |
+| 5 | [Sub-agents](roadmap/phase-05-subagents.md) | Roles with their own model and assets. Delegation through task threads, with results returned to the parent. | Planned |
+| 6 | [Agent host split](roadmap/phase-06-agent-host-split.md) | One process per agent, the coordinator/unit protocol, and plugins split into a coordinator part and a capability. | Planned |
+| 7 | [Events and handlers](roadmap/phase-07-events-and-handlers.md) | The events table, agent-owned handlers, scheduled scripts, routing scripts, Telegram and Gmail as events. | Planned |
+| 8 | [Storage interface](roadmap/phase-08-storage-interface.md) | `AgentStorage` on local disk, cloning an agent without its state, and shared folders. | Planned |
+| 9 | [Docker per agent](roadmap/phase-09-docker-per-agent.md) | Layered images, one container per agent, a root flag, and persistent `deps/`. | Planned |
+| 10 | [Secrets broker](roadmap/phase-10-secrets-broker.md) | Connections and grants in the coordinator, placeholder secrets, an egress proxy and a model proxy. | Planned |
+| 11 | [JuiceFS and checkpoints](roadmap/phase-11-juicefs-and-checkpoints.md) | A multi-host storage backend, checkpoint config, and restore. | Planned |
+| 12 | [Live console](roadmap/phase-12-live-console.md) | Replies stream into the console (SSE). | Planned |
+| 13 | [Session search](roadmap/phase-13-session-search.md) | Operators and agents search past conversations. | Planned |
+| 14 | [Agent self-review](roadmap/phase-14-agent-self-review.md) | Scheduled improvement reports. Changes go through assets and `assets.json`. | Planned |
+| 15 | [Other runtimes](roadmap/phase-15-other-runtimes.md) *(future)* | Units on remote hosts and short-lived sandboxes. | Planned |
 
-M1: directories, ownership, prompt/skill overrides and main/sub-agent configuration/models. Its concrete output is a scaffolded agent plus effective resource manifests and a migration preview. M2 then runs that structure through Pi SDK; M3 proves delegation locally. Docker comes after the model/credential boundary.
+```mermaid
+flowchart LR
+    P0[0 Pi upgrade] --> P1[1 Tests] --> P2[2 Intake] --> P3[3 Layout + assets] --> P4[4 Capabilities] --> P5[5 Sub-agents]
+    P5 --> P6[6 Agent host split] --> P7[7 Events] --> P8[8 Storage] --> P9[9 Docker] --> P10[10 Secrets]
+    P10 --> P11[11 JuiceFS + checkpoints] --> P12[12 Console] --> P13[13 Search] --> P14[14 Self-review] --> P15[15 Other runtimes]
+```
 
-### Who manages sessions and memory?
+Phases 12–14 barely depend on each other or on phases 9–11, so they can move earlier if needed.
 
-Pi manages its own JSONL in persistent `sessions/`. The harness passes the path/reference and tracks routing/execution metadata. No separate memory implementation is planned; agent-created notes are ordinary files in `agent-managed/`.
+## Dropped or deferred from the previous plans
 
-### Do we still need both concurrency settings?
+| Old idea | v2 decision |
+|---|---|
+| `base/releases/<rev>/` + `agent-managed/` + namespaced IDs + `resources.json` | `assets/` with a read-only `base/`, plus explicit path lists in `agent.json` |
+| Shadowing overrides with the same ID | Dropped. Agent files get new names, and the config swaps the path. |
+| `AgentSandboxManager`, sandbox store, fences, generations, writer gate | Dropped. One unit per agent, one active turn per unit, and a fixed container name. |
+| Custom SDK host protocol | Dropped. The agent host runs `pi --mode rpc` as a local child, as today ([evaluation](roadmap/phase-06-agent-host-split.md#rpc-vs-sdk)). |
+| OpenBao, KMS or envelope encryption | Deferred. Secrets stay in the coordinator and are never mounted into units. |
+| Immutable script publication, `AutomationPrincipal` | Dropped. Handler scripts run inside the agent's own unit with its own authority. |
+| Editable daemons | Dropped. Long-running receivers are coordinator code. Agent logic runs as handlers. |
+| Durable SSE event log | Simplified to in-memory streaming. Reconnecting refetches over REST. |
+| Search index | Deferred until scanning is measurably too slow. |
+| Per-turn "no snapshots" rule | Reversed. Checkpoints are configurable where storage supports them. |
+| Approved-application pipeline for self-review | Dropped. Changes go through assets, the log and git. |
 
-No. Keep existing `maxConcurrentSlots`, validated as 1 for the shared-workspace profile. There is no `maxSessionsPerSandbox` pool. Other sessions queue and later reuse the same sandbox; history count is not limited by the execution setting.
+## Future plans (not scheduled)
 
-### What is the first useful sandbox release?
+Ideas that wait on outside work live in [future/](future/). They become phases here when they are picked up.
 
-M5: a fresh operator-driven Docker agent with persistent files, Pi-owned sessions and brokered model access. M6 adds Telegram and migration of one eligible existing agent. Neither requires streaming, search, every plugin or editable image builds.
+- [Pi-native agent runtime](future/pi-native-runtime.md): use Pi's experimental `pi-durable`, `pi-protocol`/`pi-server` and `chord` directly, once they're stable. [Pi modules](pi-modules.md) explains each package.
 
-### What happens to existing data?
+## Open questions for the whole roadmap
 
-Keep current files intact until the new path can read them. Drain the old runtime, use an operator backup, classify base/custom files, preserve Pi session bytes/references, then validate the new mounts and Pi resume. Never fabricate empty replacement history or run both generations against the same files.
+1. Which Docker platform comes first: Linux, macOS Docker Desktop, or both?

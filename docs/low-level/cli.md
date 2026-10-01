@@ -239,7 +239,7 @@ Scaffolding is a series of file writes, not a transaction. After a failure, look
 
 ## Planned changes
 
-Approved runtime provisioning and migration are covered by [plan 1.2](../plans/02-workspace-and-provisioning.md) and [plan 1.7](../plans/07-protection-and-cutover.md). The Process/Docker layout and SDK host are in the [SDK runtime plan](../plans/01-sdk-runtime.md). No sandbox CLI flags exist today.
+Layout migration (`agent migrate-layout`) and the `assets` CLI are planned in [phase 3](../roadmap/phase-03-agent-layout-and-assets.md), the `agent-host` entrypoint in [phase 6](../roadmap/phase-06-agent-host-split.md), `agent clone` in [phase 8](../roadmap/phase-08-storage-interface.md), and `image build` in [phase 9](../roadmap/phase-09-docker-per-agent.md). No sandbox CLI flags exist today.
 
 ## Known issues and suggested improvements
 

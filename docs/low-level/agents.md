@@ -96,7 +96,7 @@ flowchart TB
       <thread>/.system-prompt.md      the last system prompt built for this thread
 ```
 
-Pi runs with the **whole agent folder** as its working folder, not just `workspace/`. That makes everything reachable by a relative path: `knowledge/`, plugin inboxes and scripts, but also `sessions/`, the database and `.vertex-sa.json`. None of this layout is a security boundary. A workspace-only view with separate control storage is [plan 1.2](../plans/02-workspace-and-provisioning.md).
+Pi runs with the **whole agent folder** as its working folder, not just `workspace/`. That makes everything reachable by a relative path: `knowledge/`, plugin inboxes and scripts, but also `sessions/`, the database and `.vertex-sa.json`. None of this layout is a security boundary. Separating assets, state and the message queue is [phase 3](../roadmap/phase-03-agent-layout-and-assets.md), and the container boundary is [phase 9](../roadmap/phase-09-docker-per-agent.md).
 
 | Who writes | What |
 |---|---|
@@ -137,7 +137,7 @@ The console and API only *read* history files. Pi is the only thing that writes 
 | `configSchema` and `config` | Non-secret settings given to Pi as environment variables (`REPLY_STYLE` above). **Set both or neither.** Values must be strings. |
 | `secretsSchema` | The agent's own secret fields. Only *required* ones stop it from starting. |
 
-Only some fields are validated. The `sandbox` fields in roadmap examples don't exist yet. When each change takes effect is covered in [core configuration](core.md#configuration).
+Only some fields are validated. The `sandbox`, `capabilities`, `prompts`, `skills` and `subagents` fields in roadmap examples don't exist yet. When each change takes effect is covered in [core configuration](core.md#configuration).
 
 ### Where credentials live
 
@@ -187,7 +187,7 @@ Each thread has its own history file, but both use the same folder.
 
 1. Chat 42 asks for a report. Pi runs with `telegram:42`'s history, reads the Telegram prompt and skill, and writes `workspace/report.md`.
 2. Later, the operator asks `review` to improve it. That conversation knows nothing about chat 42, but the file is right there.
-3. With `maxConcurrentSlots` above 1, both could run at once and overwrite each other's edits. The planned workspace gate lets only one turn change files at a time, and makes each turn re-read files before editing.
+3. With `maxConcurrentSlots` above 1, both could run at once and overwrite each other's edits. The planned runtime keeps one active turn per agent ([phase 6](../roadmap/phase-06-agent-host-split.md)), so only one turn changes files at a time.
 
 ## Design choices
 
@@ -200,9 +200,10 @@ Each thread has its own history file, but both use the same folder.
 
 Planned:
 
-- [plan 1.2](../plans/02-workspace-and-provisioning.md): approved read-only assets and the workspace gate;
-- [plan 2](../plans/08-session-search.md): read-only history search;
-- [plan 3](../plans/09-agent-improvement.md): reviewable self-improvements.
+- [phase 3](../roadmap/phase-03-agent-layout-and-assets.md): a read-only `assets/base/`, agent-made assets selected in `agent.json` and explained in `assets.json`;
+- [phase 4](../roadmap/phase-04-core-prompt-and-capabilities.md): the base prompt split into a core prompt plus selectable capabilities, and per-agent Pi tools;
+- [phase 13](../roadmap/phase-13-session-search.md): read-only history search;
+- [phase 14](../roadmap/phase-14-agent-self-review.md): reviewable self-improvements.
 
 None of these stops today's agent from editing its own files.
 
@@ -213,10 +214,10 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | # | Type | Severity | Problem | Why it matters | Suggested change |
 |---|---|---|---|---|---|
 | 1 | Bug | Medium | `0-base_prompt.md` contains `{{Timezone}}`, but nothing replaces it: `scaffoldAgent` doesn't, although a comment in `runner.ts` says variables are baked in at creation. | Every agent sees the literal text `{{Timezone}}` in its system prompt. | Substitute the variables when scaffolding (or at prompt assembly), and fix the comment. |
-| 2 | Risk | High | Pi's working folder is the whole agent folder, and it gets every secret as an environment variable. | The agent's own tools can read `sessions/.events.db`, other threads' histories, `.vertex-sa.json` and all credentials. | Workspace-only view and a credential broker ([plan 1.2](../plans/02-workspace-and-provisioning.md), [plan 1.4](../plans/04-ingress-and-operations.md)). |
+| 2 | Risk | High | Pi's working folder is the whole agent folder, and it gets every secret as an environment variable. | The agent's own tools can read `sessions/.events.db`, other threads' histories, `.vertex-sa.json` and all credentials. | One container per agent and a secrets broker ([phase 9](../roadmap/phase-09-docker-per-agent.md), [phase 10](../roadmap/phase-10-secrets-broker.md)). |
 | 3 | Risk | Medium | Bootstrap failures are logged and ignored. | The agent shows `running` while a tool it relies on is missing. | Record bootstrap failure on the agent (a warning state or error shown in the console). |
 | 4 | Risk | Medium | Removing a plugin folder leaves its seeded prompt, scripts and skills in the agent. | The agent keeps following instructions for a plugin that is gone. | Track and remove seeded files (see [plugins](plugins.md#known-issues-and-suggested-improvements)). |
-| 5 | Risk | Low | There's no way to restrict tools per agent. | Every agent can run shell commands. | A per-agent tool policy, enforced by the runtime ([protection profiles](../plans/07-protection-and-cutover.md)). |
+| 5 | Risk | Low | There's no way to restrict tools per agent. | Every agent can run shell commands. | Per-agent and per-sub-agent `tools` in `agent.json` ([phase 4](../roadmap/phase-04-core-prompt-and-capabilities.md)). |
 | 6 | Risk | Low | `agent.json` has no full schema; only some fields are validated, and `config`/`configSchema` must be set together with string values. | Typos in unchecked fields are silently ignored; the together-rule surprises people. | Validate the whole file against one schema and give specific error messages. |
 | 7 | Cleanup | Low | The "next steps" printed by `agent new` say `plugin add <id>` "adds a catalog plugin". | It only copies plugin code; it doesn't turn the plugin on for the agent. | Change the hint to explain creating `plugins/<id>/config.json`. |
 | 8 | Cleanup | Low | `bootstrap.sh` ends by telling you to restart the server; restarting the agent is enough, because `.venv` is picked up on every Pi start. | Unnecessary server restarts. | Change the message. |
@@ -260,7 +261,7 @@ Saving only reloads agents that are running. Press **Start**.
 
 #### How does the agent remember things?
 
-Only through files. The base prompt tells it to keep notes in `workspace/threads/<thread>/notes.md`, facts in `knowledge/memory.md`, and reference documents in `knowledge/files/`. The harness doesn't check or index these files. Each thread sees only its own history, but all threads share the files. Searching past history is [planned](../plans/08-session-search.md).
+Only through files. The base prompt tells it to keep notes in `workspace/threads/<thread>/notes.md`, facts in `knowledge/memory.md`, and reference documents in `knowledge/files/`. The harness doesn't check or index these files. Each thread sees only its own history, but all threads share the files. Searching past history is planned in [phase 13](../roadmap/phase-13-session-search.md).
 
 #### Will upgrading the harness overwrite my agents?
 
@@ -296,7 +297,7 @@ Core reads every `.md` file directly in `system_prompts/`, sorted by file name: 
 
 #### How do I give an agent a new tool? Can I turn off `bash`?
 
-The seven built-in tools are fixed; there's no setting to add or remove one. Prompt rules and bash-guard don't restrict access either ([issue 5](#known-issues-and-suggested-improvements), [protection profiles](../plans/07-protection-and-cutover.md)). To add an ability, put an executable in `scripts/agent/` and describe it in a skill. If it needs an outside service or background listening, write a [plugin](plugins.md) instead.
+The seven built-in tools are fixed; there's no setting to add or remove one. Prompt rules and bash-guard don't restrict access either ([issue 5](#known-issues-and-suggested-improvements); per-agent tools are planned in [phase 4](../roadmap/phase-04-core-prompt-and-capabilities.md)). To add an ability, put an executable in `scripts/agent/` and describe it in a skill. If it needs an outside service or background listening, write a [plugin](plugins.md) instead.
 
 #### How do I add Python packages or system programs?
 
