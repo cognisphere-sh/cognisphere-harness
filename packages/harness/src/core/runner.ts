@@ -797,6 +797,9 @@ export class AgentRunner extends EventEmitter {
       "--no-prompt-templates",
       "--no-themes",
       "--no-context-files",
+      // Never load an agent folder's `.pi/` settings, extensions or prompts,
+      // whatever project-trust decisions exist.
+      "--no-approve",
     ];
 
     // Skills: pi's --skill loader (`loadSkillsFromDir`) recurses into

@@ -337,7 +337,7 @@ Auth required. Reads/writes `<harnessRoot>/.secrets/models.json`. The provider c
 
 ### 7.1 OAuth subscription login — `/api/models/oauth/*`
 
-Sign-in for subscription providers (Anthropic Claude Pro/Max, OpenAI Codex). The server drives pi-ai's OAuth flow through pi-coding-agent's `ModelRuntime`; tokens go to Pi's `<piAgentDir>/auth.json` (default `~/.pi/agent/auth.json`), never `models.json`. `login` and `DELETE` require a catalog entry with `oauth: true` (else 404); `input`, `status` and `cancel` don't check. One pending flow per provider, held in memory.
+Sign-in for subscription providers (Anthropic Claude Pro/Max, Sign in with ChatGPT on OpenAI, OpenAI Codex). The server drives pi-ai's OAuth flow through pi-coding-agent's `ModelRuntime`; tokens go to Pi's `auth.json` in this harness's `.secrets/pi/` (`PI_CODING_AGENT_DIR`), never `models.json`. `login` and `DELETE` require a catalog entry with `oauth: true` (else 404); `input`, `status` and `cancel` don't check. One pending flow per provider, held in memory.
 
 | Method | Path | Body | Response | Errors |
 |---|---|---|---|---|

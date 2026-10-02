@@ -4,7 +4,7 @@
  *
  * Reuses pi-coding-agent's `ModelRuntime` — the exact machinery behind
  * pi's `/login` command. Tokens persist to pi's own
- * `<agentDir>/auth.json` (default `~/.pi/agent/auth.json`, 0600,
+ * `<agentDir>/auth.json` (this harness's `.secrets/pi/auth.json`, 0600,
  * file-locked), NOT to the harness's models.json. Rationale:
  *   - refresh tokens rotate on every refresh; spawned pi children
  *     already refresh + persist under a file lock, so the harness must
@@ -96,7 +96,7 @@ export class OAuthLoginManager {
 
   /**
    * Shared pi model runtime, created on first use. Owns login/logout
-   * orchestration; credentials go to pi's default auth.json.
+   * orchestration; credentials go to the harness's pi auth.json.
    */
   private runtime(): Promise<ModelRuntime> {
     this.runtimePromise ??= ModelRuntime.create();

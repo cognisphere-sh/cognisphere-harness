@@ -67,6 +67,12 @@ export function secretsRoot(cfg: ServerConfig): string {
   return join(harnessRoot(cfg), ".secrets");
 }
 
+/** Pi's config folder for this harness (`PI_CODING_AGENT_DIR`). Under
+ *  `.secrets/` because its `auth.json` holds sign-in tokens. */
+export function piAgentDir(cfg: ServerConfig): string {
+  return join(secretsRoot(cfg), "pi");
+}
+
 /** Path of the harness-wide settings file (currently just `{ timezone }`). */
 export function harnessJsonFile(cfg: ServerConfig): string {
   return join(harnessRoot(cfg), "harness.json");

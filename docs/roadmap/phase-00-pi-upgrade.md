@@ -54,6 +54,8 @@ Checked against the Pi source at v0.99.2 plus the unreleased commits after it.
 | Input dispositions (`core/rpc.ts`, `core/runner.ts`) | Prompt reply checked only for `success`; steer reply ignored | Read `disposition` on both. `handled` rows are marked done without a receipt. |
 | `core/oauth-logins.ts`, `core/models-catalog.ts` | Codex sign-in only; stale shortlists | Sign in with ChatGPT on `openai`, Codex labelled "(legacy)", and shortlists refreshed to IDs that exist in 0.99.2 |
 | `CLAUDE.md` §7 "Pi version" | Pin in two places | Pin in one place (`package.json`) |
+| Pi's config folder (`core/main.ts`, `core/config.ts`) | The run user's global `~/.pi/agent`, shared with other harnesses and the operator's own `pi`. A harness sync deleted hand-written overrides there during this phase's testing. | `harness/.secrets/pi/` per harness (`PI_CODING_AGENT_DIR`). Sign-ins are connected again once (not copied: shared rotating refresh tokens sign each other out). |
+| Project trust (`core/runner.ts`) | An agent folder's `.pi/` settings, extensions and prompts load if Pi trusts it | `--no-approve` on every spawn: never loaded |
 
 ### Batch completion
 

@@ -145,7 +145,7 @@ Only some fields are validated. The `sandbox`, `capabilities`, `prompts`, `skill
 |---|---|
 | `.secrets/secrets.json` | `agent → bucket → key: value`. The bucket `agent` holds the agent's own secrets; every other bucket is named after a plugin. Top-level keys (at the agent-ID level) starting with `_` are notes and are ignored; a `_KEY` inside a bucket is still passed to Pi. The same key in two buckets of one agent makes the agent fail to start. |
 | `.secrets/models.json` | Provider keys, enabled models, context and output size overrides (also copied into Pi's config). Providers the harness doesn't know are left to Pi's own setup. |
-| Pi's `auth.json` (usually in `~/.pi/agent/`) | Subscription sign-in tokens for model providers. Pi owns this file. |
+| `.secrets/pi/` | Pi's own config folder for this harness (`PI_CODING_AGENT_DIR`): `auth.json` (subscription sign-in tokens, owned by Pi), `models.json` (overrides copied from the Models page), `settings.json`. Not shared with other harnesses or the operator's own `pi`. |
 | `.secrets/gws/` | The Google Workspace client and each agent's Google credentials. |
 
 ### What the Pi process can see

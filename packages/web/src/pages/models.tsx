@@ -95,7 +95,7 @@ export function ModelsPage() {
                   Provider credentials are stored unencrypted at{" "}
                   <code>{data.path}</code>. v1 will encrypt at rest. OAuth
                   subscription tokens are stored separately in pi&apos;s own{" "}
-                  <code>~/.pi/agent/auth.json</code>.
+                  <code>.secrets/pi/auth.json</code>, one per harness.
                 </CardDescription>
               </CardHeader>
             </Card>

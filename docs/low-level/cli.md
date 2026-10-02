@@ -253,9 +253,8 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | 4 | Risk | Low | Renaming a deployment leaves old systemd units and nginx config behind. | Two sets of services, or port clashes. | Add a `server.sh retire` step that removes the old name's units and config. |
 | 5 | Risk | Low | Upgrading relies on the operator to migrate and then stamp `--set-version`. | Easy to stamp without migrating, or to forget stamping. | Have `upgrade` check that the migration steps it lists were completed before allowing the stamp. |
 | 6 | Risk | High | `setup-server.sh` doesn't raise nginx's `client_max_body_size`, so nginx's 1 MB default applies. | Console uploads larger than 1 MB fail with 413 on a deployed server (they work locally). | Set `client_max_body_size` in the generated nginx config (and make it a `config` value). |
-| 7 | Risk | High | The shipped backup doesn't include Pi's sign-in tokens (`~/.pi/agent`), and there is no restore command: you unzip and rename each `*.db.snap` back to `*.db`. | A restore silently loses subscription logins, and the manual steps are easy to get wrong. | Include `~/.pi/agent` (or `PI_CODING_AGENT_DIR`) in backups and add a `server.sh restore` command. |
+| 7 | Risk | High | There is no restore command: you unzip and rename each `*.db.snap` back to `*.db`. | The manual steps are easy to get wrong. | Add a `server.sh restore` command. |
 | 8 | Risk | Medium | Every `start`, `restart` and `secrets` rewrites `users.json` from `config`, keeping one user. | Users or passwords changed any other way are lost on the next restart. | Only write `users.json` when it's missing or `config` changed, or document `config` as the only place to manage logins. |
-| 9 | Risk | Medium | Deployments that run as the same OS user share `~/.pi/agent`. | They share subscription logins and overwrite each other's model overrides. | Set `PI_CODING_AGENT_DIR` per deployment in the systemd unit. |
 
 ## FAQ
 
@@ -303,7 +302,7 @@ Set `BACKUP_S3_BUCKET` (plus the endpoint and keys for non-AWS storage) in `conf
 2. Rename each `*.db.snap` back to `*.db`.
 3. Run `./scripts/build.sh`, then `sudo ./scripts/server.sh restart`.
 
-Pi's subscription sign-ins live in the run user's `~/.pi/agent`, which isn't backed up; sign in again or copy that folder. Without an S3 bucket there are no automatic backups ([what a backup must include](core.md#server-configuration-and-operations)).
+Pi's subscription sign-ins live in the app home's `harness/.secrets/pi/`, so they are part of the backup. Without an S3 bucket there are no automatic backups ([what a backup must include](core.md#server-configuration-and-operations)).
 
 #### How do I upgrade?
 
@@ -325,7 +324,7 @@ To uninstall completely, also delete the certificate with `certbot delete` and d
 
 #### Can I run several deployments on one machine?
 
-Yes. Give each one its own `APP_NAME`, `HARNESS_PORT`, `APP_PORT` and domains; each gets its own services, nginx site and backup job. Deployments running as the same OS user share `~/.pi/agent`, so they share subscription sign-ins and overwrite each other's model overrides. Use a different `RUN_USER` for each deployment to keep them apart. Locally, give each `cognisphere serve` its own `--port`.
+Yes. Give each one its own `APP_NAME`, `HARNESS_PORT`, `APP_PORT` and domains; each gets its own services, nginx site and backup job. Each harness keeps its own Pi config and sign-ins in `harness/.secrets/pi/`, so deployments under the same OS user don't share them. Locally, give each `cognisphere serve` its own `--port`.
 
 #### Which environment variables can I set?
 

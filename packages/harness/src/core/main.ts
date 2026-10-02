@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +23,7 @@ import { modelsRouter } from "../api/models.js";
 import { secretsRouter } from "../api/secrets.js";
 import { maybeHandleWebhook } from "../api/webhook.js";
 import { AgentManager } from "./agent-manager.js";
-import { loadConfig, userPluginsRoot } from "./config.js";
+import { loadConfig, piAgentDir, userPluginsRoot } from "./config.js";
 import { childLogger, rootLogger } from "./logger.js";
 import { PluginRegistry } from "./plugin-registry.js";
 
@@ -49,6 +49,14 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = rootLogger();
   log.info({ cfg }, "boot");
+
+  // Pi's config folder (auth.json sign-ins, models.json, settings.json,
+  // trust.json) is per harness, not the run user's global ~/.pi/agent, so
+  // harnesses and the operator's own `pi` never share or overwrite each
+  // other's settings. Pi reads the variable on every lookup; every pi child
+  // inherits it via `{...process.env}` (runner.spawnPi).
+  process.env.PI_CODING_AGENT_DIR = piAgentDir(cfg);
+  mkdirSync(piAgentDir(cfg), { recursive: true, mode: 0o700 });
 
   // Shared secret that authenticates in-harness callers of the agent-messaging
   // webhook. Generated per boot unless the operator pins one; inherited by

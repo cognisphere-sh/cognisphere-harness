@@ -20,6 +20,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **Each harness has its own Pi config folder.** The server sets
+  `PI_CODING_AGENT_DIR` to `harness/.secrets/pi/`, so Pi's `auth.json`,
+  `models.json` and `settings.json` no longer live in the run user's
+  `~/.pi/agent`. Subscription sign-ins (Claude Pro/Max, Codex, ChatGPT) must
+  be connected again once from the Models page; they are not copied, because
+  two copies of a rotating refresh token sign each other out. Hand-written
+  settings in `~/.pi/agent` no longer apply to the harness. Pi also starts
+  with `--no-approve`, so an agent folder's `.pi/` files are never loaded.
+  [affects: .secrets/pi/]
+
 ### Changed
 
 - **Pi upgraded to 0.99.2** (`@earendil-works/pi-ai` and

@@ -145,7 +145,9 @@ Both under `harness/.secrets/` (0600, gitignored, editable via the console):
 - `models.json` — per-provider credentials + the allowlist of enabled model
   ids. Subscription OAuth logins (Claude Pro/Max, Sign in with ChatGPT on
   OpenAI, and the legacy OpenAI Codex) are connected from
-  the console's Models page instead of pasting keys. A model is usable when
+  the console's Models page instead of pasting keys. Their tokens live in
+  `.secrets/pi/` (this harness's own Pi config folder, not `~/.pi/agent`).
+  A model is usable when
   its provider has its keys or a connected sign-in and the model is enabled.
   A thread's own model (set from the chat header) that stops being usable
   falls back to the agent's model until it is usable again.

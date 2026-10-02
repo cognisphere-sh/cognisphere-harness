@@ -1,7 +1,7 @@
 /**
  * Mirror `.secrets/models.json` `modelOverrides` into pi's own models.json
- * (`<getAgentDir()>/models.json`, i.e. `~/.pi/agent/models.json` unless
- * `PI_CODING_AGENT_DIR` overrides it). Pi children re-read that file on
+ * (`<getAgentDir()>/models.json`; the harness points `PI_CODING_AGENT_DIR`
+ * at its own `.secrets/pi/`, see `main.ts`). Pi children re-read that file on
  * every spawn, so overrides configured in the harness Models settings take
  * effect natively inside pi — model registry, ContextUsage reporting, and
  * pi's own compaction thresholds all see the overridden contextWindow /

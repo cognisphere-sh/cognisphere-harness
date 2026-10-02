@@ -455,7 +455,7 @@ One rule, `modelUnavailableReason()` in [model-access.ts](../../packages/harness
 |---|---|---|
 | `.secrets/models.json`: provider credentials, enabled models, per-model `contextWindow` and `maxTokens` | `ModelsStore`. The catalog maps credentials to environment variables. For Vertex, the service-account JSON is written to `<agentDir>/.vertex-sa.json` (mode 0600) while the agent runs. | On each read. Saving on the Models page copies overrides into Pi and reloads every agent whose default provider was in the save. |
 | `.secrets/secrets.json`: `agent → bucket → key` | `SecretsStore`. Each plugin gets its own bucket's declared keys; Pi gets every non-empty key. The file is created (0600) if missing; invalid JSON makes every agent fail. Top-level keys starting with `_` are notes and are ignored. | Cached. Saving on the Secrets page clears the cache and reloads. |
-| Pi's `auth.json` and `models.json` (in `~/.pi/agent`, or `PI_CODING_AGENT_DIR`) | Pi keeps subscription sign-in tokens here. The harness writes only the overrides. | Each Pi start |
+| Pi's `auth.json`, `models.json` and `settings.json` in `.secrets/pi/` | The server sets `PI_CODING_AGENT_DIR` to this folder at startup, so it and every Pi it starts use it instead of the run user's `~/.pi/agent`. Pi keeps subscription sign-in tokens here; the harness writes only the overrides. Each Pi also starts with `--no-approve`, so an agent folder's own `.pi/` settings, extensions and prompts are never loaded. | Each Pi start |
 | `system_prompts/`, `skills/`, `extensions/`, `.venv/` | The runner assembles or loads them. | Each Pi start (plugin seed files were copied at agent start) |
 
 ### Fixed limits
