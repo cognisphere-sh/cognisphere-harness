@@ -160,6 +160,41 @@ Decided: a **manual checklist** rather than a committed smoke script. Phase 1 tu
   - `CHANGELOG.md`;
   - the shipped README: the bootstrap/`PI_VERSION` line and the new sign-in providers.
 
+## Implementation summary
+
+Landed on `main` from branch `phase-0-pi-upgrade` (commits `221f7ab`, `0e26d99`, `8c366a1`, `2e48eed`).
+
+| Area | What was built | Code |
+|---|---|---|
+| Pi version | Exactly 0.99.2 for `pi-coding-agent` and `pi-ai`; Node `>=22.19.0` | `packages/harness/package.json` |
+| Pi binary | The runner starts the dependency's bundled `pi` with the server's Node. Bootstrap no longer installs a global `pi`. | `core/runner.ts`, `base-agent/bootstrap/bootstrap.sh` |
+| Pi config | Each harness uses its own `harness/.secrets/pi/` (`PI_CODING_AGENT_DIR`). `--no-approve` keeps agent `.pi/` files out. | `core/main.ts`, `core/config.ts`, `core/runner.ts` |
+| Batch completion | Ends on `agent_settled`. Success comes from the last `agent_end`. An exit before settling counts as a crash. | `core/runner.ts`, `core/rpc.ts` |
+| Receipts | `cognisphere.delivery` custom entries via `pi.appendEntry`, read from `entry_appended`. Entries already in the file are not reported again. | `core/pi-delivery-receipts.ts`, `core/rpc.ts` |
+| Dispositions | A `handled` prompt or steer marks its rows done (no receipt expected). A steer now waits for Pi's ack. | `core/runner.ts`, `core/rpc.ts` |
+| Model sign-ins and catalog | Sign in with ChatGPT (device ID), Codex labelled legacy, shortlists refreshed to IDs present in 0.99.2 | `core/oauth-logins.ts`, `core/models-catalog.ts`, `web/src/pages/models.tsx` |
+| context-meta | `Model:` / `ContextUsage:` lines now reach the model. They were always dropped, because the last message is the extension's own checkpoint. | `base-agent/extensions/context-meta.ts` |
+
+**Verified** with a real model on a scratch app home:
+- receipts are saved, with no duplicates when a new Pi process opens the thread;
+- a mid-turn steer lands in the same batch;
+- abort marks the row `cancelled`;
+- a 0.84.4 session resumes with its history;
+- a thread model override on OpenRouter works;
+- with the network cut, Pi made 4 attempts in each of 3 queue batches, then the row was `failed` with `[agent_error]`;
+- bash-guard works, and skill-update-notice fires once;
+- context-meta's lines reach the model;
+- ChatGPT sign-in reaches OpenAI's authorize page;
+- the per-harness Pi folder leaves `~/.pi/agent` unchanged, and `--no-approve` blocks an agent's `.pi/APPEND_SYSTEM.md`;
+- spawn-to-ready time dropped from 503 ms to 140 ms.
+
+**Not verified here:** completing the Anthropic and ChatGPT browser sign-ins. Do this once per harness after upgrading, since sign-ins must be reconnected.
+
+**Known limits, scheduled elsewhere:**
+- Pi children still inherit the server's whole environment, including any provider keys in it ([phase 6](phase-06-agent-host-split.md) adds an allowlist).
+- Sign-in flows use fixed local callback ports, so two harnesses on one machine can't sign in to the same provider at once.
+- `pnpm-workspace.yaml` exempts the 0.99.2 Pi packages from the minimum release age; drop the exemption once they've aged.
+
 ## Open questions
 
 All settled:

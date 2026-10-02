@@ -2,7 +2,7 @@
 
 This is the only delivery and status tracker. Each phase has its own file in [roadmap/](roadmap/) with the requirement in plain language, the design, open questions and "done when" checks. The [high-level design](high-level-design.md) and the layer documents in [low-level/](low-level/) describe what is built today. Update them when a phase lands, and record the evidence (the commit or PR, and what was verified) in the phase's **Status** cell below.
 
-**Current status:** every phase is planned. The phases are still under review, so expect them to change before implementation starts.
+**Current status:** phase 0 is done; the other phases are planned. The phases are still under review, so expect them to change before implementation starts.
 
 ## What we are building
 
@@ -65,7 +65,7 @@ Each phase depends only on earlier phases and leaves the system working.
 
 | # | Phase | Delivers | Status |
 |---|---|---|---|
-| 0 | [Pi 0.99 upgrade](roadmap/phase-00-pi-upgrade.md) | Move to Pi 0.99.2 with one pin (bundled `pi`), finish batches on `agent_settled`, receipts via `appendEntry`, ChatGPT sign-in and a refreshed model list. | **Implemented, not yet committed** (branch `phase-0-pi-upgrade`). `pnpm check` passes. Checked against a real model on a scratch home (OpenAI Codex `gpt-5.5`, OpenRouter override):<br>• bundled `pi` 0.99.2 runs; receipts saved as `cognisphere.delivery` entries, with no duplicates on respawn;<br>• a mid-turn steer lands in the same batch; abort marks the row `cancelled`;<br>• a 0.84.4 session resumes with history; a thread override on a second provider works;<br>• a network failure gives 4 Pi attempts × 3 queue batches, then `[agent_error]`;<br>• bash-guard and skill-update-notice (fires once) work;<br>• ChatGPT sign-in reaches the authorize URL; every shortlist ID resolves;<br>• spawn-to-ready 503 ms → 140 ms.<br>Each harness now has its own Pi folder (`.secrets/pi/`), and `--no-approve` keeps agent `.pi/` files out; checked live (global `~/.pi/agent` unchanged, project prompt loads only without the flag). Fixed in this phase: context-meta never showed its `Model`/`ContextUsage` lines (on 0.84.4 too); they now reach the model and aren't saved.<br>Open: finish the Anthropic and ChatGPT sign-ins in a browser. |
+| 0 | [Pi 0.99 upgrade](roadmap/phase-00-pi-upgrade.md) | Move to Pi 0.99.2 with one pin (bundled `pi`), finish batches on `agent_settled`, receipts via `appendEntry`, ChatGPT sign-in and a refreshed model list. | **Done.** Merged to `main` (`221f7ab`…`2e48eed`). Real-model checks passed; see the [implementation summary](roadmap/phase-00-pi-upgrade.md#implementation-summary). Remaining manual step: reconnect Anthropic and ChatGPT sign-ins in each harness. |
 | 1 | [Test harness](roadmap/phase-01-test-harness.md) | Automated tests for the queue and runner, using a fake Pi process. | Planned |
 | 2 | [Reliable intake](roadmap/phase-02-reliable-intake.md) | No lost messages while an agent is stopped. Duplicates ignored. Thread IDs validated. | Planned |
 | 3 | [Agent layout and assets](roadmap/phase-03-agent-layout-and-assets.md) | State folders, a read-only base, prompt and skill selection in `agent.json`, `assets.json` explanations, and migration of existing agents. | Planned |
