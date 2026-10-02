@@ -29,6 +29,14 @@ const DELIVERY_RECEIPTS_EXTENSION = fileURLToPath(
   new URL(`./pi-delivery-receipts${extname(fileURLToPath(import.meta.url))}`, import.meta.url),
 );
 
+/** The `pi` CLI of our pinned `@earendil-works/pi-coding-agent` dependency
+ *  (its `bin.pi`, next to the package's `dist/index.js` entry), run with this
+ *  Node. Spawning it instead of a `pi` on PATH keeps the binary and the types
+ *  on the one version pinned in package.json. */
+const PI_CLI = fileURLToPath(
+  new URL("./bundle/cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")),
+);
+
 const RESERVED_META = new Set([
   "Timestamp",
   "Plugin",
@@ -333,21 +341,14 @@ export class AgentRunner extends EventEmitter {
       };
       const steerText = `${buildHarnessMetadata(msg, this.opts.timezone)}\n${payload.text}`;
       active.sentIds.add(id);
-      try {
-        active.rpc.sendSteer(steerText);
-        // The row was enqueued as 'queued' but dequeueBatch never saw it;
-        // advance it to in_flight now that it's live in the streaming batch
-        // so the DB/UI reflect that it's being processed, not still waiting.
-        this.opts.db.markInFlight([id]);
-        this.opts.log.debug(
-          { threadId, id, plugin: payload.pluginId },
-          "steer dispatched",
-        );
-      } catch (err) {
-        // Not sent: the row stays queued for the next batch.
-        active.sentIds.delete(id);
-        this.opts.log.error({ err, threadId, id }, "steer failed; row kept pending");
-      }
+      // The row was enqueued as 'queued' but dequeueBatch never saw it;
+      // advance it to in_flight now that it's live in the streaming batch
+      // so the DB/UI reflect that it's being processed, not still waiting.
+      // If the steer never lands, it has no receipt and the post-batch split
+      // retries it as not-delivered.
+      this.opts.db.markInFlight([id]);
+      this.steer(active, [id], steerText);
+      this.opts.log.debug({ threadId, id, plugin: payload.pluginId }, "steer dispatched");
       return id;
     }
 
@@ -507,14 +508,31 @@ export class AgentRunner extends EventEmitter {
         "prompt",
       );
 
+      // A batch finishes when pi settles, not at agent_end: after agent_end pi
+      // may still retry, recover from context overflow, or run a steer that
+      // arrived late. Completion is judged from the latest run's messages.
       let endMessages: PiMessage[] | null = null;
-      const agentEnded = new Promise<void>((resolve) => {
-        rpc!.onAgentEnd((messages) => {
-          endMessages = messages;
+      let settled = false;
+      rpc.onAgentEnd((messages) => {
+        endMessages = messages;
+      });
+      const agentSettled = new Promise<void>((resolve) => {
+        rpc!.onAgentSettled(() => {
+          settled = true;
           resolve();
         });
       });
-      await rpc.sendPrompt(promptText);
+      const disposition = await rpc.sendPrompt(promptText);
+      if (disposition === "handled") {
+        // An extension input handler consumed the prompt: no run starts and
+        // no receipt or settle will come. The rows were dealt with.
+        log.info({ threadId }, "prompt handled by an extension; batch done");
+        active.phase = "completing";
+        await this.ensureChildExited(rpc, log);
+        childExited = true;
+        this.opts.db.markBatchDone([...active.continueIds, ...active.sentIds], sessionId);
+        return;
+      }
       active.phase = "streaming";
       // Drain anything queued for this thread into the live batch as one
       // combined steer: on a continue batch the resend + fresh rows left behind
@@ -524,12 +542,12 @@ export class AgentRunner extends EventEmitter {
       // of waiting for the next batch. doNotSteer rows are skipped (left queued)
       // inside drainQueuedAsSteers.
       this.drainQueuedAsSteers(active, log);
-      // Race agent_end against pi exit; if pi exits first without emitting
-      // agent_end, treat it as a crash.
-      await Promise.race([agentEnded, rpc.waitExit()]);
-      // Pi responds to an abort frame by emitting agent_end cleanly, so the
-      // race resolves successfully on user-cancel too. Route to the catch
-      // branch (which sees `active.cancelled`) instead of finalizing.
+      // Race agent_settled against pi exit; if pi exits first, treat it as a
+      // crash.
+      await Promise.race([agentSettled, rpc.waitExit()]);
+      // On abort the race resolves too (pi settles, or exits once stdin
+      // closes). Route to the catch branch (which sees `active.cancelled`)
+      // instead of finalizing.
       if (active.cancelled) {
         throw new Error("batch aborted");
       }
@@ -537,14 +555,14 @@ export class AgentRunner extends EventEmitter {
       await this.ensureChildExited(rpc, log);
       childExited = true;
 
-      // Verdict: completion comes purely from the shape of the agent_end
-      // frame's messages (no JSONL read). No agent_end at all ⇒ crash.
+      // Verdict: completion comes purely from the shape of the last agent_end
+      // frame's messages (no JSONL read). Exit before settling ⇒ crash.
       let complete: boolean;
       let errorTag: string;
-      if (endMessages === null) {
+      if (!settled || endMessages === null) {
         complete = false;
         const stderr = rpc.stderrSnapshot()?.slice(-512) ?? "";
-        errorTag = `[crash] pi exited without agent_end. stderr: ${stderr}`;
+        errorTag = `[crash] pi exited before agent_settled. stderr: ${stderr}`;
       } else {
         ({ complete, errorTag } = endOfTurn(endMessages));
       }
@@ -697,14 +715,29 @@ export class AgentRunner extends EventEmitter {
     const steerText = rows
       .map((m) => `${buildHarnessMetadata(m, this.opts.timezone)}\n${m.text}`)
       .join("\n\n");
-    try {
-      active.rpc!.sendSteer(steerText);
-      log.debug({ threadId: active.threadId, drained: rows.length }, "drained queued as one steer");
-    } catch (err) {
-      // Pipe broke; pi is gone. The rows stay in sentIds with no receipt, so
-      // the delivery split marks them not-delivered → resend on the next batch.
-      log.error({ err, threadId: active.threadId, count: rows.length }, "drain steer failed");
-    }
+    this.steer(active, rows.map((m) => m.id), steerText);
+    log.debug({ threadId: active.threadId, drained: rows.length }, "drained queued as one steer");
+  }
+
+  /**
+   * Send `ids` (already in `sentIds`) as one steer. If an extension input
+   * handler consumes it (`handled`), no session entry or receipt will come,
+   * so the rows are done. If it fails (pipe broke, pi rejected it, no ack),
+   * the rows stay in sentIds without a receipt and the post-batch split
+   * retries them as not-delivered.
+   */
+  private steer(active: ActiveBatch, ids: number[], text: string): void {
+    active.rpc!.sendSteer(text).then(
+      (disposition) => {
+        if (disposition !== "handled") return;
+        for (const id of ids) active.sentIds.delete(id);
+        this.opts.db.markBatchDone(ids, active.sessionId);
+        this.opts.log.info({ threadId: active.threadId, ids }, "steer handled by an extension");
+      },
+      (err: unknown) => {
+        this.opts.log.error({ err, threadId: active.threadId, ids }, "steer failed; rows retry");
+      },
+    );
   }
 
   private spawnPi(
@@ -847,6 +880,7 @@ export class AgentRunner extends EventEmitter {
 
     log.debug(
       {
+        pi: PI_CLI,
         argv: args.length,
         threadId,
         venv: env.VIRTUAL_ENV,
@@ -854,7 +888,7 @@ export class AgentRunner extends EventEmitter {
       },
       "spawn pi",
     );
-    const child = spawn("pi", args, {
+    const child = spawn(process.execPath, [PI_CLI, ...args], {
       cwd: agentDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],

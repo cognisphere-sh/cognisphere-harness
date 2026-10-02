@@ -67,7 +67,7 @@ Each plugin's `index.ts` becomes its **coordinator part**: receivers, OAuth and 
 - **Process-group cleanup:** Pi runs in its own process group, and the whole group is killed at batch end and on abort, so no leftover browser or dev server keeps writing.
 - **Environment allowlist:** Pi gets an explicit set of variables instead of a copy of the coordinator's environment (core known issue #9).
 - **RPC stays:** keep `pi --mode rpc` with today's explicit flags and the delivery-receipt extension. No SDK host (see below).
-- **Receipts saved in the session (prototype):** the receipts extension writes `pi.appendEntry({entryId, eventIds})` instead of `ctx.ui.setStatus`. RPC reports it as `entry_appended`, and the receipt is kept in Pi's session file outside the model's context, so recovery can rebuild row-to-entry links from the file.
+- **Receipts saved in the session:** moved to [phase 0](phase-00-pi-upgrade.md#delivery-receipts), where receipts became `cognisphere.delivery` custom entries reported as `entry_appended`. Here, the unit's recovery rebuilds row-to-entry links from those entries.
 
 ### RPC vs SDK
 

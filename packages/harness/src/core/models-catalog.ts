@@ -10,21 +10,21 @@ import type { CredField, ProviderCatalogEntry } from "./types.js";
  * can be appended via the UI.
  *
  * OAuth subscription auth: entries with `oauth: true` (Anthropic
- * Claude Pro/Max, OpenAI Codex) support browser sign-in from the Models
+ * Claude Pro/Max, Sign in with ChatGPT, OpenAI Codex) support browser sign-in from the Models
  * page in addition to (or instead of) API keys — see `oauth-logins.ts`.
  * GitHub Copilot OAuth exists in pi-ai but has no catalog entry yet.
  * Bedrock / Vertex / Azure / Cloudflare are in scope as multi-cred
  * providers.
  *
  * SOURCE OF TRUTH for provider IDs and env-var names:
- *   temp/pi-mono/packages/ai/src/types.ts (KnownProvider union)
- *   temp/pi-mono/packages/ai/src/env-api-keys.ts (envMap)
+ *   temp/pi/packages/ai/src/types.ts (KnownProvider union)
+ *   temp/pi/packages/ai/src/env-api-keys.ts (envMap)
  * Keep this file in sync on each pi-coding-agent upgrade — the
  * `KnownProvider` union below is a copy of pi-ai's; entries declared
  * here are typechecked against it.
  */
 
-// Mirrored from pi-ai's `KnownProvider` (pi-mono/packages/ai/src/types.ts).
+// Mirrored from pi-ai's `KnownProvider` (temp/pi/packages/ai/src/types.ts).
 // Only ids declared in the catalog below are typechecked against it, so a
 // provider added upstream stays invisible here until it gets an entry.
 export type KnownProvider =
@@ -37,6 +37,7 @@ export type KnownProvider =
   | "azure-openai-responses"
   | "openai-codex"
   | "radius"
+  | "typesafe"
   | "nvidia"
   | "deepseek"
   | "github-copilot"
@@ -59,6 +60,7 @@ export type KnownProvider =
   | "opencode"
   | "opencode-go"
   | "kimi-coding"
+  | "meta"
   | "cloudflare-workers-ai"
   | "cloudflare-ai-gateway"
   | "qwen-token-plan"
@@ -97,46 +99,52 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     notes:
       "API key or Claude Pro/Max subscription OAuth. When both are set, pi prefers the OAuth credential.",
     models: [
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-fable-5-1",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-opus-4-8",
       "claude-opus-4-7",
-      "claude-opus-4-6",
-      "claude-opus-4-5",
       "claude-sonnet-4-6",
-      "claude-sonnet-4-5",
       "claude-haiku-4-5",
-      "claude-3-7-sonnet-20250219",
-      "claude-3-5-sonnet-20241022",
-      "claude-3-5-haiku-20241022",
     ],
   },
   {
     id: "openai",
     displayName: "OpenAI",
     credentials: apiKeyOnly("OPENAI_API_KEY"),
+    oauth: true,
+    notes:
+      "API key or Sign in with ChatGPT (uses a ChatGPT subscription with the OpenAI API).",
     models: [
-      "gpt-5.1",
-      "gpt-5",
+      "gpt-6.1-sol",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-6-astra",
+      "gpt-5.5",
+      "gpt-5.4-mini",
       "gpt-4.1",
-      "gpt-4o",
-      "gpt-4o-mini",
-      "o4-mini",
       "o3",
-      "o3-mini",
     ],
   },
   {
     id: "openai-codex",
-    displayName: "OpenAI Codex",
+    displayName: "OpenAI Codex (legacy)",
     credentials: [],
     oauth: true,
     notes:
-      "ChatGPT Plus/Pro subscription via OAuth — no API key. Sign in below.",
+      "ChatGPT Plus/Pro subscription via OAuth — no API key. Superseded by Sign in with ChatGPT on OpenAI.",
     models: [
+      "gpt-6.1-sol",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-luna",
+      "gpt-5.6-terra",
       "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex",
       "gpt-5.3-codex-spark",
-      "gpt-5.2",
     ],
   },
   {
@@ -144,17 +152,21 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     displayName: "Google Gemini",
     credentials: apiKeyOnly("GEMINI_API_KEY"),
     models: [
+      "gemini-3.8-flash",
+      "gemini-3.1-pro-preview",
+      "gemini-3.5-flash-lite",
       "gemini-2.5-pro",
       "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-2.0-flash",
     ],
   },
   {
     id: "deepseek",
     displayName: "DeepSeek",
     credentials: apiKeyOnly("DEEPSEEK_API_KEY"),
-    models: ["deepseek-chat", "deepseek-reasoner"],
+    models: [
+      "deepseek-v4-pro",
+      "deepseek-flash",
+    ],
   },
   {
     id: "mistral",
@@ -174,30 +186,39 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     models: [
       "llama-3.3-70b-versatile",
       "llama-3.1-8b-instant",
-      "moonshotai/kimi-k2-instruct",
+      "openai/gpt-oss-120b",
+      "qwen/qwen3.8-27b",
     ],
   },
   {
     id: "cerebras",
     displayName: "Cerebras",
     credentials: apiKeyOnly("CEREBRAS_API_KEY"),
-    models: ["llama3.3-70b", "llama-4-scout-17b-16e-instruct"],
+    models: [
+      "gpt-oss-120b",
+      "qwen-3.8-27b",
+    ],
   },
   {
     id: "xai",
     displayName: "xAI",
     credentials: apiKeyOnly("XAI_API_KEY"),
-    models: ["grok-4", "grok-3", "grok-3-mini"],
+    models: [
+      "grok-4.7",
+      "grok-4.6",
+      "grok-4.5",
+    ],
   },
   {
     id: "openrouter",
     displayName: "OpenRouter",
     credentials: apiKeyOnly("OPENROUTER_API_KEY"),
     models: [
-      "anthropic/claude-sonnet-4.5",
-      "openai/gpt-5",
-      "google/gemini-2.5-pro",
-      "deepseek/deepseek-chat",
+      "anthropic/claude-sonnet-5.5",
+      "anthropic/claude-opus-5.5",
+      "openai/gpt-6-astra",
+      "google/gemini-3.8-flash",
+      "deepseek/deepseek-v4-pro",
     ],
   },
   {
@@ -205,37 +226,48 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     displayName: "Vercel AI Gateway",
     credentials: apiKeyOnly("AI_GATEWAY_API_KEY"),
     models: [
-      "anthropic/claude-sonnet-4.5",
-      "openai/gpt-5",
-      "google/gemini-2.5-pro",
+      "anthropic/claude-sonnet-5.5",
+      "openai/gpt-6-sol",
+      "google/gemini-3.8-flash",
     ],
   },
   {
     id: "zai",
     displayName: "ZAI",
     credentials: apiKeyOnly("ZAI_API_KEY"),
-    models: ["glm-4.6", "glm-4.5"],
+    models: [
+      "glm-5.3",
+      "glm-5.3-flash",
+      "glm-5.2",
+    ],
   },
   {
     id: "fireworks",
     displayName: "Fireworks",
     credentials: apiKeyOnly("FIREWORKS_API_KEY"),
     models: [
-      "accounts/fireworks/models/deepseek-v3",
-      "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct",
+      "accounts/fireworks/models/kimi-k3",
+      "accounts/fireworks/models/glm-5p3",
+      "accounts/fireworks/models/deepseek-v4p1-flash",
     ],
   },
   {
     id: "kimi-coding",
     displayName: "Kimi For Coding",
     credentials: apiKeyOnly("KIMI_API_KEY"),
-    models: ["kimi-k2-coding"],
+    models: [
+      "kimi-for-coding",
+      "k3",
+    ],
   },
   {
     id: "minimax",
     displayName: "MiniMax",
     credentials: apiKeyOnly("MINIMAX_API_KEY"),
-    models: ["minimax-m2"],
+    models: [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+    ],
   },
   {
     id: "minimax-cn",

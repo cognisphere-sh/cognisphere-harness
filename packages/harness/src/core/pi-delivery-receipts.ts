@@ -9,17 +9,22 @@
  * contains. That one receipt answers both "did the row reach pi?" and "which
  * saved message is it?", so the two can't disagree.
  *
- * Transport: `ctx.ui.setStatus(STATUS_KEY, <json>)`, a fire-and-forget
- * `extension_ui_request` frame on stdout that `PiRpcClient` intercepts.
+ * Transport: `pi.appendEntry(RECEIPT_TYPE, { entryId, eventIds })`. Pi saves
+ * it as a custom session entry (kept out of the model's context) and reports
+ * it on stdout as an `entry_appended` event, which `PiRpcClient` routes to the
+ * runner. Saved receipts also let recovery rebuild row-to-entry links from
+ * the session file.
  *
  * Pi emits `message_end` before it appends the message to the session, so the
  * entry id doesn't exist yet there. Instead we re-scan the entries on the
- * events that follow and report each entry once. The scan also covers history
- * from earlier batches; the runner ignores rows that aren't in its batch.
+ * events that follow and report each entry once. Entries already in the file
+ * when pi starts are history from earlier batches (their receipts were sent
+ * then, or the session predates saved receipts), so they're never reported
+ * again — otherwise every spawn would append duplicate receipts.
  */
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
-export const STATUS_KEY = "cognisphere.delivery";
+export const RECEIPT_TYPE = "cognisphere.delivery";
 
 /** Row ids named by `EventId:` lines inside `<harness-metadata>` blocks. */
 export function eventIdsIn(text: string): number[] {
@@ -41,6 +46,10 @@ function messageText(entry: SessionEntry): string | null {
 export default function deliveryReceipts(pi: ExtensionAPI): void {
   const reported = new Set<string>();
 
+  pi.on("session_start", (_event, ctx) => {
+    for (const entry of ctx.sessionManager.getEntries()) reported.add(entry.id);
+  });
+
   const sweep = (_event: unknown, ctx: ExtensionContext): void => {
     for (const entry of ctx.sessionManager.getEntries()) {
       if (reported.has(entry.id)) continue;
@@ -49,7 +58,7 @@ export default function deliveryReceipts(pi: ExtensionAPI): void {
       reported.add(entry.id);
       const eventIds = eventIdsIn(text);
       if (eventIds.length === 0) continue;
-      ctx.ui.setStatus(STATUS_KEY, JSON.stringify({ entryId: entry.id, eventIds }));
+      pi.appendEntry(RECEIPT_TYPE, { entryId: entry.id, eventIds });
     }
   };
 

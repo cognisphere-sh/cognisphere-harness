@@ -166,7 +166,7 @@ Every agent has the same seven tools: `read`, `bash`, `edit`, `write`, `grep`, `
 Pi's own automatic discovery of prompts, context files, skills and extensions is turned off. Instead, core tells Pi exactly what to load:
 
 - **Skills:** every `SKILL.md` under `skills/`, at any depth.
-- **Extensions:** each `.ts` or `.js` file directly inside `extensions/`, or each folder there that has an entry file. Deeper files aren't loaded on their own. Core also always loads its own [delivery-receipts](../../packages/harness/src/core/pi-delivery-receipts.ts) extension from the package, which tells it which inputs Pi saved ([core](core.md#end-to-end)). It isn't in the agent folder, so the agent can't remove it. Agents created before it replaced `harness-bridge.ts` may still have that file; core skips it, and it can be deleted.
+- **Extensions:** each `.ts` or `.js` file directly inside `extensions/`, or each folder there that has an entry file. Deeper files aren't loaded on their own. Core also always loads its own [delivery-receipts](../../packages/harness/src/core/pi-delivery-receipts.ts) extension from the package, which tells it which inputs Pi saved ([core](core.md#end-to-end)). Each receipt is a `cognisphere.delivery` custom entry in the session file, outside the model's context. It isn't in the agent folder, so the agent can't remove it. Agents created before it replaced `harness-bridge.ts` may still have that file; core skips it, and it can be deleted.
 
 | Base extension | What it does and why |
 |---|---|
@@ -174,7 +174,7 @@ Pi's own automatic discovery of prompts, context files, skills and extensions is
 | [bash-guard](../../packages/harness/src/agents/base-agent/extensions/bash-guard.ts) | Adds `set -u` to shell commands and explains unset-variable errors, which prevents silent text corruption. It can be turned off and is **not** a security control. |
 | [skill-update-notice](../../packages/harness/src/agents/base-agent/extensions/skill-update-notice.ts) | Remembers which skill versions the agent has read and tells it when a skill changes, with a short changelog. |
 
-The bootstrap script runs directly on the host every time the agent starts. `.venv/bin` goes first on `PATH` when it exists. Helper tools such as `agent-browser`, `ddgs`, `markitdown` and `session-reader` are just tools the agent can use.
+The bootstrap script runs directly on the host every time the agent starts. It doesn't install Pi: core runs the `pi` bundled with the harness package. Agents seeded before that still have a bootstrap step that installs a global `pi`; it is harmless and unused, and can be deleted. `.venv/bin` goes first on `PATH` when it exists. Helper tools such as `agent-browser`, `ddgs`, `markitdown` and `session-reader` are just tools the agent can use.
 
 ## Example: one agent, two conversations
 

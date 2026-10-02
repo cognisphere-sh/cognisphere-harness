@@ -102,7 +102,7 @@ python -m pip install -r bootstrap/requirements.txt
 # ── npm global prefix: make it user-writable ──────────────────────────
 # The default npm prefix may be a root-owned dir (e.g. /usr), so `npm install
 # -g` fails with EACCES when bootstrap runs as the (non-root) app user. Point
-# it at ~/.npm-global — where the pi/agent-browser wrappers already look — and
+# it at ~/.npm-global — where the agent-browser wrapper already looks — and
 # put its bin dir on PATH for the rest of this script and this shell.
 if command -v npm >/dev/null 2>&1; then
   export NPM_CONFIG_PREFIX="$HOME/.npm-global"
@@ -110,23 +110,7 @@ if command -v npm >/dev/null 2>&1; then
   export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 fi
 
-# ── 3. pi-coding-agent (npm global) ───────────────────────────────────
-# Provides the `pi` binary that the harness runner spawns (`pi --mode rpc`).
-# Pinned to the version the harness was tested against — keep in sync with
-# `@earendil-works/pi-coding-agent` in packages/harness/package.json.
-PI_VERSION="${PI_VERSION:-0.84.4}"
-installed_pi="$(pi --version 2>/dev/null || true)"
-if [ "$installed_pi" = "$PI_VERSION" ]; then
-  log "pi-coding-agent $PI_VERSION already installed ($(command -v pi))"
-elif command -v npm >/dev/null 2>&1; then
-  log "installing @earendil-works/pi-coding-agent@$PI_VERSION via npm (found: ${installed_pi:-none})..."
-  npm install -g "@earendil-works/pi-coding-agent@$PI_VERSION" \
-    || warn "npm install -g @earendil-works/pi-coding-agent@$PI_VERSION failed"
-else
-  warn "npm not found; install Node.js (https://nodejs.org) and re-run, or install @earendil-works/pi-coding-agent@$PI_VERSION by hand"
-fi
-
-# ── 4. agent-browser (npm global) + its Chrome build ──────────────────
+# ── 3. agent-browser (npm global) + its Chrome build ──────────────────
 if command -v npm >/dev/null 2>&1; then
   if command -v agent-browser >/dev/null 2>&1; then
     log "agent-browser already installed ($(command -v agent-browser))"

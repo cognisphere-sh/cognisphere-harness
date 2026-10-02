@@ -262,7 +262,7 @@ sequenceDiagram
     Plugin->>Runner: Follow-up E18 arrives
     Runner->>DB: Save E18
     Runner->>RPC: 6. Feed E18 into the running turn
-    Pi-->>RPC: 7. agent_end
+    Pi-->>RPC: 7. agent_settled
     Runner->>RPC: Close input, wait for exit, kill leftovers
     Runner->>DB: 8. Mark done / retry / failed
 ```
@@ -280,9 +280,11 @@ sequenceDiagram
    If some rows are **retries of inputs Pi already saw**, only those are claimed first, and the prompt is a short "please continue" nudge. The other queued rows are fed in together right after Pi accepts the prompt. `doNotSteer` rows wait for the next batch.
 3. **Start Pi.** The model is the thread's own setting if it has one and it can still be used, otherwise the agent default ([model check](#model-check)). The runner builds the system prompt and starts Pi on the thread's session file ([details](#execution-and-example)).
 4. **Prompt.** The claimed rows are joined into one prompt, with a metadata block per input. Each block carries `EventId: <row id>`. Pi must accept the prompt within 60 seconds. This timer pauses while Pi compacts old history first. Anything that arrived while Pi was starting is fed in as one combined follow-up once the prompt is accepted.
-5. **Receipt.** A small Pi extension, [delivery-receipts](../../packages/harness/src/core/pi-delivery-receipts.ts), reads the `EventId` lines of each user message Pi saves and reports `{entryId, eventIds}`. That one receipt marks those rows *delivered* and links them to the saved message (filled in once, never overwritten). Rows joined into one prompt share one entry. The runner loads the extension from the package, not the agent folder, so an agent can't remove or edit it.
-6. **Follow-ups.** A new input for the same running thread is saved, marked `in_flight`, and sent straight into the turn. There is no reply to confirm it arrived. If sending fails, the row stays `queued`. Inputs for other threads wait for a free worker.
-7. **Finish.** Pi sends `agent_end`. The batch **succeeded** only if the very last message is from the assistant with `stopReason: stop`. A trailing tool result means Pi stopped part-way, and `stopReason: error` is recorded as `[agent_error]`. The runner then closes Pi's input, waits for it to exit (after 5 seconds it kills Pi's whole process group), and kills any processes Pi left behind.
+5. **Receipt.** A small Pi extension, [delivery-receipts](../../packages/harness/src/core/pi-delivery-receipts.ts), reads the `EventId` lines of each user message Pi saves and records `{entryId, eventIds}` with `pi.appendEntry("cognisphere.delivery", …)`. Pi saves that as a custom entry in the session file (outside the model's context) and reports it as an `entry_appended` event. That one receipt marks those rows *delivered* and links them to the saved message (filled in once, never overwritten). Rows joined into one prompt share one entry. The runner loads the extension from the package, not the agent folder, so an agent can't remove or edit it.
+
+   Pi's reply to the prompt and to each follow-up carries a **disposition**: `started`, `queued`, or `handled`. `handled` means an extension's `input` handler consumed the message, so Pi never saves it and no receipt will come. The runner marks those rows `done` straight away. Nothing returns `handled` today.
+6. **Follow-ups.** A new input for the same running thread is saved, marked `in_flight`, and sent straight into the turn. If sending fails, or Pi doesn't confirm it within 60 seconds, the row gets no receipt and is retried after the batch. Inputs for other threads wait for a free worker.
+7. **Finish.** The batch ends when Pi sends `agent_settled`, not `agent_end`. Between the two, Pi may retry a provider error itself (up to 3 times, with backoff capped at 60 seconds), recover from an over-long context by compacting, or answer a follow-up that arrived as the last turn ended. The batch **succeeded** only if the very last message of the last `agent_end` is from the assistant with `stopReason: stop`. A trailing tool result means Pi stopped part-way, and `stopReason: error` is recorded as `[agent_error]`. If Pi exits before settling, it counts as a crash. The runner then closes Pi's input, waits for it to exit (after 5 seconds it kills Pi's whole process group), and kills any processes Pi left behind.
 8. **Record.** Inputs with a receipt are marked `done`. Inputs that failed or never reached Pi are retried or marked `failed` ([rules](#queue-and-recovery)). The thread is freed and the workers look for more work.
 
 The answer is in Pi's session file. **Nothing is sent back to Telegram or email automatically**; the agent has to run the plugin's send script.
@@ -355,7 +357,8 @@ stateDiagram-v2
 
 **Good to know:**
 
-- One signal decides both *delivered* and *nudge or resend*: the delivery receipt. So a `done` row always has a message link. Receipts also re-report earlier batches' history; the runner ignores rows outside the current batch, and a row whose earlier copy is in the history is linked to that copy.
+- One signal decides both *delivered* and *nudge or resend*: the delivery receipt. So a `done` row always has a message link, except a row an extension `handled`, which was never saved. The receipts extension only reports messages saved by its own Pi process; messages already in the file when Pi starts were reported by an earlier batch.
+- Retries come in two layers. Pi retries transient provider errors inside one batch first. The queue retries the batch only after Pi gives up, crashes, or a row wasn't delivered.
 - There is no wait between retries, and **no exactly-once guarantee**: a failed attempt may already have sent an email or changed a file.
 - Requeueing, or forcing any non-running row back to `queued`, sets attempts to 1. So the row gets `maxAttempts − 1` more tries.
 - You can change the status of any row except `in_flight` ones. Deleting an event only deletes the queue record, not the conversation. Deleting a thread deletes both.
@@ -367,7 +370,7 @@ While a batch runs, the runner keeps it in one of four phases (in memory only):
 | Phase | What the runner does | A new input for the same thread… |
 |---|---|---|
 | `spawning` | Builds the prompt, starts Pi, waits for Pi to accept. | waits, then is fed in once the prompt is accepted. |
-| `streaming` | Watches Pi's messages; feeds in follow-ups or aborts. | is fed in, unless `doNotSteer`. |
+| `streaming` | Watches Pi's messages until `agent_settled`; feeds in follow-ups or aborts. | is fed in, unless `doNotSteer`. |
 | `completing` | Closes Pi's input, waits for exit, kills leftovers, records outcomes. | waits for the next batch. |
 | `exited` | Frees the thread and wakes the workers. | can start a new batch. |
 
@@ -375,6 +378,7 @@ The thread stays "busy" until clean-up is finished. So a row that already shows 
 
 **How Pi is started** (`spawnPi()`):
 
+- **Binary:** the `pi` CLI of the harness's own `@earendil-works/pi-coding-agent` dependency, run with the server's Node. Its version is the one pinned in `packages/harness/package.json`; a `pi` on `PATH` is never used.
 - **Mode:** RPC. Pi reads JSON on stdin and writes JSON on stdout.
 - **Process group:** Pi gets its own (`detached`), so the whole tree can be killed afterwards.
 - **Working folder:** the agent's folder.
@@ -385,14 +389,16 @@ The thread stays "busy" until clean-up is finished. So a row that already shows 
   - the seven fixed tools;
   - the package's delivery-receipts extension, then the agent's skills and extensions, listed explicitly (an old `extensions/harness-bridge.ts` copy is skipped).
 
-  Pi's own discovery of prompts, templates, themes and context files is turned off.
+  Pi's own discovery of prompts, templates, themes and context files is turned off. `--no-extensions` also keeps Pi's built-in MCP, codemode, tool-search and llama.cpp extensions out.
 - **Environment:** the server's own environment variables, plus `PI_AGENT_ID`, `PI_THREAD_ID`, `PI_WEBHOOK_BASE`, `HARNESS_BASE_URL` and `VIRTUAL_ENV` (with `.venv/bin` added to `PATH` if it exists). Then the agent's secrets, config and model credentials are applied on top, so a secret with the same name as one of those variables wins. If a thread uses another provider, that provider's credentials are added too.
 
 All of this runs directly on the host. It is not a sandbox. See [agents](agents.md#runtime-capabilities) for what Pi loads.
 
+Since Pi 0.86, the session file also stores the system prompt and tools: the first request saves them as a `role: "system"` message entry, and later prompt changes are saved as patches. A session started before that gets the current prompt as a later system message on its next request. Readers that show the conversation skip these entries.
+
 If Pi asks an interactive question through an extension (select, confirm, text input), the harness cancels it automatically. The last 16 KB of Pi's stderr is kept, and its final 512 characters are copied into a failed row's error.
 
-**Example.** E17 asks for a report. E18 ("include last week") arrives while Pi is working and is fed in. If E18 was never seen as delivered before `agent_end`, E17 is marked `done` and E18 is retried as a normal input. If the operator presses Abort instead, both become `cancelled`.
+**Example.** E17 asks for a report. E18 ("include last week") arrives while Pi is working and is fed in. If E18 was never seen as delivered before `agent_settled`, E17 is marked `done` and E18 is retried as a normal input. If the operator presses Abort instead, both become `cancelled`.
 
 ## Configuration
 
@@ -761,6 +767,6 @@ Yes, with the server stopped. Everything lives under `<COGNISPHERE_ROOT_DIR>/<CO
 
 - Run `pnpm dev` from the repo root; it restarts the server when code changes. Add `pnpm dev:web` for the console.
 - The server uses `~/.cognisphere/default` unless you set `COGNISPHERE_ROOT_DIR` and `COGNISPHERE_ID`. To keep real data safe, make a scratch app home with `cognisphere init`, then set `COGNISPHERE_ROOT_DIR` to that folder and `COGNISPHERE_ID=harness`.
-- The runner starts the `pi` command from `PATH`. Agent bootstrap installs the pinned version; if `pi` is missing, every batch fails with a spawn error.
+- The runner starts the `pi` bundled with the harness's dependencies (`node_modules/@earendil-works/pi-coding-agent`), so `pnpm install` is all it needs. A global `pi` is not used.
 - Set `LOG_LEVEL=debug` to see Pi's error output and each process start.
 - There is no automated test suite. `pnpm check` (types and lint) must pass, and you check behavior by hand.

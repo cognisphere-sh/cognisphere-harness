@@ -146,7 +146,7 @@ cd harness
 pnpm exec cognisphere serve
 ```
 
-Open `http://127.0.0.1:3142`. When an agent starts, it may run its bootstrap script to install Pi and tool dependencies. Bootstrap failures are only logged, so check the logs if a tool is missing.
+Open `http://127.0.0.1:3142`. When an agent starts, it may run its bootstrap script to install tool dependencies. Bootstrap failures are only logged, so check the logs if a tool is missing.
 
 ## Packaging
 

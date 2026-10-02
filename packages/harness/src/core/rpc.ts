@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type { Logger } from "./logger.js";
-import { STATUS_KEY as DELIVERY_STATUS_KEY } from "./pi-delivery-receipts.js";
+import { RECEIPT_TYPE } from "./pi-delivery-receipts.js";
 
 interface RpcResponse {
   type: "response";
@@ -17,11 +17,11 @@ interface ExtensionUiRequest {
   id: string;
   method: string;
   title?: string;
-  /** Present on fire-and-forget `setStatus` requests (the delivery-receipts
-   *  extension uses these — see {@link onDeliveryReceipt}). */
-  statusKey?: string;
-  statusText?: string;
 }
+
+/** What pi did with a `prompt`/`steer` frame. `handled` = an extension
+ *  `input` handler consumed it: no session entry, so no receipt will come. */
+export type InputDisposition = "started" | "queued" | "handled";
 
 /**
  * Minimal shape of an entry in `agent_end.messages`.
@@ -35,8 +35,9 @@ export interface PiMessage {
   errorMessage?: string;
 }
 
-/** Reported by the delivery-receipts extension (`pi-delivery-receipts.ts`):
- *  pi saved the queue rows `eventIds` as session entry `entryId`. */
+/** Reported by the delivery-receipts extension (`pi-delivery-receipts.ts`)
+ *  as a custom session entry: pi saved the queue rows `eventIds` as session
+ *  entry `entryId`. */
 export interface DeliveryReceipt {
   entryId: string;
   eventIds: number[];
@@ -47,6 +48,8 @@ type RpcMessage =
   | ExtensionUiRequest
   | { type: "agent_start" }
   | { type: "agent_end"; messages?: PiMessage[] }
+  | { type: "agent_settled" }
+  | { type: "entry_appended"; entry?: { type?: string; customType?: string; data?: unknown } }
   | { type: string; [k: string]: unknown };
 
 /**
@@ -70,6 +73,7 @@ export class PiRpcClient {
   >();
   private nextId = 1;
   private agentEndHandler: ((messages: PiMessage[]) => void) | undefined;
+  private agentSettledHandler: (() => void) | undefined;
   private deliveryReceiptHandler: ((receipt: DeliveryReceipt) => void) | undefined;
   private exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 
@@ -110,11 +114,18 @@ export class PiRpcClient {
     });
   }
 
-  /** Fires once per run when pi's agent loop ends. Receives the run's
-   *  messages so the caller can inspect the final message's shape (role +
-   *  stopReason) to decide whether the turn completed. */
+  /** Fires each time one low-level pi run ends. Pi may still retry, recover
+   *  from overflow or run a late steer afterwards — wait for
+   *  {@link onAgentSettled} — so the caller keeps the latest run's messages
+   *  and judges completion from the final message's role + stopReason. */
   onAgentEnd(h: (messages: PiMessage[]) => void): void {
     this.agentEndHandler = h;
+  }
+
+  /** Fires when pi is fully settled: no retry, compaction or queued
+   *  continuation remains. */
+  onAgentSettled(h: () => void): void {
+    this.agentSettledHandler = h;
   }
 
   /** Fires when the delivery-receipts extension reports that pi saved a user
@@ -131,7 +142,7 @@ export class PiRpcClient {
     return this.stderrBuf;
   }
 
-  async sendPrompt(text: string): Promise<void> {
+  async sendPrompt(text: string): Promise<InputDisposition> {
     const id = `p${this.nextId++}`;
     // Pi acks a prompt frame immediately (the agent loop runs after), so a
     // missing ack means the child is wedged. Without the timeout, the runner
@@ -143,11 +154,15 @@ export class PiRpcClient {
       60_000,
     );
     if (!r.success) throw new Error(`pi rejected prompt: ${r.error ?? "unknown"}`);
+    return dispositionOf(r);
   }
 
-  sendSteer(text: string): void {
+  /** Rejects if the frame can't be written, pi rejects it, or no ack comes. */
+  async sendSteer(text: string): Promise<InputDisposition> {
     const id = `s${this.nextId++}`;
-    this.writeFrame({ id, type: "steer", message: text });
+    const r = await this.writeAndAwait(id, { id, type: "steer", message: text }, 60_000);
+    if (!r.success) throw new Error(`pi rejected steer: ${r.error ?? "unknown"}`);
+    return dispositionOf(r);
   }
 
   sendAbort(): void {
@@ -287,6 +302,22 @@ export class PiRpcClient {
       this.agentEndHandler?.(messages);
       return;
     }
+    if (p.type === "agent_settled") {
+      this.agentSettledHandler?.();
+      return;
+    }
+    if (p.type === "entry_appended") {
+      const entry = (p as { entry?: { type?: string; customType?: string; data?: unknown } }).entry;
+      if (entry?.type === "custom" && entry.customType === RECEIPT_TYPE) {
+        const r = entry.data as Partial<DeliveryReceipt> | undefined;
+        if (typeof r?.entryId === "string" && Array.isArray(r.eventIds)) {
+          this.deliveryReceiptHandler?.({ entryId: r.entryId, eventIds: r.eventIds });
+        } else {
+          this.log.debug({ data: entry.data }, "bad delivery receipt payload");
+        }
+      }
+      return;
+    }
     if (p.type === "extension_ui_request") {
       this.handleExtensionUi(p as ExtensionUiRequest);
       return;
@@ -323,20 +354,6 @@ export class PiRpcClient {
   }
 
   private handleExtensionUi(req: ExtensionUiRequest): void {
-    // Delivery receipts arrive as a fire-and-forget `setStatus`. Route them
-    // to the runner instead of treating them as UI.
-    if (req.method === "setStatus" && req.statusKey === DELIVERY_STATUS_KEY) {
-      if (req.statusText == null) return;
-      try {
-        const r = JSON.parse(req.statusText) as DeliveryReceipt;
-        if (typeof r.entryId === "string" && Array.isArray(r.eventIds)) {
-          this.deliveryReceiptHandler?.(r);
-        }
-      } catch {
-        this.log.debug({ statusText: req.statusText }, "bad delivery receipt payload");
-      }
-      return;
-    }
     const dialog = new Set(["select", "confirm", "input", "editor"]);
     if (dialog.has(req.method)) {
       this.log.warn({ method: req.method }, "auto-cancel extension_ui_request");
@@ -353,4 +370,11 @@ export class PiRpcClient {
     for (const w of this.pending.values()) w.reject(err);
     this.pending.clear();
   }
+}
+
+/** Pi (0.99+) reports `data.disposition` on successful prompt/steer acks.
+ *  Missing → treat as a normal accepted input. */
+function dispositionOf(r: RpcResponse): InputDisposition {
+  const d = (r.data as { disposition?: unknown } | undefined)?.disposition;
+  return d === "handled" || d === "queued" ? d : "started";
 }

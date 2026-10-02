@@ -171,7 +171,9 @@ export default function contextMeta(pi: ExtensionAPI): void {
 
     const last = event.messages[event.messages.length - 1];
     if (!last) return;
-    if (last.role === "user") {
+    // The last message is usually our own checkpoint (role "custom", sent to
+    // the model as a user message), so it carries the block too.
+    if (last.role === "user" || last.role === "custom") {
       if (typeof last.content === "string") last.content = `${last.content}\n\n${block}`;
       else last.content.push({ type: "text", text: block });
     } else if (last.role === "toolResult") {

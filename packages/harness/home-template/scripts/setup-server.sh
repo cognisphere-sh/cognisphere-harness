@@ -93,8 +93,9 @@ sudo -u "$RUN_USER" env COGNISPHERE_NPM_TOKEN="$COGNISPHERE_NPM_TOKEN" bash "$RO
 
 # ---- agent runtimes: build each agent's Python venv + CLIs ------------------
 # Each agent has a bootstrap/bootstrap.sh (idempotent) that creates <agent>/.venv
-# with markitdown/ddgs and installs the pi / agent-browser CLIs the harness
-# spawns by name. Run as the app user so the venv and ~/.local installs aren't
+# with markitdown/ddgs and installs the agent-browser CLI agents call by name.
+# (The harness runs the `pi` bundled with its own dependencies, not a global
+# one.) Run as the app user so the venv and ~/.local installs aren't
 # root-owned. Best-effort: a warning here shouldn't abort the whole provision.
 for bs in "$ROOT"/harness/agents/*/bootstrap/bootstrap.sh; do
   [[ -f "$bs" ]] || continue
@@ -114,13 +115,11 @@ NODE_BIN_DIR="$(dirname "$(command -v node)")"
 # $NODE_BIN_DIR/pnpm.
 PNPM_BIN="$(command -v pnpm)"
 PNPM_BIN_DIR="$(dirname "$PNPM_BIN")"
-# The harness spawns the `pi` coding agent by name (PATH lookup). pi is a
-# per-user install ($RUN_HOME/.local/bin/pi), so that dir MUST be on the unit
-# PATH or every spawn fails with `spawn pi ENOENT`. node/pnpm may both live in
+# $RUN_HOME/.local/bin holds per-user tool installs; node/pnpm may both live in
 # /usr/bin, so don't rely on their dirs to carry it.
 # $RUN_HOME/.npm-global/bin carries the npm-global CLIs the agent bootstrap
-# installs as the app user (pi, agent-browser) when the default npm prefix is
-# root-owned. Must be on the unit PATH or bare `agent-browser`/`pi` spawns 127.
+# installs as the app user (agent-browser) when the default npm prefix is
+# root-owned. Must be on the unit PATH or bare `agent-browser` spawns 127.
 UNIT_PATH="$RUN_HOME/.local/bin:$RUN_HOME/.npm-global/bin:$PNPM_BIN_DIR:$NODE_BIN_DIR:/usr/bin:/bin"
 
 # Renaming APP_NAME leaves the old name's units/nginx site/cron behind — clean those up by hand.

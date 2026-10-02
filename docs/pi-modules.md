@@ -2,7 +2,7 @@
 
 **What this is:** a guide to the packages in the Pi monorepo (`earendil-works/pi`): what each one does, how they fit together, and which ones CogniSphere uses.
 
-**Snapshot:** Pi **0.99.2** (commit `e792ba131`, 2026-09-30). The harness pins 0.84.4 until the [phase 0 upgrade](roadmap/phase-00-pi-upgrade.md).
+**Snapshot:** Pi **0.99.2** (commit `e792ba131`, 2026-09-30). The harness pins exactly 0.99.2 in `packages/harness/package.json` ([phase 0](roadmap/phase-00-pi-upgrade.md)) and runs that package's own `pi` binary.
 
 Pi changes quickly. For the version you're running, the package READMEs and `pi --help` are authoritative.
 
@@ -26,7 +26,7 @@ Pi changes quickly. For the version you're running, the package READMEs and `pi 
 |---|---|---|---|
 | `@earendil-works/pi-ai` | Stable | One LLM API across providers: model catalog, auth resolution, streaming, tools, cost | Imported for OAuth helpers (`oauth-logins.ts`) |
 | `@earendil-works/pi-agent-core` | Stable core; new `Session`/harness interfaces experimental | The agent loop (`Agent`, `agentLoop`) with tools, steering and events. Now also session repositories and an agent-harness interface. | Indirectly, through the coding agent |
-| `@earendil-works/pi-coding-agent` | Stable (with an `experimental/` folder) | The `pi` CLI: built-in coding tools, sessions as JSONL, skills, extensions, RPC and SDK modes | **Yes.** Every turn runs `pi --mode rpc`. We also use its types and credential helpers. |
+| `@earendil-works/pi-coding-agent` | Stable (with an `experimental/` folder) | The `pi` CLI: built-in coding tools, sessions as JSONL, skills, extensions, RPC and SDK modes | **Yes.** Every batch runs the package's bundled `pi --mode rpc`. We also use its types and credential helpers. |
 | `@earendil-works/pi-tui` | Stable | Terminal UI library for interactive `pi` | No |
 | `@earendil-works/pi-mcp` | Stable | A small Model Context Protocol client (stdio, Streamable HTTP) | No (built into the CLI since 0.99; we disable it with `--no-extensions`) |
 | `@earendil-works/pi-codemode` | Stable | Runs model-written JavaScript in a QuickJS sandbox that can only call injected tools | No (same as above) |

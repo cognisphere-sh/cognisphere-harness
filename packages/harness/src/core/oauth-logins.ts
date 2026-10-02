@@ -29,7 +29,7 @@
  * login per provider — the callback server binds a fixed port.
  */
 
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AuthPrompt } from "@earendil-works/pi-ai";
 import type { Logger } from "./logger.js";
 
@@ -172,6 +172,10 @@ export class OAuthLoginManager {
           }
         },
         prompt: (prompt) => this.handlePrompt(entry, prompt, surfaced),
+      }, {
+        // Sign in with ChatGPT identifies the installation by a stable UUID.
+        // Use pi's own (global settings `deviceId`), as pi's `/login` does.
+        getDeviceId: () => SettingsManager.create(process.cwd()).getOrCreateDeviceId(),
       })
       .then(() => {
         this.results.set(providerId, { state: "success" });

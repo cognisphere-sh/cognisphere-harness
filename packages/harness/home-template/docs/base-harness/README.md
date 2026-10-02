@@ -95,8 +95,9 @@ plus an optional `X-App-User` header (see `app/README.md`).
   agent (`agent/` scope is yours; `<plugin-id>/` scopes are seeded by
   plugins and overwritten on every start).
 - `bootstrap/bootstrap.sh` — runs on every agent start; provisions the
-  agent's `.venv`, system deps, and the pinned `pi` version (installs or
-  upgrades/downgrades the global `pi` to match; override with `PI_VERSION`).
+  agent's `.venv`, system deps and `agent-browser`. Pi itself isn't installed
+  here: the harness runs the `pi` bundled with its own package, at the version
+  it was tested with.
 
 A **thread** is one conversation. `threadIdStrategy` controls how inbound
 messages map to threads (one global thread, one per plugin, or one per
@@ -142,7 +143,8 @@ Both under `harness/.secrets/` (0600, gitignored, editable via the console):
 - `secrets.json` — per-agent buckets: `agent` (agent-level env) plus one per
   plugin id. All keys are injected into the agent's environment.
 - `models.json` — per-provider credentials + the allowlist of enabled model
-  ids. Subscription OAuth logins (Claude Pro/Max, Codex) are connected from
+  ids. Subscription OAuth logins (Claude Pro/Max, Sign in with ChatGPT on
+  OpenAI, and the legacy OpenAI Codex) are connected from
   the console's Models page instead of pasting keys. A model is usable when
   its provider has its keys or a connected sign-in and the model is enabled.
   A thread's own model (set from the chat header) that stops being usable

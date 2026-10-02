@@ -24,6 +24,7 @@ When these stabilize, CogniSphere could use them directly instead of maintaining
 | `sourceKey` duplicate detection ([phase 2](../roadmap/phase-02-reliable-intake.md)) | `requestId` on `submit()` |
 | Steering vs queueing, `doNotSteer` | `whenBusy: "steer"`, follow-up, or `"reject"` |
 | Delivery receipts (`EventId` metadata plus the receipts extension) | Not needed. A submission's placement and answer are committed state. |
+| Row states: `queued` · receipt with `pi_entry_id` · `done` · `failed`/`cancelled`/`dead` | Submission status: `queued` · `placed { entry }` · `done { entry, answer }` · `unanswered { reason }`. Keep our states mappable one-to-one. |
 | Crash recovery: resend vs nudge | `harness.resume()` continues unfinished tasks, and tools that aren't safe to replay get an "interrupted" result |
 | Thread | Conversation |
 | Sub-agents with a `tasks` table and result posting ([phase 5](../roadmap/phase-05-subagents.md)) | Conversations owned by a task, a subagent tool, background reporter tasks, and abort that propagates to children |

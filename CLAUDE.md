@@ -126,10 +126,10 @@ Keep one authoritative explanation per concern. Do not add competing system/serv
 
 They run inside the unit, work in RPC mode and upgrade along with Pi. Change the runner, queue or coordinator only when the feature needs something an extension can't reach: other threads, the message queue, coordinator state, secrets or lifecycle. Then say why in the phase file. Keep extensions small, and type-check them against the pinned Pi version. Their behavior is documented in [agents](docs/low-level/agents.md).
 
-**Pi version.** Pin Pi to the same exact version in two places: the `packages/harness/package.json` dependencies and `PI_VERSION` in `base-agent/bootstrap/bootstrap.sh`. When upgrading:
+**Pi version.** Pin Pi to one exact version in the `packages/harness/package.json` dependencies (`pi-coding-agent` and `pi-ai`). The runner spawns that package's bundled `pi`, so there is no global binary to keep in sync. When upgrading:
 
 1. read Pi's `CHANGELOG.md` breaking changes since the pinned version;
-2. re-run the Pi smoke script (phase 0) and the tests;
+2. re-run the phase 0 verification checklist and the tests, and re-check the model shortlists in `core/models-catalog.ts`;
 3. refresh [Pi modules](docs/pi-modules.md).
 
 ---
