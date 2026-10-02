@@ -36,7 +36,7 @@
 1. **Delegate:** the parent runs `delegate <role> "<brief>"`, which is part of the `task-threads` capability.
 2. **Record the task:** the harness creates a `tasks` row (`id, role, parentThreadId, childThreadId, status`). The child thread is `<parentThreadId>-§-[TASK]-§-<role>-<id>`. The harness queues the brief on that thread with the role attached. The CLI prints `task <id> accepted`, and the parent ends its turn.
 3. **Run the child:** the runner starts the child batch with the role's model, tools, prompts and skills. With one active turn per agent, the child runs after the parent's turn ends.
-4. **Return the result:** when the child's batch finishes, the harness posts the child's **final assistant message** to the parent thread as `Result of task <id> (<role>): …`. It uses `sourceKey = task:<id>:result` from phase 2, so a retry can't post it twice. The model doesn't have to remember to report back.
+4. **Return the result:** when the child's batch finishes, the harness posts the child's **final assistant message** to the parent thread as `Result of task <id> (<role>): …`. It uses `sourceKey = task:<id>:result` from phase 2, so a retry can't post it twice. The model doesn't have to remember to report back. Take the last `assistant` message from the batch's last `agent_end`. Since Pi 0.99, `agent_end.messages` starts with the `role: "system"` message, so never take the first entry or count positions from the start.
 5. **Failure:** the parent receives `Task <id> (<role>) failed: <reason>`.
 6. **Cancellation:** cancelling the parent thread also cancels its queued or running child tasks.
 7. **Follow-ups:** `delegate --task <id> "<more>"` continues the same child thread, keeping its history.

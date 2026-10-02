@@ -8,7 +8,7 @@ In the web console, replies appear as they're written, and status changes show u
 
 ## Design
 
-- **From the unit:** the agent host forwards Pi RPC events (text deltas, tool start and end, saved-entry receipts) and queue state changes to the coordinator over the phase 6 WebSocket, as `stream` frames. They're held in memory only.
+- **From the unit:** the agent host forwards Pi RPC events (text deltas, tool start and end, saved-entry receipts) and queue state changes to the coordinator over the phase 6 WebSocket, as `stream` frames. They're held in memory only. Skip `role: "system"` messages, which Pi 0.99 includes in `agent_end.messages` and in session history, so the system prompt never appears as a chat bubble.
 - **Endpoint:** `GET /api/agents/:id/threads/:threadId/stream` uses Server-Sent Events, with today's cookie or bearer auth. It sends `row`, `delta`, `tool`, `entry` and `ping` events.
 - **In the web client:**
   - Deltas build a temporary bubble.

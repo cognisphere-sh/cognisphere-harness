@@ -53,7 +53,7 @@ base/capabilities/<id>/
 | Browser tasks (`agent-browser`) | Capability `browser` (skill + script + Chromium/Playwright dependencies) |
 | App home, platform code changes | Capability `platform` (skill: "ask nova") |
 | Plugin prompts (`plugin-telegram.md` …) | `base/capabilities/<plugin>/prompts/usage.md`, and their skills as they are today |
-| Extensions (`bash-guard`, `context-meta`, `skill-update-notice`) | Candidates to become capability extensions, following the extensions-first rule (open question 2). The delivery-receipt extension stays harness-owned and always loaded. **Known bug to fix in the rework:** `context-meta` never adds its Model/ContextUsage lines, on 0.84.4 and 0.99.2 alike. Its `context` handler only appends to a `user` or `toolResult` message, but the last message is always its own checkpoint (role `custom`). Found during phase 0. |
+| Extensions (`bash-guard`, `context-meta`, `skill-update-notice`) | Candidates to become capability extensions, following the extensions-first rule (open question 2). The delivery-receipt extension stays harness-owned and always loaded. |
 
 **Default capability set for new agents:** `notes`, `memory`, `task-threads`, `web-search`, `attachments`. Today's agents keep their behavior through migration: every current section stays enabled.
 

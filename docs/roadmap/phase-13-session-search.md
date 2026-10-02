@@ -11,7 +11,7 @@
 ## Design
 
 - **In the unit:** the agent host answers a `search` request by streaming through `sessions/**/*.jsonl` line by line, using `readline` with no new dependency.
-  - It matches user and assistant text, case-insensitively.
+  - It matches user and assistant text, case-insensitively. It skips `role: "system"` entries, where Pi 0.86+ stores the system prompt (in full on the first request, then as patches), unless open question 3 decides otherwise.
   - It returns `{threadId, sessionFile, entryId, timestamp, role, snippet}` and stops at `limit`.
   - It skips an incomplete last line, which happens while Pi is still writing.
 - **API and console:** `GET /api/agents/:id/search?q=&thread=&limit=` is forwarded to the unit. The console gets a search box, and clicking a result opens the thread at that entry.
@@ -30,3 +30,4 @@
 
 1. Can sub-agents search all threads, or only their own?
 2. Should tool calls and their output be included in the search?
+3. Should the stored system prompt (role "system" entries) be searchable, for example to find when an instruction changed?
