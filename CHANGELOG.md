@@ -18,6 +18,35 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Pi upgraded to 0.99.2** (`@earendil-works/pi-ai` and
+  `@earendil-works/pi-coding-agent`, pinned exactly). The runner now spawns
+  the `pi` bundled with the harness package instead of a global `pi` on
+  `PATH`, so the binary always matches the pinned version. Requires Node
+  `>=22.19.0` (as Pi already did).
+- `bootstrap.sh` no longer installs a global `pi` or reads `PI_VERSION`.
+  Existing agents' copies still do; that step is now unused and can be
+  dropped when reseeding. [affects: agents/*/bootstrap/bootstrap.sh]
+- A batch now ends when Pi reports `agent_settled` instead of `agent_end`, so
+  Pi's own retries (up to 3, backoff capped at 60 s), context-overflow
+  recovery and late follow-ups run inside the same batch. Queue retries
+  still apply after that.
+- Delivery receipts are saved in the session file as `cognisphere.delivery`
+  custom entries (outside the model's context) and reported over RPC as
+  `entry_appended`. Inputs an extension `handled` are marked done.
+- `context-meta` extension: the per-call `Model:` / `ContextUsage:` lines now
+  reach the model. They were dropped because the last message before each
+  call is the extension's own checkpoint, which the hook skipped. Reseed the
+  base extension. [affects: agents/*/extensions/context-meta.ts]
+- Models page: Sign in with ChatGPT on the OpenAI provider; OpenAI Codex is
+  now labelled "(legacy)"; curated model lists refreshed to models that exist
+  in Pi 0.99.2 (Claude Opus/Sonnet 5.5, GPT-6.x, Gemini 3.x, Grok 4.7, …).
+- `home-template/docs/base-harness/README.md`: bootstrap no longer pins `pi`;
+  new sign-in providers (refreshed wholesale on upgrade).
+
 ## [0.12.0]
 
 ### Breaking changes
