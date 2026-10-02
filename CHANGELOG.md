@@ -34,8 +34,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Pi upgraded to 0.99.2** (`@earendil-works/pi-ai` and
-  `@earendil-works/pi-coding-agent`, pinned exactly). The runner now spawns
+- **Pi upgraded to 1.0.0** (`@earendil-works/pi-ai` and
+  `@earendil-works/pi-coding-agent`, pinned exactly; via 0.99.2). The runner now spawns
   the `pi` bundled with the harness package instead of a global `pi` on
   `PATH`, so the binary always matches the pinned version. Requires Node
   `>=22.19.0` (as Pi already did).
@@ -55,7 +55,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   base extension. [affects: agents/*/extensions/context-meta.ts]
 - Models page: Sign in with ChatGPT on the OpenAI provider; OpenAI Codex is
   now labelled "(legacy)"; curated model lists refreshed to models that exist
-  in Pi 0.99.2 (Claude Opus/Sonnet 5.5, GPT-6.x, Gemini 3.x, Grok 4.7, …).
+  in Pi 1.0.0 (Claude Opus/Sonnet 5.5, GPT-6.x, Gemini 3.x, Grok 4.7, …);
+  Anthropic sign-in offers browser or copy-code login.
 - `home-template/docs/base-harness/README.md`: bootstrap no longer pins `pi`;
   new sign-in providers (refreshed wholesale on upgrade).
 

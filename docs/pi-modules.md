@@ -2,7 +2,7 @@
 
 **What this is:** a guide to the packages in the Pi monorepo (`earendil-works/pi`): what each one does, how they fit together, and which ones CogniSphere uses.
 
-**Snapshot:** Pi **0.99.2** (commit `e792ba131`, 2026-09-30). The harness pins exactly 0.99.2 in `packages/harness/package.json` ([phase 0](roadmap/phase-00-pi-upgrade.md)) and runs that package's own `pi` binary.
+**Snapshot:** Pi **1.0.0** (tag `v1.0.0`, 2026-10-01). The harness pins exactly 1.0.0 in `packages/harness/package.json` ([phase 0](roadmap/phase-00-pi-upgrade.md)) and runs that package's own `pi` binary. All packages are versioned 1.0.0 together; a package's README still says whether it is experimental.
 
 Pi changes quickly. For the version you're running, the package READMEs and `pi --help` are authoritative.
 
@@ -16,7 +16,6 @@ Pi changes quickly. For the version you're running, the package READMEs and `pi 
                        └──────────────────────────────────────────────────────────────────────────────────┘
                        ┌──────────────────────────── experimental (new) ───────────────────────────────┐
                        │  chord ──▶ pi-durable (durable harness: conversations, tasks, subagents)        │
-                       │  pi-agent-core Session/SessionRepo ──▶ pi-session-backend-sqlite-node           │
                        │  pi-protocol ──▶ pi-client  ◀──wire──▶  pi-server ──▶ session worker            │
                        └──────────────────────────────────────────────────────────────────────────────────┘
                          pi-telemetry (contracts) · evals (Pi's own behavior tests)
@@ -25,14 +24,13 @@ Pi changes quickly. For the version you're running, the package READMEs and `pi 
 | Package (npm) | Status | One-line purpose | CogniSphere today |
 |---|---|---|---|
 | `@earendil-works/pi-ai` | Stable | One LLM API across providers: model catalog, auth resolution, streaming, tools, cost | Imported for OAuth helpers (`oauth-logins.ts`) |
-| `@earendil-works/pi-agent-core` | Stable core; new `Session`/harness interfaces experimental | The agent loop (`Agent`, `agentLoop`) with tools, steering and events. Now also session repositories and an agent-harness interface. | Indirectly, through the coding agent |
+| `@earendil-works/pi-agent-core` | Stable | The agent loop (`Agent`, `agentLoop`) with tools, steering and events, plus the proxy stream. 1.0 removed its experimental sessions and harness; durable sessions live in `pi-durable`. | Indirectly, through the coding agent |
 | `@earendil-works/pi-coding-agent` | Stable (with an `experimental/` folder) | The `pi` CLI: built-in coding tools, sessions as JSONL, skills, extensions, RPC and SDK modes | **Yes.** Every batch runs the package's bundled `pi --mode rpc`. We also use its types and credential helpers. |
 | `@earendil-works/pi-tui` | Stable | Terminal UI library for interactive `pi` | No |
 | `@earendil-works/pi-mcp` | Stable | A small Model Context Protocol client (stdio, Streamable HTTP) | No (built into the CLI since 0.99; we disable it with `--no-extensions`) |
 | `@earendil-works/pi-codemode` | Stable | Runs model-written JavaScript in a QuickJS sandbox that can only call injected tools | No (same as above) |
 | `@earendil-works/chord` | Experimental | Framework for building an app from plugins whose parts ("facets") run in different processes, with typed services, state shared live with remote viewers, and cancellation contexts | No |
-| `@earendil-works/pi-durable` | Experimental ("API changes without notice") | A crash-safe agent harness: conversations, tasks, subagents and queued input all committed to storage | No; see [future plans](future/pi-native-runtime.md) |
-| `@earendil-works/pi-session-backend-sqlite-node` | Experimental | A SQLite store for `pi-agent-core` sessions (`node:sqlite`) | No |
+| `@earendil-works/pi-durable` | Experimental ("API changes without notice"); first documented release at 1.0.0, with a [design spec](https://github.com/earendil-works/pi/blob/main/packages/durable/docs/spec.md) | A crash-safe agent harness: conversations, tasks, subagents and queued input all committed to storage | No; see [future plans](future/pi-native-runtime.md) |
 | `@earendil-works/pi-protocol` | Experimental (version 8, no compatibility promise) | Message format for remote Pi sessions: framed CBOR envelopes, handshake, routing | No |
 | `@earendil-works/pi-client` | Experimental | Client for that protocol over any byte transport (a Unix socket is included) | No |
 | `@earendil-works/pi-server` | Experimental | Server for that protocol: routes clients to sessions running in worker processes | No |
@@ -56,9 +54,7 @@ Pi changes quickly. For the version you're running, the package READMEs and `pi 
 - **Queued input:** steering ("after the current tool round") and follow-up ("after this run").
 - **`streamProxy()`:** routes model calls through a backend URL with an auth token. It was designed for browsers, and is the same pattern as our model proxy.
 - **Low-level API:** `agentLoop` / `agentLoopContinue`.
-- **New (experimental):**
-  - `Session` / `SessionRepo` interfaces (sessions with branches, forks and an in-memory repo) and an `AgentHarness` interface. These are what the durable and server packages build on.
-  - SQLite storage lives in `pi-session-backend-sqlite-node`, so the core keeps no native dependencies.
+- **1.0:** the experimental `AgentHarness`, sessions, session storage and the `./node`, `./harness/*` and `./experimental/pico3` exports were removed. The package is only the agent loop now.
 
 ### `pi-coding-agent`: the `pi` CLI
 
@@ -72,6 +68,7 @@ The product we run. It adds to `pi-agent-core`:
   - they can register tools, commands and virtual models;
   - they can append entries (`pi.appendEntry`) or send messages.
 - **Built-in extensions (0.99):** `builtin:mcp`, `builtin:codemode`, `builtin:tool-search`, `builtin:llama.cpp`. `--no-extensions` turns all of them off.
+- **1.0:** the interactive TUI is fullscreen by default (irrelevant in RPC mode); Anthropic sign-in offers browser or copy-code login.
 - **Modes:**
   - **interactive** (TUI);
   - **print** / **json** (single run);
@@ -119,9 +116,9 @@ Everything is committed to storage before anything is shown. If the process dies
 | Tool replay | A tool interrupted by a crash reruns only if it's marked `replay: "safe"`. Otherwise the model gets an "interrupted" result. |
 | Watching | `viewState()` / `watch()` (Chord state with per-commit changes); `watchEvents()` gives coding-agent-style events. Partial output is committed at most every 100 ms. |
 | Storage | Memory, SQLite (WAL) or JSONL. **One process owns a storage at a time**, with no locking across processes. |
-| Environment | An `env` callback builds the execution environment for each tool call, such as a folder or a container per conversation. |
+| Environment | An `env` callback builds the `ExecutionEnv` (file system + shell) for each tool call, such as a folder or a container per conversation. The engine and model calls can run in one process while tools run elsewhere. |
 
-Its built-in tools are `read`, `write`, `edit` and `bash`. Images aren't supported yet. It has its own extension API and storage format, not the coding agent's extensions or JSONL sessions.
+Its built-in tools are `read`, `write`, `edit` and `bash`. Images aren't supported yet. It has its own extension API and storage format, not the coding agent's extensions or JSONL sessions. The spec lists "forced termination of non-cooperative extension code inside one process" as a non-goal: stopping a stuck turn needs process isolation, which the host must provide.
 
 ### `pi-protocol`, `pi-client`, `pi-server`: remote sessions
 
@@ -136,13 +133,7 @@ Its built-in tools are `read`, `write`, `edit` and `bash`. Images aren't support
   - the live `Session` and harness objects never cross the process boundary.
 - **Not provided yet:** peer authentication. Lifecycle management is deliberately outside the protocol.
 
-### `pi-session-backend-sqlite-node`
-
-- **Layout:** one SQLite file per session, with branches and forks.
-- **Single writer:** the host must guarantee one writer per session. There is no cross-process lease or lock.
-- **Search:** a separate projection, not built in.
-
 ## What this means for CogniSphere
 
-- **Now:** keep `pi-coding-agent` in RPC mode inside each agent unit ([decision](roadmap/phase-06-agent-host-split.md#rpc-vs-sdk)) and upgrade to 0.99.x ([phase 0](roadmap/phase-00-pi-upgrade.md)).
+- **Now:** keep `pi-coding-agent` 1.0.0 in RPC mode inside each agent unit ([decision](roadmap/phase-06-agent-host-split.md#rpc-vs-sdk), [phase 0](roadmap/phase-00-pi-upgrade.md)).
 - **Later:** `pi-durable` overlaps our message queue, delegation and crash recovery. `pi-protocol`/`pi-server` overlap the coordinator-to-unit link. `chord` matches our plugin split. Using them directly is in [future plans](future/pi-native-runtime.md), waiting until they're stable.

@@ -2,6 +2,8 @@
 
 [Roadmap](../roadmap.md) · Next: [Phase 1](phase-01-test-harness.md)
 
+**Update (2026-10-02):** the pin moved from 0.99.2 to **1.0.0** as a drop-in; see [Pi 1.0.0 follow-up](#pi-100-follow-up). The rest of this file describes the 0.84.4 → 0.99.2 upgrade.
+
 ## Requirement
 
 Move the harness from Pi **0.84.4** to **0.99.2** before building anything else on top of Pi, and fix the places where the harness doesn't use Pi the way Pi is designed to be used.
@@ -242,6 +244,30 @@ Landed on `main` from branch `phase-0-pi-upgrade` (commits `221f7ab`, `0e26d99`,
 - **Another session's edits committed:** `git add -A` in `0e26d99` included the planning session's uncommitted edits to phases 4, 5, 12 and 13. The content was what it intended. Since then, only explicit paths are staged.
 - **Changelog in an ignored file:** the first changelog entry went into `packages/harness/CHANGELOG.md`, a gitignored copy generated at publish time. It was moved to the root `CHANGELOG.md` (`8c366a1`).
 - **Duplicate implementation commit:** the phase landed as `221f7ab` before this session's own commit. `0e26d99` therefore holds only the follow-up pieces listed above.
+
+## Pi 1.0.0 follow-up
+
+Pi 1.0.0 shipped on 2026-10-01, a day after this phase landed on 0.99.2. It was reviewed against this phase on 2026-10-02.
+
+**What changed between 0.99.2 and 1.0.0, and its effect on us**
+
+| Change | Effect |
+|---|---|
+| RPC mode, extension API, session format | Unchanged. The only `agent-session` change restores MCP tools on resume, which we don't use. |
+| `--provider` without `--model` now fails | None; the runner always passes both. |
+| Anthropic sign-in asks browser or copy-code login first | Shown by the console's existing method chooser (the same one Codex uses). Copy-code login works when the browser is on another machine. |
+| Fullscreen TUI default, codemode, MCP sign-in hardening, Radius in `/login` | None in RPC mode with `--no-extensions` |
+| `pi-agent-core` dropped its experimental sessions and harness; the session-backend package is gone | Not used; [Pi modules](../pi-modules.md) refreshed |
+| `pi-durable` first documented release (still experimental) | Not adopted. The user decided on 2026-10-02 to keep the original plan (RPC units, our own queue); see [future plans](../future/pi-native-runtime.md). |
+
+**Changes:** `pi-coding-agent` and `pi-ai` are pinned to `1.0.0`. The lockfile was updated, and pnpm's minimum-release-age exemptions were extended to the 1.0.0 packages (the user chose to keep exemptions). `docs/pi-modules.md` now shows the 1.0.0 snapshot.
+
+**Verified:**
+- a trial in a scratch worktree, then again on the branch: `pnpm check` passes;
+- `pnpm test`: all 17 pass, including the 3 real-Pi tests on OpenRouter `google/gemini-3.5-flash-lite`;
+- every catalog model ID resolves in 1.0.0;
+- spawn-to-ready is about 137 ms (140 ms on 0.99.2);
+- Anthropic, ChatGPT and Codex sign-ins start from the console API (then cancelled).
 
 ## Open questions
 
