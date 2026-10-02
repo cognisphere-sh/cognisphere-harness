@@ -33,7 +33,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
-    "check": "tsc --noEmit && eslint src"
+    "check": "tsc --noEmit && eslint src test",
+    "test": "node scripts/test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.99.2",

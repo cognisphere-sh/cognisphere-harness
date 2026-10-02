@@ -63,6 +63,8 @@ Each plugin's `index.ts` becomes its **coordinator part**: receivers, OAuth and 
 
 ### Pi launch fixes (inside the agent host)
 
+- **Reading Pi's messages:** since Pi 0.99, `agent_end.messages` starts with the `role: "system"` message (the system prompt stored in the transcript). Code moved into the agent host that reads these messages must skip `system` entries. The runner's `endOfTurn()` reads only the last message, so it is unaffected.
+
 - **Turn deadline:** `turnTimeoutMinutes` aborts a hung turn (core known issue #7).
 - **Process-group cleanup:** Pi runs in its own process group, and the whole group is killed at batch end and on abort, so no leftover browser or dev server keeps writing.
 - **Environment allowlist:** Pi gets an explicit set of variables instead of a copy of the coordinator's environment (core known issue #9).

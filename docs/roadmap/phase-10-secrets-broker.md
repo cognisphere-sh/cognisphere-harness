@@ -44,6 +44,8 @@
 
 **Model calls:** Pi's provider config inside the unit points `baseUrl` at the proxy, with the placeholder as the API key. The coordinator uses the real key, or a fresh OAuth access token, and enforces the shared model check.
 
+**Where model sign-ins live today:** since phase 0, Pi's `auth.json` (OAuth tokens), `models.json` and `settings.json` are in `harness/.secrets/pi` (`PI_CODING_AGENT_DIR`), one per harness. This phase makes the coordinator the only reader of `auth.json`. It refreshes tokens there, or moves them into the connection store, and units get only a placeholder-based `models.json` in their own Pi config folder. Existing sign-ins must keep working through the migration, without reconnecting again.
+
 **Coverage:**
 
 - **Covered:** API keys in a header, query or path; bearer tokens; basic auth; OAuth2; client certificates.

@@ -2,7 +2,7 @@
 
 This is the only delivery and status tracker. Each phase has its own file in [roadmap/](roadmap/) with the requirement in plain language, the design, open questions and "done when" checks. The [high-level design](high-level-design.md) and the layer documents in [low-level/](low-level/) describe what is built today. Update them when a phase lands, and record the evidence (the commit or PR, and what was verified) in the phase's **Status** cell below.
 
-**Current status:** phase 0 is done; the other phases are planned. The phases are still under review, so expect them to change before implementation starts.
+**Current status:** phases 0 and 1 are done; the other phases are planned. The phases are still under review, so expect them to change before implementation starts.
 
 ## What we are building
 
@@ -66,7 +66,7 @@ Each phase depends only on earlier phases and leaves the system working.
 | # | Phase | Delivers | Status |
 |---|---|---|---|
 | 0 | [Pi 0.99 upgrade](roadmap/phase-00-pi-upgrade.md) | Move to Pi 0.99.2 with one pin (bundled `pi`), finish batches on `agent_settled`, receipts via `appendEntry`, ChatGPT sign-in and a refreshed model list. | **Done.** Merged to `main` (`221f7ab`…`2e48eed`). Real-model checks passed; see the [implementation summary](roadmap/phase-00-pi-upgrade.md#implementation-summary). Remaining manual step: reconnect Anthropic and ChatGPT sign-ins in each harness. |
-| 1 | [Test harness](roadmap/phase-01-test-harness.md) | Automated tests for the queue and runner, using a fake Pi process. | Planned |
+| 1 | [Test harness](roadmap/phase-01-test-harness.md) | Automated tests for the queue and runner, using a fake Pi process. | **Done.** `pnpm test`: 14 fake-Pi scenarios in about 3 s, offline. Breaking receipt handling, the duplicate guard, `handled` handling or settle-based completion each makes tests fail. 3 opt-in real-Pi tests pass against OpenRouter (`google/gemini-3.5-flash-lite`). See [phase 1](roadmap/phase-01-test-harness.md#implementation-summary). |
 | 2 | [Reliable intake](roadmap/phase-02-reliable-intake.md) | No lost messages while an agent is stopped. Duplicates ignored. Thread IDs validated. | Planned |
 | 3 | [Agent layout and assets](roadmap/phase-03-agent-layout-and-assets.md) | State folders, a read-only base, prompt and skill selection in `agent.json`, `assets.json` explanations, and migration of existing agents. | Planned |
 | 4 | [Core prompt and capabilities](roadmap/phase-04-core-prompt-and-capabilities.md) | The base prompt split into core plus capabilities. `agent.json` selects capabilities and Pi tools. | Planned |

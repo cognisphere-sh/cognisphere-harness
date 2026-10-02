@@ -215,6 +215,9 @@ export interface RunnerOpts {
   /** The shared model check (`model-access.ts`); a thread override it
    *  rejects falls back to the agent default at spawn. */
   modelUnavailableReason?: (providerId: string, modelId: string) => string | null;
+  /** Test-only: the command started instead of the bundled pi, with pi's
+   *  arguments appended (e.g. `[process.execPath, "test/fake-pi.ts", script]`). */
+  piCommand?: string[];
   log: Logger;
 }
 
@@ -891,7 +894,8 @@ export class AgentRunner extends EventEmitter {
       },
       "spawn pi",
     );
-    const child = spawn(process.execPath, [PI_CLI, ...args], {
+    const [cmd, ...cmdArgs] = this.opts.piCommand ?? [process.execPath, PI_CLI];
+    const child = spawn(cmd!, [...cmdArgs, ...args], {
       cwd: agentDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],

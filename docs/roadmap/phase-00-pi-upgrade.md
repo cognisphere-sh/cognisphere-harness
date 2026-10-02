@@ -195,6 +195,54 @@ Landed on `main` from branch `phase-0-pi-upgrade` (commits `221f7ab`, `0e26d99`,
 - Sign-in flows use fixed local callback ports, so two harnesses on one machine can't sign in to the same provider at once.
 - `pnpm-workspace.yaml` exempts the 0.99.2 Pi packages from the minimum release age; drop the exemption once they've aged.
 
+### Execution log
+
+1. **Review (before coding).** Read Pi's changelogs (coding-agent, ai, agent) from 0.84.4 to 0.99.2 and the unreleased commits, then checked each claim in this file against Pi's source. A trial type-check against an exact 0.99.2 pin in a scratch worktree passed with no code changes.
+2. **Findings that changed the plan.** These are recorded under [findings](#findings-from-the-review):
+   - The runner closed Pi at `agent_end`, so Pi's own retries never ran (already true on 0.84.4).
+   - Dispositions only matter with `input` handlers.
+   - Sign in with ChatGPT needs a device ID.
+   - The model shortlists were stale.
+   - Session files now store the system prompt.
+   - The dev machine's global `pi` had drifted to 0.85.1.
+   - Several rows of the old breaking-changes table were inferred from the changelog and wrong.
+3. **Decisions.** The user settled the eight [open questions](#open-questions). The planning session agreed with every finding and kept out of the files being changed.
+4. **Implementation** (`221f7ab`): exact pin, bundled `pi`, settle-based completion, receipts via `appendEntry`, dispositions, ChatGPT sign-in, shortlist refresh, Node engines, docs.
+5. **Live verification** on a scratch app home with real models (OpenAI Codex `gpt-5.5`, OpenRouter): the checks listed under **Verified** above.
+6. **Follow-ups found while testing:**
+   - context-meta's `Model:`/`ContextUsage:` lines never reached the model, on 0.84.4 too. Confirmed with a before/after test on both Pi versions, then fixed (`221f7ab`, comment in `0e26d99`).
+   - A test sync wiped a hand-written override in the shared `~/.pi/agent/models.json` (see incidents). The user chose a per-harness Pi folder (`2e48eed`). Sign-ins are reconnected rather than copied, and `--no-approve` was added.
+7. **Close-out:** changelog moved to the tracked root file (`8c366a1`), this summary written, and the roadmap marked done (`5fa5fc7`). `main` was fast-forwarded to `5fa5fc7`.
+
+### Changes by file
+
+| File | Change |
+|---|---|
+| `packages/harness/package.json` | `pi-coding-agent` and `pi-ai` pinned to `0.99.2`; `engines.node` `>=22.19.0` |
+| `pnpm-lock.yaml`, `pnpm-workspace.yaml` | Lockfile for 0.99.2. pnpm added minimum-release-age exemptions for the Pi packages and their new dependencies; the user chose to keep them. |
+| `src/core/runner.ts` | Spawns the bundled `pi` (`PI_CLI`) with `process.execPath`; finishes on `agent_settled` with the verdict from the last `agent_end`; `handled` prompt/steer → rows done; steers go through one `steer()` helper that awaits Pi's ack; `--no-approve`; Pi path in the spawn log |
+| `src/core/rpc.ts` | `onAgentSettled`; receipts read from `entry_appended` (`cognisphere.delivery`) instead of `setStatus`; `sendPrompt`/`sendSteer` return the disposition, and steer is now awaited |
+| `src/core/pi-delivery-receipts.ts` | `pi.appendEntry(RECEIPT_TYPE, …)` instead of `ctx.ui.setStatus`; entries present at `session_start` are never reported again |
+| `src/core/main.ts`, `src/core/config.ts` | `PI_CODING_AGENT_DIR` set to `piAgentDir(cfg)` = `harness/.secrets/pi` (created 0700) at startup |
+| `src/core/oauth-logins.ts` | `getDeviceId` passed to `login()` (Pi's `SettingsManager.getOrCreateDeviceId()`); comments point to the per-harness folder |
+| `src/core/models-catalog.ts` | `openai` gets `oauth: true` (Sign in with ChatGPT); Codex labelled "(legacy)"; every shortlist refreshed to IDs in 0.99.2; `KnownProvider` gains `typesafe` and `meta`; source paths fixed |
+| `src/core/pi-models-sync.ts`, `web/src/pages/models.tsx` | Text points to `.secrets/pi/` instead of `~/.pi/agent` |
+| `base-agent/bootstrap/bootstrap.sh` | Global `pi` install and `PI_VERSION` removed; steps renumbered |
+| `base-agent/extensions/context-meta.ts` | The usage lines are also appended when the last message is the extension's own (`custom`) checkpoint |
+| `home-template/scripts/setup-server.sh`, `home-template/docs/base-harness/README.md` | Comments and README no longer describe a global `pi`; new sign-in providers; tokens in `.secrets/pi/` |
+| `CLAUDE.md` | §7: one Pi pin in `package.json`; upgrades re-run this phase's checklist and re-check the shortlists |
+| `CHANGELOG.md` (root) | `[Unreleased]`: breaking change (per-harness Pi folder, sign in again) and the upgrade entries |
+| `docs/low-level/core.md`, `agents.md`, `api.md`, `cli.md`, `docs/pi-modules.md` | Bundled `pi`, settle-based completion, receipts, dispositions, system-prompt entries, per-harness Pi folder. `cli.md` known issue #7 narrowed and #9 removed. |
+| `docs/roadmap.md`, this file, `phase-06`, `docs/future/pi-native-runtime.md` | Phase rewritten from the review; receipts moved here from phase 6; pi-durable status mapping |
+| `phase-05`, `phase-12`, `phase-13` | The planning session's own edits, swept into `0e26d99` by mistake (see incidents) |
+
+### Incidents during execution
+
+- **Shared Pi config overwritten:** a scratch harness's model-override sync deleted a hand-written OpenRouter `compat` override in the user's real `~/.pi/agent/models.json`. It was restored from a backup taken before testing, and the content is identical. Root cause: every harness on a machine shared that folder. That led to the per-harness Pi folder.
+- **Another session's edits committed:** `git add -A` in `0e26d99` included the planning session's uncommitted edits to phases 4, 5, 12 and 13. The content was what it intended. Since then, only explicit paths are staged.
+- **Changelog in an ignored file:** the first changelog entry went into `packages/harness/CHANGELOG.md`, a gitignored copy generated at publish time. It was moved to the root `CHANGELOG.md` (`8c366a1`).
+- **Duplicate implementation commit:** the phase landed as `221f7ab` before this session's own commit. `0e26d99` therefore holds only the follow-up pieces listed above.
+
 ## Open questions
 
 All settled:

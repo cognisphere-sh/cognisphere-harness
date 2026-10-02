@@ -295,7 +295,7 @@ Yes. Each thread has its own history, and all threads share one agent folder. Wi
 
 #### How do I test a change locally?
 
-There is no automated test suite. Run `pnpm check` for types and lint, then run the server with `pnpm dev` (and `pnpm dev:web` for the console) against a scratch data folder, and try the change by hand. Details are in the [core FAQ](low-level/core.md#how-do-i-run-and-debug-core-locally).
+Run `pnpm check` (types and lint) and `pnpm test` (runner and queue tests against a fake Pi, plus opt-in real-Pi tests), then run the server with `pnpm dev` (and `pnpm dev:web` for the console) against a scratch data folder, and try the change by hand. Details are in the [core FAQ](low-level/core.md#how-do-i-run-and-debug-core-locally).
 
 #### Will Pi's RPC mode be replaced by the Pi SDK?
 

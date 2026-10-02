@@ -67,7 +67,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 5. Resolve All Lint & Type Errors Before Declaring Done
 
-**After every change, run `pnpm check` and resolve every error and warning.**
+**After every change, run `pnpm check` and `pnpm test`, and resolve every error, warning and failure.**
 
 - This is a pnpm workspace (`packages/harness`, `packages/web`). The single entrypoint is `pnpm check` (root) — it runs `pnpm -r run check`, i.e. typecheck + lint for both packages. A task is not complete while it reports anything.
 - Warnings count. Fix them, or if intentional, suppress with a targeted `// eslint-disable-next-line <rule>` plus a one-line reason.
@@ -105,7 +105,7 @@ Keep one authoritative explanation per concern. Do not add competing system/serv
   - set its **Status** cell in `docs/roadmap.md` with evidence (commit or PR, what was verified);
   - rewrite the affected layer docs and the HLD from "planned" to "current";
   - update the shipped app-home reference for user-visible changes.
-- Once phase 1 adds `pnpm test`, run it together with `pnpm check` after every change.
+- Run `pnpm test` together with `pnpm check` after every change. New runner, queue or launch behavior gets a fake-Pi scenario in `packages/harness/test/`.
 
 **Decisions to respect** (reasons in `docs/roadmap.md` and the phase files; change them only with the user):
 

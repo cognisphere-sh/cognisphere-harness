@@ -43,6 +43,7 @@ docker run -d --name cs-<harnessId>-<agentId> --label cognisphere.agent=<id>
 - **Base folder:** at start, the agent host points `assets/base` at `/opt/cognisphere/base`. In process mode it points at the host's base folder instead. Either way it's recreated on every start, so switching runtimes is safe.
 - **Reaching the coordinator:** containers connect to `COGNISPHERE_URL`, for example `http://host.docker.internal:<port>`. On Linux this needs `--add-host=host.docker.internal:host-gateway` and the coordinator listening on the bridge address.
 - **Not mounted:** `.secrets/`, other agents, the coordinator database, the host's `HOME`, the Docker socket.
+- **Pi's config folder:** since phase 0, the coordinator runs Pi with `PI_CODING_AGENT_DIR=harness/.secrets/pi`, which holds `auth.json`, `models.json` and `settings.json`. Containers can't see that folder. Each container gets its own Pi config folder (on temporary disk or under `.runtime/`) with the `models.json` and settings it needs. API-key providers work through environment variables, as today. Subscription sign-ins (OAuth tokens in `auth.json`) are the open question below.
 
 ### Installs
 
@@ -76,3 +77,4 @@ From the agent's point of view there is **one Python and one Node environment**,
 3. For root agents: should `assets/install/apt.txt` be baked into the next image automatically, or only after operator approval?
 4. Should resource limits (CPU, memory, pids) be set per agent in `agent.json`, or as one harness-wide default?
 5. Should the console show image build logs and an "image out of date" badge per agent?
+6. **Subscription sign-ins before phase 10:** Docker agents can't use OAuth providers (Claude Pro, ChatGPT) without a refresh token in the container. Should phase 9 copy a per-agent `auth.json` into the container's Pi config folder (secrets inside the container until phase 10), or allow only API-key providers for Docker agents until phase 10's proxy lands?

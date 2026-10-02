@@ -7,6 +7,7 @@ packages/harness/LICENSE
 packages/harness/skills/
 .env
 .env.local
+.env.test
 *.log
 .DS_Store
 .venv/
