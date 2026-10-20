@@ -102,5 +102,5 @@ if (process.exitCode) {
   console.log(`  git tag ${tag} && git push origin ${tag}`);
   console.log(`  gh release create ${tag} --title "${tag}" --notes-from-tag`);
   console.log(`\nThe 'release: published' event triggers .github/workflows/publish.yml,`);
-  console.log(`which runs 'pnpm publish' against GitHub Packages.`);
+  console.log(`which publishes to npmjs.org via npm trusted publishing.`);
 }

@@ -18,9 +18,17 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.13.0]
 
 ### Breaking changes
+
+- **Published to npmjs.org; no install token.** `@cognisphere-sh/*` packages
+  now come from the public npm registry instead of GitHub Packages. Delete the
+  `@cognisphere-sh:registry=https://npm.pkg.github.com` line from the home's
+  `.npmrc` (delete the file if nothing else is in it), or installs keep asking
+  GitHub Packages, which has no 0.13.0. `COGNISPHERE_NPM_TOKEN` and the
+  `npm.pkg.github.com/:_authToken` line in `~/.npmrc` are no longer used and
+  can be removed. [affects: .npmrc]
 
 - **Each harness has its own Pi config folder.** The server sets
   `PI_CODING_AGENT_DIR` to `harness/.secrets/pi/`, so Pi's `auth.json`,
@@ -34,6 +42,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Deploy scripts no longer need a GitHub token: `setup-server.sh` and
+  `build.sh` drop the `read:packages` checks and the `~/.npmrc` token line,
+  `remote-bootstrap.sh` logs `gh` in only to clone the repo, the systemd units
+  drop `COGNISPHERE_NPM_TOKEN`, and `config.example` drops the key
+  (refreshed wholesale on upgrade).
+- `init` no longer writes a `.npmrc` into new homes.
 - **Pi upgraded to 0.99.2** (`@earendil-works/pi-ai` and
   `@earendil-works/pi-coding-agent`, pinned exactly). The runner now spawns
   the `pi` bundled with the harness package instead of a global `pi` on

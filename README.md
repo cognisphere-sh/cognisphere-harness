@@ -42,7 +42,7 @@ Plugins implement one interface: `manifest`, `start`, `stop`, optional HTTP hand
 
 ## Run an app home
 
-Prerequisites: Node.js 20.12 or later, pnpm, and access to the configured GitHub Packages registry. Configure registry authentication as described in the [CLI installation guide](docs/low-level/cli.md#installation).
+Prerequisites: Node.js 20.12 or later and pnpm. The package is public on npmjs.org; see the [CLI installation guide](docs/low-level/cli.md#installation).
 
 ```bash
 npx @cognisphere-sh/cognisphere-harness init my-app

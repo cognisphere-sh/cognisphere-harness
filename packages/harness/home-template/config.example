@@ -44,12 +44,6 @@ BACKUP_S3_ACCESS_KEY=    # keys for that endpoint (blank = aws CLI chain / IAM r
 BACKUP_S3_SECRET_KEY=
 AWS_PROFILE=             # local testing only: named aws-cli profile (EC2 uses the IAM role)
 
-# Token for the private @cognisphere-sh/* packages on GitHub Packages.
-# Leave blank to use the run user's `gh` CLI token (it must have the
-# `read:packages` scope: gh auth refresh -s read:packages). Or paste a
-# GitHub PAT with read:packages here for a non-interactive box.
-COGNISPHERE_NPM_TOKEN=
-
 # ---- deployment-specific params ---------------------------------------------
 # This file is harness-owned (refreshed on upgrade). Your app's extra keys go
 # in `config` too, but document them in scripts/app/config.example and read

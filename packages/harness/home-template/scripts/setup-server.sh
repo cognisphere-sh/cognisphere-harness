@@ -50,33 +50,7 @@ npm install -g corepack@latest
 corepack enable
 corepack prepare pnpm@latest --activate
 
-# ---- GitHub Packages token --------------------------------------------------
-# @cognisphere-sh/* live on GitHub Packages, whose npm registry requires a token
-# with the read:packages scope EVEN for public packages (anonymous = 401, a
-# scope-short token = 403). Prefer COGNISPHERE_NPM_TOKEN from config (a PAT); else
-# use the run user's gh CLI token. A gh OAuth token (gho_*) exists but often lacks
-# read:packages, so a bare `gh auth token` check would pass yet still 403 at fetch
-# time — verify/repair the scope here instead of failing mid-build.
-if [[ -z "${COGNISPHERE_NPM_TOKEN:-}" ]]; then
-  command -v gh >/dev/null || { echo "no COGNISPHERE_NPM_TOKEN in config and gh CLI not installed. Set COGNISPHERE_NPM_TOKEN (a PAT with read:packages) in config, or install gh and run: sudo -u $RUN_USER gh auth login -s read:packages"; exit 1; }
-  # gh runs as the app user; ensure it's logged in and the token carries read:packages.
-  # (gh prints "Token scopes:" to stderr, hence 2>&1.)
-  if ! sudo -u "$RUN_USER" gh auth status >/dev/null 2>&1; then
-    echo ">> gh is not authenticated for $RUN_USER — launching login (needs read:packages)"
-    sudo -u "$RUN_USER" gh auth login -s read:packages || { echo "gh auth login failed"; exit 1; }
-  elif ! sudo -u "$RUN_USER" gh auth status 2>&1 | grep -q 'read:packages'; then
-    echo ">> gh token for $RUN_USER lacks the read:packages scope — refreshing"
-    sudo -u "$RUN_USER" gh auth refresh -s read:packages || { echo "gh auth refresh failed"; exit 1; }
-  fi
-  COGNISPHERE_NPM_TOKEN="$(sudo -u "$RUN_USER" gh auth token 2>/dev/null || true)"
-fi
-[[ -n "$COGNISPHERE_NPM_TOKEN" ]] || { echo "no GitHub token for @cognisphere-sh packages. Set COGNISPHERE_NPM_TOKEN in config (a PAT with read:packages), or run: sudo -u $RUN_USER gh auth refresh -s read:packages"; exit 1; }
-# pnpm refuses to expand env-var credentials from the committed project .npmrc,
-# so the auth line must live in the run user's ~/.npmrc (a trusted source).
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
-sudo -u "$RUN_USER" touch "$RUN_HOME/.npmrc"
-sudo -u "$RUN_USER" grep -qF 'npm.pkg.github.com/:_authToken' "$RUN_HOME/.npmrc" \
-  || echo '//npm.pkg.github.com/:_authToken=${COGNISPHERE_NPM_TOKEN}' | sudo -u "$RUN_USER" tee -a "$RUN_HOME/.npmrc" >/dev/null
 
 # ---- credentials ------------------------------------------------------------
 # `scripts/server.sh secrets` is the single source: it writes users.json
@@ -89,7 +63,7 @@ sudo -u "$RUN_USER" bash "$ROOT/scripts/server.sh" secrets
 # ---- build (as the app user so node_modules aren't root-owned) -------------
 # Delegated to scripts/build.sh — the same command used for every later deploy
 # (git pull && sudo ./scripts/server.sh restart).
-sudo -u "$RUN_USER" env COGNISPHERE_NPM_TOKEN="$COGNISPHERE_NPM_TOKEN" bash "$ROOT/scripts/build.sh"
+sudo -u "$RUN_USER" bash "$ROOT/scripts/build.sh"
 
 # ---- agent runtimes: build each agent's Python venv + CLIs ------------------
 # Each agent has a bootstrap/bootstrap.sh (idempotent) that creates <agent>/.venv
@@ -133,10 +107,6 @@ Type=simple
 User=$RUN_USER
 WorkingDirectory=$ROOT/harness
 Environment=PATH=$UNIT_PATH
-# Empty so pnpm can expand the \${COGNISPHERE_NPM_TOKEN} ref in the run user's
-# ~/.npmrc without warning. The service does no installs, so no real token is
-# needed at runtime.
-Environment=COGNISPHERE_NPM_TOKEN=
 ExecStart=$PNPM_BIN exec cognisphere serve --port $HARNESS_PORT
 Restart=on-failure
 RestartSec=3
@@ -161,7 +131,6 @@ Environment=PATH=$UNIT_PATH
 Environment=NODE_ENV=production
 Environment=PORT=$APP_PORT
 Environment=HARNESS_URL=http://127.0.0.1:$HARNESS_PORT
-Environment=COGNISPHERE_NPM_TOKEN=
 # 'next start' honors \$PORT; passing "-- -p" trips Next 16's arg parser (it
 # reads -p as a project dir), so rely on the PORT env above.
 ExecStart=$PNPM_BIN start

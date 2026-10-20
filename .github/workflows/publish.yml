@@ -1,13 +1,11 @@
-# Publish @cognisphere-sh/cognisphere-harness to GitHub Packages.
+# Publish @cognisphere-sh/cognisphere-harness to npmjs.org.
 #
 # Triggered when a GitHub Release is published (tag the release with the version
 # you bumped in packages/harness/package.json), or manually.
 #
-# NOTE: the automatic GITHUB_TOKEN only has `packages: write` for the repo's own
-# owner. Because the package scope is `@cognisphere-sh`, this workflow must run
-# in a repository under the `cognisphere-sh` org for the token to be able to
-# publish. If the repo lives elsewhere, swap GITHUB_TOKEN for an org PAT with
-# write:packages stored as a secret.
+# Auth is npm trusted publishing (OIDC): the package's npmjs.com settings trust
+# this repo + this workflow file, so no token is stored. Renaming this file
+# breaks publishing until the trusted publisher is updated on npmjs.com.
 name: publish
 
 on:
@@ -17,13 +15,12 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  id-token: write # OIDC for npm trusted publishing
+  packages: write # runtime image on GHCR
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -32,11 +29,14 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org
           cache: pnpm
+      # Trusted publishing needs npm >= 11.5.1.
+      - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      # Supply the registry auth token (the committed .npmrc omits it).
-      - run: echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" >> .npmrc
-      # `publish` runs the package's prepack: builds the web UI into dist-web/
-      # and bundles CHANGELOG.md. --no-git-checks: CI runs from a detached tag.
-      - run: pnpm --filter @cognisphere-sh/cognisphere-harness publish --no-git-checks
+      # `pnpm pack` runs the package's prepack (builds the web UI into dist-web/,
+      # bundles CHANGELOG.md); `npm publish` does the OIDC exchange and adds
+      # provenance.
+      - working-directory: packages/harness
+        run: pnpm pack && npm publish ./*.tgz --access public
