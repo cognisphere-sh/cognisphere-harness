@@ -129,14 +129,7 @@ When developing the harness itself, use `pnpm dev` and `pnpm dev:web` from the r
 
 ## Installation
 
-The package is on GitHub Packages. Put the scope line in the project `.npmrc` and the token line in your own `~/.npmrc`. Read the token from an environment variable, and never commit it.
-
-```ini
-@cognisphere-sh:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${COGNISPHERE_NPM_TOKEN}
-```
-
-With `COGNISPHERE_NPM_TOKEN` set in your shell:
+The package is public on npmjs.org; installing needs no token.
 
 ```bash
 npx @cognisphere-sh/cognisphere-harness init my-app
@@ -267,16 +260,6 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 3. Run `sudo ./scripts/setup-server.sh` on Ubuntu. It installs everything, creates the services, nginx and HTTPS, and prints the console login.
 
 To create the machine too, run `scripts/aws/setup.sh` or `scripts/contabo/setup.sh` from your laptop first ([server deployment](#server-deployment)).
-
-#### Installation can't reach GitHub Packages.
-
-Check three things:
-
-- the project `.npmrc` has the scope line;
-- your `~/.npmrc` has the token line;
-- `COGNISPHERE_NPM_TOKEN` is set for the shell or service user doing the install.
-
-The token needs the `read:packages` scope. On a server, `setup-server.sh` uses `COGNISPHERE_NPM_TOKEN` from `config`, or else the run user's `gh` login.
 
 #### "Not a harness directory". What now?
 

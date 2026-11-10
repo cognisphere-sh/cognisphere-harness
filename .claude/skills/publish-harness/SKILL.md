@@ -1,16 +1,16 @@
 ---
 name: publish-harness
-description: Publish a new version of the @cognisphere-sh/cognisphere-harness library to GitHub Packages. Covers the bump, the CHANGELOG section (including the shipped-artifact rule for agent/plugin seeds and deploy-time wiring), preflight, tag and release. Use when asked to "publish the harness", "release a new version", "cut a release", "bump and publish" or "ship the library" — and whenever merged changes need to reach existing homes, since agent/plugin seeds, home-template and .claude/skills only travel to a home through a published version. (v1.1.0)
+description: Publish a new version of the @cognisphere-sh/cognisphere-harness library to npmjs.org. Covers the bump, the CHANGELOG section (including the shipped-artifact rule for agent/plugin seeds and deploy-time wiring), preflight, tag and release. Use when asked to "publish the harness", "release a new version", "cut a release", "bump and publish" or "ship the library" — and whenever merged changes need to reach existing homes, since agent/plugin seeds, home-template and .claude/skills only travel to a home through a published version. (v1.2.0)
 metadata:
   author: cognisphere
-  version: "1.1.0"
+  version: "1.2.0"
   argument-hint: <new-version e.g. 0.3.0>
 ---
 
 # Publish the CogniSphere harness
 
 Publishes `@cognisphere-sh/cognisphere-harness` (the backend library, in
-`packages/harness/`) to **GitHub Packages**. Paths below are relative to the
+`packages/harness/`) to **npmjs.org** (public). Paths below are relative to the
 **repo root**.
 
 The actual `pnpm publish` runs **in CI** (`.github/workflows/publish.yml`),
@@ -92,8 +92,8 @@ gh release create v<version> --title "v<version>" --notes-from-tag
 ```
 
 Publishing the release fires the `release: published` event → CI runs
-`pnpm install`, `pnpm check`, appends the registry token to `.npmrc`, then
-`pnpm --filter @cognisphere-sh/cognisphere-harness publish --no-git-checks`.
+`pnpm install`, `pnpm check`, `pnpm pack`, then `npm publish` with npm trusted
+publishing (OIDC — no token stored).
 
 ### 5. Confirm
 
@@ -105,16 +105,14 @@ Watch the run: `gh run watch` (or `gh run list --workflow=publish.yml`). Green
 - **`pnpm pack --filter` writes the `.tgz` to the cwd (repo root), NOT
   `packages/harness/`.** `cd packages/harness && pnpm pack` writes it to the
   package dir instead. The driver handles the `--filter` case and cleans up.
-- **CI's token only has `packages: write` for the repo's own owner.** The scope
-  is `@cognisphere-sh`, so the repo must live under the `cognisphere-sh` org for
-  the automatic `GITHUB_TOKEN` to publish. Elsewhere → swap in an org PAT with
-  `write:packages` (see the workflow's header comment).
+- **Publishing auth is npm trusted publishing.** The package's settings on
+  npmjs.com trust `cognisphere-sh/cognisphere-harness` + `publish.yml`.
+  Renaming the workflow file or moving the repo breaks publishing until the
+  trusted publisher is updated there. The package also requires 2FA and
+  disallows bypass tokens, so there is no token to put in CI.
 - **`prepack` builds the sibling `web` package.** If `cognisphere-web` won't
   build, `pnpm pack`/`publish` fails before anything is published — preflight
   catches this locally.
-- **Committed `.npmrc` omits the auth token on purpose.** Don't commit a token.
-  Local publish needs `npm config set //npm.pkg.github.com/:_authToken <token>`;
-  CI appends it from `GITHUB_TOKEN` at runtime.
 - **No `dist/` — the package ships TS `src/` and runs via `tsx`.** Don't look
   for a compiled-JS build step; there isn't one. `files` is `bin, src, dist-web,
   CHANGELOG.md`.
@@ -130,7 +128,7 @@ Watch the run: `gh run watch` (or `gh run list --workflow=publish.yml`). Green
 | `✗ git tag vX already exists` | That version was already released — bump higher. |
 | `✗ pnpm check failed` | Typecheck/lint errors — `pnpm -r run lint:fix`, then hand-fix. |
 | `✗ tarball missing dist-web/` | `cognisphere-web` build failed — run `pnpm --filter cognisphere-web build` to see why. |
-| CI `403 Forbidden` on publish | Token lacks `write:packages` for `@cognisphere-sh`, or repo isn't under the org (see Gotchas). |
+| CI `403`/`404` on publish | Trusted publisher on npmjs.com doesn't match this repo/workflow file, or `id-token: write` is missing (see Gotchas). |
 | CI `409 Conflict` / version exists | That version is already on the registry — bump and re-release. |
 
 ## Verify checklist

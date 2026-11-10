@@ -58,12 +58,8 @@ command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
 grep -q '\.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 export PATH="$HOME/.local/bin:$PATH"
 
-# gh interactive auth — read:packages is required to install @cognisphere-sh packages
-if ! gh auth status >/dev/null 2>&1; then
-  gh auth login -s read:packages
-elif ! gh auth status 2>&1 | grep -q read:packages; then
-  gh auth refresh -s read:packages
-fi
+# gh interactive auth — used to clone the repo below
+gh auth status >/dev/null 2>&1 || gh auth login
 
 # Claude Code auth only — setup-token runs the OAuth flow and stores the
 # credential without starting a session. Skipped if already authenticated.

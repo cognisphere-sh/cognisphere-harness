@@ -35,14 +35,6 @@ config
 **/inboxes/
 `;
 
-// The auth token deliberately is NOT here: pnpm refuses to expand env-var
-// credentials from a committed project .npmrc, so the _authToken line must
-// live in the run user's ~/.npmrc (scripts/setup-server.sh writes it on the
-// server; `init` prints the one-liner for local installs).
-const NPMRC = `# @cognisphere-sh/* packages live on GitHub Packages, not npmjs.org.
-@cognisphere-sh:registry=https://npm.pkg.github.com
-`;
-
 const WORKSPACE_YAML = `packages:
   - harness
   - app
@@ -79,7 +71,6 @@ export function cmdInit(argv: string[]): void {
     description: `${id}: cognisphere app home — the agent harness (harness/) + the user-facing app (app/). Workspace members are listed in pnpm-workspace.yaml.`,
   });
   writeFileSync(join(dir, "pnpm-workspace.yaml"), WORKSPACE_YAML);
-  writeFileSync(join(dir, ".npmrc"), NPMRC);
   writeFileSync(join(dir, ".gitignore"), GITIGNORE);
 
   // Deploy scripts, config templates, and the app/ placeholder — shipped with
@@ -148,9 +139,6 @@ export function cmdInit(argv: string[]): void {
   info("");
   info("Next steps:");
   info(`  cd ${cdTarget}`);
-  info("  # the private registry needs a read:packages token in YOUR ~/.npmrc");
-  info("  # (same env var the deploy scripts use — export it before installing):");
-  info("  echo '//npm.pkg.github.com/:_authToken=${COGNISPHERE_NPM_TOKEN}' >> ~/.npmrc");
   info("  pnpm install");
   info("  cd harness");
   info("  pnpm exec cognisphere agent new <name>           # add your first agent");
