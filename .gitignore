@@ -11,3 +11,4 @@ packages/harness/skills/
 *.log
 .DS_Store
 .venv/
+.archify/
