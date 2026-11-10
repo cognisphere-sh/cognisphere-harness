@@ -26,8 +26,9 @@ interface SchedulesFile {
 /**
  * Cron-style scheduler. Watches `<stateDir>/schedules.json` for changes;
  * registers a `croner` timer per active schedule; on fire, emits a
- * `schedule_fire` notification with `threadIdOverride` set to the schedule's
- * stored ThreadId so the reminder lands back where it was set.
+ * `schedule_fire` notification with `metadata.threadId` set to the schedule's
+ * stored ThreadId so the reminder lands back where it was set (unless the
+ * agent's router sends it elsewhere).
  */
 export default class SchedulerPlugin implements Plugin {
   manifest: PluginManifest = {
@@ -114,9 +115,8 @@ export default class SchedulerPlugin implements Plugin {
     this.ctx.notify("schedule_fire", {
       text: s.text,
       channelId: s.channelId ?? s.name,
-      threadIdOverride: s.threadId,
       doNotSteer: true,
-      metadata: { ScheduleName: s.name, Cron: s.cron },
+      metadata: { threadId: s.threadId, ScheduleName: s.name, Cron: s.cron },
     });
     if (s.onetime) {
       this.timers.get(s.name)?.stop();

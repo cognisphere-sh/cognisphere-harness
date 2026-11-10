@@ -19,8 +19,8 @@ import { cn } from "@/lib/utils";
  *
  * Anything outside this set falls back to a raw JSON textarea so you don't
  * lose the data, just the form ergonomics. Nested objects render
- * recursively as collapsible groups so deeply-nested configs (model,
- * threadIdStrategy) stay legible.
+ * recursively as collapsible groups so deeply-nested configs (e.g. model)
+ * stay legible.
  */
 
 export interface JsonSchema {

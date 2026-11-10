@@ -37,13 +37,13 @@ export default class AdminPlugin implements Plugin {
   deliver(args: {
     text: string;
     channelId?: string;
-    threadIdOverride?: string;
+    threadId?: string;
   }): void {
     if (!this.ctx) throw new Error("admin plugin not started");
     this.ctx.notify("user_message", {
       text: args.text,
       channelId: args.channelId ?? "operator",
-      threadIdOverride: args.threadIdOverride,
+      metadata: args.threadId ? { threadId: args.threadId } : undefined,
     });
   }
 }

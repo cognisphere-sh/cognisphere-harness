@@ -124,7 +124,6 @@ export interface AgentDetail {
   agentJson: {
     name: string;
     model: { provider: string; id: string; thinkingLevel?: string };
-    threadIdStrategy: { type: string };
     maxConcurrentSlots?: number;
     maxAttempts?: number;
     secretsSchema?: unknown;

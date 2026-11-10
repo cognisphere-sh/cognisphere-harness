@@ -14,14 +14,17 @@ import { fileURLToPath } from "node:url";
 import type { AgentDb } from "./queue.js";
 import { PiRpcClient } from "./rpc.js";
 import type { PiMessage } from "./rpc.js";
-import type {
-  AgentJson,
-  BatchMessage,
-  NotifyPayload,
-  ThreadIdStrategy,
-} from "./types.js";
+import type { AgentJson, BatchMessage, NotifyPayload } from "./types.js";
 import { AGENT_TOOLS } from "./types.js";
 import type { Logger } from "./logger.js";
+import {
+  DEFAULT_THREAD,
+  resolveThreads,
+  WORKFLOW_PREFIX,
+  workflowName,
+  type RouterMessage,
+  type Routing,
+} from "./router.js";
 
 /** Loaded into every pi child (see spawnPi). Same extension as this file, so it
  *  resolves whether the harness runs from `.ts` sources or compiled `.js`. */
@@ -188,7 +191,15 @@ interface ActiveBatch {
   /** Sent rows pi confirmed saving: a delivery receipt named them. The only
    *  delivery signal — the same receipt sets the row's `pi_entry_id`. */
   deliveredIds: Set<number>;
+  /** Workflow runs only: kills the script (abort, stop, timeout). */
+  kill?: () => void;
+  /** Workflow runs only: the kill came from the timeout. */
+  timedOut?: boolean;
 }
+
+/** A workflow script still running after this long is killed and the row
+ *  fails; a hung script would otherwise hold a worker. */
+const WORKFLOW_TIMEOUT_MS = 10 * 60_000;
 
 export interface RunnerOpts {
   rootDir: string;
@@ -215,6 +226,11 @@ export interface RunnerOpts {
   /** The shared model check (`model-access.ts`); a thread override it
    *  rejects falls back to the agent default at spawn. */
   modelUnavailableReason?: (providerId: string, modelId: string) => string | null;
+  /** The agent's router and workflows (`router.ts`). Absent ⇒ every message
+   *  goes to its `metadata.threadId`, else `main`. */
+  routing?: Routing;
+  /** Test-only: workflow script timeout (default 10 minutes). */
+  workflowTimeoutMs?: number;
   /** Test-only: the command started instead of the bundled pi, with pi's
    *  arguments appended (e.g. `[process.execPath, "test/fake-pi.ts", script]`). */
   piCommand?: string[];
@@ -270,7 +286,20 @@ export class AgentRunner extends EventEmitter {
 
   start(): void {
     if (this.status === "running") return;
-    const swept = this.opts.db.sweepInFlight(this.maxAttempts);
+    // Workflow rows still in flight were killed by a crash: they fail (no
+    // retry) and, since the script's own error handling never ran, core
+    // reports them on main.
+    const crashedWorkflows = this.opts.db
+      .listEvents({ statuses: ["in_flight"], limit: 1_000_000, offset: 0 })
+      .filter((r) => r.thread_id.startsWith(WORKFLOW_PREFIX));
+    const swept = this.opts.db.sweepInFlight(this.maxAttempts, undefined, WORKFLOW_PREFIX);
+    for (const r of crashedWorkflows) {
+      this.reportKilledWorkflow(
+        workflowName(r.thread_id)!,
+        { id: r.id, pluginId: r.plugin_id, channelId: r.channel_id, text: r.text },
+        "the harness stopped unexpectedly while it was running",
+      );
+    }
     if (swept.retrying.length || swept.dead.length) {
       this.opts.log.info(
         { retrying: swept.retrying.length, dead: swept.dead.length },
@@ -297,6 +326,7 @@ export class AgentRunner extends EventEmitter {
       if (!a.cancelled) a.shutdown = true;
       a.cancelled = true;
       a.rpc?.sendAbort();
+      a.kill?.();
     }
     this.signalAll();
     await Promise.all(this.workers).catch(() => {});
@@ -304,15 +334,37 @@ export class AgentRunner extends EventEmitter {
   }
 
   /**
-   * Plugin-driven enqueue. Always persists to the queue first; if a batch is
-   * actively streaming on the same threadId+plugin+channel, also emits a steer
-   * to the live child (best-effort).
+   * Plugin-driven enqueue. The agent's router picks the threads (see
+   * `router.ts`); each gets its own queue row. Returns the row ids.
    */
-  notify(payload: NotifyPayload & { pluginId: string }): number {
+  notify(payload: NotifyPayload & { pluginId: string }): number[] {
     if (this.status !== "running") {
       throw new Error(`runner ${this.opts.agentId} not running`);
     }
-    const threadId = payload.threadIdOverride ?? this.computeThreadId(payload);
+    const { _notification, ...metadata } = payload.metadata ?? {};
+    const msg: RouterMessage = {
+      notification: typeof _notification === "string" ? _notification : "",
+      pluginId: payload.pluginId,
+      channelId: payload.channelId,
+      text: payload.text,
+      metadata,
+      isSilent: payload.isSilent === true,
+    };
+    return resolveThreads(this.opts.routing, msg, this.opts.log).map((t) =>
+      this.enqueueOn(t, payload),
+    );
+  }
+
+  /** Swap in reloaded routing (the agent edited its router or workflows). */
+  setRouting(routing: Routing): void {
+    this.opts.routing = routing;
+  }
+
+  /**
+   * Persist one row on `threadId`; if a batch is actively streaming on that
+   * thread, also emit a steer to the live child (best-effort).
+   */
+  private enqueueOn(threadId: string, payload: NotifyPayload & { pluginId: string }): number {
     const id = this.opts.db.enqueue({
       pluginId: payload.pluginId,
       channelId: payload.channelId,
@@ -364,6 +416,7 @@ export class AgentRunner extends EventEmitter {
     if (!a) return false;
     a.cancelled = true;
     a.rpc?.sendAbort();
+    a.kill?.();
     this.opts.log.info({ threadId }, "abort requested");
     return true;
   }
@@ -373,13 +426,6 @@ export class AgentRunner extends EventEmitter {
    *  the runner writing to the session jsonl. */
   isThreadActive(threadId: string): boolean {
     return this.active.has(threadId);
-  }
-
-  /** The thread id a message from this plugin/channel would route to, per the
-   *  agent's `threadIdStrategy`. Used by plugin-facing ops (e.g. thread reset)
-   *  that address a thread by its plugin-side channel. */
-  threadIdFor(pluginId: string, channelId: string): string {
-    return this.computeThreadId({ pluginId, channelId, text: "" });
   }
 
   // ── internals ─────────────────────────────────────────────
@@ -395,6 +441,11 @@ export class AgentRunner extends EventEmitter {
       const threadId = this.opts.db.peekHighestPriorityThread(exclude);
       if (!threadId) {
         await this.waitForWork();
+        continue;
+      }
+      const workflow = workflowName(threadId);
+      if (workflow !== undefined) {
+        await this.runWorkflowRow(threadId, workflow, log);
         continue;
       }
       // Continue rows (a delivery that was interrupted) must resume in
@@ -445,6 +496,164 @@ export class AgentRunner extends EventEmitter {
       }
     }
     log.debug("worker stopped");
+  }
+
+  /**
+   * Run one queued row of a workflow thread: the workflow's script, with the
+   * message as JSON on stdin, cwd the agent folder, and a Pi child's env
+   * (`PI_THREAD_ID` = this thread, so `scripts/agent-msg/send` works and the
+   * agent's replies come back here). Exit 0 marks the row done; anything else
+   * marks it failed, with no retry.
+   */
+  private async runWorkflowRow(threadId: string, name: string, log: Logger): Promise<void> {
+    const [row] = this.opts.db.dequeueBatch(threadId, { limit: 1 });
+    if (!row) return;
+    const active: ActiveBatch = {
+      threadId,
+      sentIds: new Set([row.id]),
+      sessionId: "",
+      phase: "spawning",
+      cancelled: false,
+      shutdown: false,
+      rpc: null,
+      isContinue: false,
+      continueIds: new Set(),
+      deliveredIds: new Set(),
+    };
+    this.active.set(threadId, active);
+    try {
+      const error = await this.execWorkflow(name, row, active, log.child({ workflow: name }));
+      // Workflows never retry: a failed or interrupted run fails the row
+      // (maxAttempts 1). Reporting it is the script's job (try/catch +
+      // agent-msg); the operator can requeue it from the console.
+      if (active.cancelled && !active.shutdown) {
+        this.opts.db.markBatchCancelled([row.id], null);
+      } else if (active.shutdown || error) {
+        const why = active.shutdown ? "[shutdown] workflow interrupted" : error!;
+        this.opts.db.markBatchFailed([row.id], why, 1, null);
+        // A killed script never got to run its own error handling, so core
+        // tells the agent instead. Ordinary failures are the script's to report.
+        if (active.shutdown) this.reportKilledWorkflow(name, row, "the agent was stopped while it was running");
+        else if (active.timedOut) {
+          const ms = this.opts.workflowTimeoutMs ?? WORKFLOW_TIMEOUT_MS;
+          const limit = ms % 60_000 === 0 ? `${ms / 60_000}-minute` : `${ms / 1000}-second`;
+          this.reportKilledWorkflow(name, row, `it ran past the ${limit} timeout`);
+        }
+      } else {
+        this.opts.db.markBatchDone([row.id], null);
+      }
+    } catch (err) {
+      log.error({ err, threadId }, "workflow run crashed (uncaught)");
+    } finally {
+      active.phase = "exited";
+      this.active.delete(threadId);
+      this.signalAll();
+      this.emit("batch-completed");
+    }
+  }
+
+  /**
+   * Core killed a workflow script (timeout, stop, crash), so its own error
+   * handling didn't run: queue a `workflow_killed` notice on `main` so the
+   * agent can babysit it. Straight to `main`, not through the router, so no
+   * rule can send it back into the workflow. Queued even while the runner is
+   * stopping; it is handled on the next start.
+   */
+  private reportKilledWorkflow(
+    name: string,
+    row: Pick<BatchMessage, "id" | "pluginId" | "channelId" | "text">,
+    reason: string,
+  ): void {
+    const text = [
+      `Workflow \`${name}\` was killed on event ${row.id} because ${reason}, so its own error handling did not run. The event is marked failed and won't be retried; it may have been partly done.`,
+      `Original message (from ${row.pluginId}, channel ${row.channelId}):`,
+      row.text,
+    ].join("\n");
+    this.enqueueOn(DEFAULT_THREAD, {
+      pluginId: "workflow",
+      channelId: name,
+      text,
+      metadata: { _notification: "workflow_killed", workflow: name, failedEventId: row.id },
+    });
+    this.opts.log.warn({ workflow: name, id: row.id, reason }, "workflow killed; reported on main");
+  }
+
+  /** Resolves to null on exit 0, else an error string for the row. */
+  private execWorkflow(
+    name: string,
+    row: BatchMessage,
+    active: ActiveBatch,
+    log: Logger,
+  ): Promise<string | null> {
+    const wf = this.opts.routing?.workflows.get(name);
+    if (!wf) return Promise.resolve(`[workflow] unknown workflow: ${name}`);
+    const { _notification, ...metadata } = row.metadata ?? {};
+    const input = {
+      id: row.id,
+      notification: typeof _notification === "string" ? _notification : "",
+      pluginId: row.pluginId,
+      channelId: row.channelId,
+      threadId: row.threadId,
+      text: row.text,
+      metadata,
+      isSilent: row.isSilent,
+      attempts: row.attempts,
+    };
+    return new Promise((resolve) => {
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(wf.script, [], {
+          cwd: this.agentDir(),
+          env: this.childEnv(row.threadId),
+          stdio: ["pipe", "pipe", "pipe"],
+          // Own process group, so a kill also reaches what the script started.
+          detached: true,
+        });
+      } catch (err) {
+        log.error({ err, script: wf.script }, "workflow failed to start");
+        resolve(`[workflow] failed to start: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      active.kill = () => {
+        try {
+          process.kill(-child.pid!, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      };
+
+      const timer = setTimeout(() => {
+        active.timedOut = true;
+        active.kill?.();
+      }, this.opts.workflowTimeoutMs ?? WORKFLOW_TIMEOUT_MS);
+      let output = "";
+      const keep = (d: Buffer) => {
+        output = (output + d.toString()).slice(-4000);
+      };
+      child.stdout!.on("data", keep);
+      child.stderr!.on("data", keep);
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        log.error({ err, script: wf.script }, "workflow failed to start");
+        resolve(`[workflow] failed to start: ${err.message}`);
+      });
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          log.info({ id: row.id, output }, "workflow finished");
+          resolve(null);
+        } else {
+          log.error({ id: row.id, code, signal, output }, "workflow failed");
+          const why = active.timedOut ? "timed out" : `exit ${code ?? signal}`;
+          resolve(`[workflow] ${why}: ${output.slice(-500)}`);
+        }
+      });
+      // A script may exit without reading stdin; that's not an error.
+      child.stdin!.on("error", () => {});
+      child.stdin!.end(JSON.stringify(input));
+      active.phase = "streaming";
+      log.info({ id: row.id, plugin: row.pluginId }, "workflow started");
+    });
   }
 
   private async processBatch(
@@ -749,12 +958,7 @@ export class AgentRunner extends EventEmitter {
     sessionId: string,
     log: Logger,
   ): PiRpcClient {
-    const agentDir = join(
-      this.opts.rootDir,
-      this.opts.harnessId,
-      "agents",
-      this.opts.agentId,
-    );
+    const agentDir = this.agentDir();
     const tools = AGENT_TOOLS.join(",");
     // The assembled prompt goes to pi as a FILE PATH, not as argv text: Linux
     // caps any single argv/env string at MAX_ARG_STRLEN = 128 KiB (a per-string
@@ -842,37 +1046,7 @@ export class AgentRunner extends EventEmitter {
       }
     }
 
-    // Auto-activate `<agentDir>/.venv` if present: prepend its bin/ to PATH,
-    // set VIRTUAL_ENV, and clear PYTHONHOME (per Python venv convention).
-    // The operator creates the venv (`python -m venv .venv`) in the agent
-    // dir; if missing, this block is a no-op and pi inherits ambient Python.
-    const env: Record<string, string | undefined> = { ...process.env };
-    const venvDir = join(agentDir, ".venv");
-    const venvBin = join(venvDir, "bin");
-    if (existsDir(venvBin)) {
-      env.VIRTUAL_ENV = venvDir;
-      env.PATH = `${venvBin}:${env.PATH ?? ""}`;
-      delete env.PYTHONHOME;
-    }
-
-    // Identity + loopback URL so plugin scripts can reach back into in-process
-    // plugins via `${PI_WEBHOOK_BASE}/<plugin-id>/<rest>`.
-    env.PI_AGENT_ID = this.opts.agentId;
-    env.PI_THREAD_ID = threadId;
-    env.PI_WEBHOOK_BASE = `${this.opts.serverBaseUrl}/webhook/${this.opts.agentId}`;
-    // Server origin for scripts that hit the HTTP API directly (e.g. the
-    // seeded agent-msg/send) — without it their hardcoded fallback breaks on
-    // any non-default port.
-    env.HARNESS_BASE_URL = this.opts.serverBaseUrl;
-
-    // Plugin secrets, flattened to bare keys (e.g. TELEGRAM_BOT_TOKEN), so
-    // the agent's bash invocations and plugin CLI scripts can read them
-    // directly from env. Trade-off: secrets become visible to anything the
-    // agent runs (bash history, error logs, transcripts). The operator
-    // accepts this trade-off in exchange for ergonomic plugin scripts.
-    for (const [k, v] of Object.entries(this.opts.envSecrets ?? {})) {
-      env[k] = v;
-    }
+    const env = this.childEnv(threadId);
 
     // Cross-provider thread override: `envSecrets` only carries the agent's
     // default provider key, so inject the override provider's credentials.
@@ -908,16 +1082,45 @@ export class AgentRunner extends EventEmitter {
     return new PiRpcClient(child, log.child({ rpc: threadId }));
   }
 
-  private computeThreadId(p: NotifyPayload & { pluginId: string }): string {
-    const s: ThreadIdStrategy = this.opts.agentJson.threadIdStrategy;
-    switch (s.type) {
-      case "single":
-        return "default";
-      case "plugin":
-        return p.pluginId;
-      case "plugin_channel":
-        return `${p.pluginId}:${p.channelId}`;
+  private agentDir(): string {
+    return join(this.opts.rootDir, this.opts.harnessId, "agents", this.opts.agentId);
+  }
+
+  /** Env for anything the runner starts in the agent folder: Pi children and
+   *  workflow scripts. */
+  private childEnv(threadId: string): Record<string, string | undefined> {
+    // Auto-activate `<agentDir>/.venv` if present: prepend its bin/ to PATH,
+    // set VIRTUAL_ENV, and clear PYTHONHOME (per Python venv convention).
+    // The operator creates the venv (`python -m venv .venv`) in the agent
+    // dir; if missing, this block is a no-op and pi inherits ambient Python.
+    const env: Record<string, string | undefined> = { ...process.env };
+    const venvDir = join(this.agentDir(), ".venv");
+    const venvBin = join(venvDir, "bin");
+    if (existsDir(venvBin)) {
+      env.VIRTUAL_ENV = venvDir;
+      env.PATH = `${venvBin}:${env.PATH ?? ""}`;
+      delete env.PYTHONHOME;
     }
+
+    // Identity + loopback URL so plugin scripts can reach back into in-process
+    // plugins via `${PI_WEBHOOK_BASE}/<plugin-id>/<rest>`.
+    env.PI_AGENT_ID = this.opts.agentId;
+    env.PI_THREAD_ID = threadId;
+    env.PI_WEBHOOK_BASE = `${this.opts.serverBaseUrl}/webhook/${this.opts.agentId}`;
+    // Server origin for scripts that hit the HTTP API directly (e.g. the
+    // seeded agent-msg/send) — without it their hardcoded fallback breaks on
+    // any non-default port.
+    env.HARNESS_BASE_URL = this.opts.serverBaseUrl;
+
+    // Plugin secrets, flattened to bare keys (e.g. TELEGRAM_BOT_TOKEN), so
+    // the agent's bash invocations and plugin CLI scripts can read them
+    // directly from env. Trade-off: secrets become visible to anything the
+    // agent runs (bash history, error logs, transcripts). The operator
+    // accepts this trade-off in exchange for ergonomic plugin scripts.
+    for (const [k, v] of Object.entries(this.opts.envSecrets ?? {})) {
+      env[k] = v;
+    }
+    return env;
   }
 
   private waitForWork(): Promise<void> {

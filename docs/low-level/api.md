@@ -58,7 +58,7 @@ sequenceDiagram
     participant Runner as AgentRunner
     participant DB as AgentDb
     Client->>API: {"text":"Summarize workspace/report.md","threadId":"review"}
-    API->>Admin: deliver(text, channelId, threadIdOverride)
+    API->>Admin: deliver(text, channelId, threadId)
     Admin->>Runner: ctx.notify("user_message", ...)
     Runner->>DB: Insert event (or steer a live batch on "review")
     API-->>Client: {"ok": true}
@@ -374,7 +374,7 @@ Auth required. Predates `/api`; the console chat still uses it.
 | POST | `/admin/:agentId/send` | `{ text, channelId?, threadId? }` | `{ ok: true }` | 404 agent; 400 empty `text`; 500 admin plugin not installed; 503 admin plugin not running |
 | POST | `/admin/:agentId/abort` | `{ threadId }` | `{ ok: true\|false }` | 404 agent; 400 no `threadId`; 503 agent not running |
 
-- **Send:** `AdminPlugin.deliver()` → `ctx.notify("user_message", { text, channelId, threadIdOverride })` → `runner.notify()`: enqueue, or steer a live batch on that thread, like any plugin input. `channelId` defaults to `operator`; `threadId` is an explicit routing override, otherwise the agent's thread strategy decides. `priority`, `isSilent`, `doNotSteer` are not exposed. No idempotency key: don't blindly resend after an uncertain response.
+- **Send:** `AdminPlugin.deliver()` → `ctx.notify("user_message", { text, channelId, metadata: { threadId } })` → `runner.notify()`: the agent's router picks the thread, then enqueue, or steer a live batch on that thread, like any plugin input. `channelId` defaults to `operator`; `threadId` is passed as `metadata.threadId`, which the router honours unless it decides otherwise; without it the router picks (by default `main`). `priority`, `isSilent`, `doNotSteer` are not exposed. No idempotency key: don't blindly resend after an uncertain response.
 - **Abort:** `runner.abort(threadId)` sends an `abort` RPC to the thread's Pi child and marks the batch's inputs `cancelled` (no retry). `ok` says whether an active batch was found, so `200 { ok: false }` means "nothing to abort". It does not delete queued work or undo side effects.
 
 ## 10. Plugin webhooks — `/webhook/*`
@@ -494,7 +494,7 @@ There is no stream and no outbound callback. The console polls events every 2 s 
 
 #### How do I give each of my users their own conversation?
 
-Send your own `threadId` on every message, such as `user-42`. It overrides the agent's thread strategy; without it, a `single`-strategy agent puts every message in thread `default`. A thread ID must be one path segment: no `/` or `\`, no leading `.`, at most 256 characters. By default an agent runs one conversation at a time (`maxConcurrentSlots: 1`), so other users' messages wait in the queue. To reset a user's conversation, `DELETE /api/agents/<agent>/sessions/<threadId>` (409 while it's running).
+Send your own `threadId` on every message, such as `user-42`. The agent's router honours it by default; without it, every message goes to `main` unless the router says otherwise. A thread ID must be one path segment: no `/` or `\`, no leading `.`, at most 256 characters (otherwise routing logs it and uses `main`). By default an agent runs one conversation at a time (`maxConcurrentSlots: 1`), so other users' messages wait in the queue. To reset a user's conversation, `DELETE /api/agents/<agent>/sessions/<threadId>` (409 while it's running).
 
 #### Can one of my users see another user's data?
 

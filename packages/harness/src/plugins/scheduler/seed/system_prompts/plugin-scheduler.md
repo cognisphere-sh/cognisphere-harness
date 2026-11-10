@@ -5,7 +5,7 @@ receive a `schedule_fire` notification — the inbound `<harness-metadata>`
 block has `ScheduleName` and `Cron` keys so you know which one fired.
 
 The `--thread-id` you pass when adding a schedule decides which thread the
-fire lands in. To make a reminder return to the current thread, pass
+fire lands in (your router honours it unless one of its rules says otherwise). To make a reminder return to the current thread, pass
 `{{ThreadId}}` (the harness substitutes the value into your prompt).
 
 ## CLI

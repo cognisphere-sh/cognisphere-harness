@@ -226,12 +226,15 @@ export class AgentDb {
    *    this — `doNotSteer` only forbids steering into a live batch, not forming
    *    a fresh prompt.
    *
+   *  - `limit` — claim at most this many rows (workflow threads run one row
+   *    per script run).
+   *
    * A plain call (no options) claims everything still queued — resend + fresh
    * rows — which the runner concatenates into one prompt.
    */
   dequeueBatch(
     threadId: string,
-    opts: { continueOnly?: boolean; excludeDoNotSteer?: boolean } = {},
+    opts: { continueOnly?: boolean; excludeDoNotSteer?: boolean; limit?: number } = {},
   ): BatchMessage[] {
     const conds = ["thread_id = ?", "status = 'queued'"];
     if (opts.continueOnly) conds.push("pi_entry_id IS NOT NULL");
@@ -240,7 +243,8 @@ export class AgentDb {
     const txn = this.db.transaction((): BatchMessage[] => {
       const rows = this.db
         .prepare<unknown[], EventRow>(
-          `SELECT * FROM events WHERE ${where} ORDER BY priority DESC, id ASC`,
+          `SELECT * FROM events WHERE ${where} ORDER BY priority DESC, id ASC` +
+            (opts.limit ? ` LIMIT ${Math.floor(opts.limit)}` : ""),
         )
         .all(threadId);
       if (rows.length === 0) return [];
@@ -488,13 +492,22 @@ export class AgentDb {
     return { events };
   }
 
-  /** Crash recovery: any row stuck in 'in_flight' is treated as a failed attempt. */
-  sweepInFlight(maxAttempts: number, error = "process died mid-batch") {
+  /** Crash recovery: any row stuck in 'in_flight' is treated as a failed
+   *  attempt. Rows on a thread starting with `noRetryPrefix` (workflow
+   *  threads, which never retry) fail outright. */
+  sweepInFlight(maxAttempts: number, error = "process died mid-batch", noRetryPrefix?: string) {
     const rows = this.db
-      .prepare<unknown[], { id: number }>(
-        `SELECT id FROM events WHERE status = 'in_flight'`,
+      .prepare<unknown[], { id: number; thread_id: string }>(
+        `SELECT id, thread_id FROM events WHERE status = 'in_flight'`,
       )
       .all();
+    if (noRetryPrefix) {
+      const noRetry = rows.filter((r) => r.thread_id.startsWith(noRetryPrefix)).map((r) => r.id);
+      const rest = rows.filter((r) => !r.thread_id.startsWith(noRetryPrefix)).map((r) => r.id);
+      const a = this.markBatchFailed(noRetry, `[crash] ${error}`, 1, null);
+      const b = this.markBatchFailed(rest, `[crash] ${error}`, maxAttempts, null);
+      return { retrying: b.retrying, dead: [...a.dead, ...b.dead] };
+    }
     if (rows.length === 0) return { retrying: [], dead: [] };
     // sessionId=null preserves any existing pi_session_id via COALESCE.
     return this.markBatchFailed(rows.map((r) => r.id), `[crash] ${error}`, maxAttempts, null);

@@ -42,9 +42,8 @@ What the plugin receives in `ctx`:
 | `timezone`, `log` | The harness timezone, and a logger labelled `plugin:<agent>:<plugin>`. |
 | `httpBaseUrl` | The local URL of the plugin's webhook route. Only set if the plugin has `handleHttpRequest`. |
 | `notify(name, payload)` | Send an input to the agent. `name` is saved as `metadata._notification`. Returns nothing. |
-| `resetThread(channelId, override?)` | Ask core to delete a conversation. Refused while it's running. |
 
-The payload needs `text` and `channelId`. It can also carry `metadata`, `threadIdOverride`, `priority`, `isSilent` and `doNotSteer` ([what each field does](core.md#input-fields-notifypayload)).
+The payload needs `text` and `channelId`. It can also carry `metadata`, `priority`, `isSilent` and `doNotSteer` ([what each field does](core.md#input-fields-notifypayload)).
 
 > **`notify()` is not a receipt.** Anything a plugin sends before its agent's runner has started (during the plugin's own `start()`, on every agent Start, Restart or settings swap) is **dropped**, with only a log line. After the agent is stopped, `notify()` silently does nothing, not even a log line (a well-behaved plugin has stopped by then anyway). When the runner is running, the row is saved before `notify()` returns, but the plugin still isn't told about failures. So don't advance an external cursor just because `notify()` returned.
 
@@ -98,8 +97,8 @@ flowchart TB
 | [admin](../../packages/harness/src/plugins/admin/index.ts) | Messages sent from the console (`/admin/:id/send`). No state. | `user_message` (channel `operator`) | Nothing is sent anywhere. The console reads the answer from the session file. |
 | [scheduler](../../packages/harness/src/plugins/scheduler/index.ts) | Watches `state/schedules.json`. Jobs use cron syntax in the harness timezone. A one-time job is a cron job that pauses itself after firing. Each job goes to the thread saved with it, with `doNotSteer: true`, so it never interrupts a running turn. | `schedule_fire` | A copied script adds and edits schedules. |
 | [agent-messaging](../../packages/harness/src/plugins/agent-messaging/index.ts) | Other agents post to its webhook with the shared `X-Webhook-Secret`. The receiver's `allowMessageFrom` (default: everyone) decides who may send. The sender picks the target thread. | `agent_message` (channel `agent`) | The copied `agent-msg/send` script. Its "silent" option sets both `isSilent` and `doNotSteer`. |
-| [telegram](../../packages/harness/src/plugins/telegram/index.ts) | Long-polls the Telegram Bot API (there is no webhook mode). Downloads attachments to `inbox/`. Can be limited with `allowedChatIds` and routed with `state/routes.json`. Handles `/reset` itself by deleting that chat's thread. The poll position is kept in memory only. | `message_received`, `edited` | A copied script calls the Bot API using the token from the environment. |
-| [gws](../../packages/harness/src/plugins/gws/index.ts) | Polls Gmail through the GWS CLI; polls never overlap. The thread is `<Subject> [<gmailThreadId>]`, and `routes.json` rules can change it. Unread mail is marked read. Settings in `state/` are re-read on every poll. `pollIntervalSec: -1` turns polling off. In backlog mode, the first email of each thread wakes the agent, and later ones arrive as silent (without `doNotSteer`, so they *can* join a running turn). Already-seen threads are listed in `ingested-threads.jsonl`. | `email_received`, `email_silent`, `gws_settings` (channel `main`) | Copied `scripts/gws/*` helpers and the GWS CLI. |
+| [telegram](../../packages/harness/src/plugins/telegram/index.ts) | Long-polls the Telegram Bot API (there is no webhook mode). Downloads attachments to `inbox/`. Can be limited with `allowedChatIds`. Picks no thread: the chat id is the `channelId`, and the agent's router decides. The poll position is kept in memory only. | `message_received`, `edited` | A copied script calls the Bot API using the token from the environment. |
+| [gws](../../packages/harness/src/plugins/gws/index.ts) | Polls Gmail through the GWS CLI; polls never overlap. Picks no thread: the Gmail thread id is the `channelId` and the thread's first subject is `metadata.Subject`, and the agent's router decides. Unread mail is marked read. Settings in `state/` are re-read on every poll. `pollIntervalSec: -1` turns polling off. In backlog mode, the first email of each thread wakes the agent, and later ones arrive as silent (without `doNotSteer`, so they *can* join a running turn). Already-seen threads are listed in `ingested-threads.jsonl`. | `email_received`, `email_silent`, `gws_settings` (channel `main`) | Copied `scripts/gws/*` helpers and the GWS CLI. |
 | [artifacts](../../packages/harness/src/plugins/artifacts/index.ts) | Serves agent-written HTML pages. The agent publishes by having a copied script write `state/<slug>.<public\|private>.html`; the file name holds the visibility. | — | The copied `scripts/artifacts/artifact` script. Serving rules are in [API §10](api.md#10-plugin-webhooks--webhook). |
 
 ### Why core plugins can't be copied
@@ -143,7 +142,7 @@ ctx.notify("ticket_received", {
 ```
 
 - Save the file before calling `notify`.
-- With `threadIdStrategy: plugin_channel`, this lands on thread `helpdesk:ticket-T42`.
+- It lands on `main` unless the agent's router routes it, e.g. `if (msg.pluginId === "helpdesk") return "helpdesk:" + msg.channelId;` → thread `helpdesk:ticket-T42`.
 - The queue **doesn't remove duplicates** by `ticketId`. If your source can deliver the same ticket twice, your plugin has to check.
 
 ## HTTP and safety
@@ -214,7 +213,7 @@ You don't need `cognisphere plugin add`. That only copies the code so you can ch
 2. Put the bot token in `TELEGRAM_BOT_TOKEN` (Telegram bucket) and restart the agent.
 3. Check the logs for `telegram authenticated`.
 
-The token isn't a required secret. If it's missing or Telegram rejects it, the plugin logs a warning and shows `running` while doing nothing ([issue 4](#known-issues-and-suggested-improvements)). Don't use one bot token on two agents: both would poll the same bot. A user who sends `/reset` wipes that chat's thread. With the default `single` strategy that is the agent's one shared thread.
+The token isn't a required secret. If it's missing or Telegram rejects it, the plugin logs a warning and shows `running` while doing nothing ([issue 4](#known-issues-and-suggested-improvements)). Don't use one bot token on two agents: both would poll the same bot.
 
 #### How do I restrict who can message my agent?
 
@@ -287,7 +286,7 @@ It sees `text` after a `<harness-metadata>` block. The block holds `Timestamp`, 
 
 #### How do I choose which thread an input lands on?
 
-By default, the agent's `threadIdStrategy` picks the thread from your plugin ID and `channelId` ([routing](core.md#routing)). Use one stable `channelId` per conversation, such as a chat or ticket ID. Pass `threadIdOverride` to pick an exact thread. Telegram and GWS do this with a `routes.json` rule file.
+You don't: the agent's router (`workspace/router.ts`) does ([routing](core.md#routing)). Give it what a rule needs: one stable `channelId` per conversation (a chat or ticket ID) and any useful `metadata` (subject, sender). Set `metadata.threadId` only when the input targets a specific thread, as agent-messaging and the scheduler do; the router honours it by default. Without a rule or a `metadata.threadId`, input goes to `main`. Don't ship your own routing rules.
 
 #### Is `notify()` guaranteed to deliver?
 

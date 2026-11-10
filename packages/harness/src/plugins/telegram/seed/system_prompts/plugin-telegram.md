@@ -17,12 +17,10 @@ Photos, voice notes, videos and documents are downloaded into
 `read`; convert anything else with `markitdown` / `pdftoppm` / `ffmpeg` (see
 the harness preamble).
 
-`/reset` is handled by the plugin itself — it wipes the conversation's context
-and never reaches you. If a user asks how to start over, tell them to send it.
-
-To deliver a chat to a thread of your choosing — park a group chat on its own,
-or fold several chats into one — follow the `route-chats` skill
-(`scripts/telegram/routes`).
+The plugin picks no thread: Telegram messages go to `main` unless your router
+(`workspace/router.ts`) sends them elsewhere. To give each chat its own thread,
+or park a group chat on its own, add a rule there, e.g.
+`if (msg.pluginId === "telegram") return "telegram:" + msg.channelId;`.
 
 ## Outbound — `scripts/telegram/telegram-cli`
 

@@ -137,7 +137,7 @@ The folder `<harnessRoot>/agents/<id>/` *is* the agent: its name is the agent ID
 1. copies the template `src/agents/base-agent/` (`system_prompts/0-base_prompt.md` and `1-agent.md`, `bootstrap/`, `extensions/`, `scripts/`, `knowledge/`, `workspace/`);
 2. with `--dev`, copies the developer persona on top;
 3. copies shipped skills into `skills/agent/` (`create-skill` for every agent, the full set for `nova`);
-4. writes a starter `agent.json` (Anthropic Sonnet, `single` thread).
+4. writes a starter `agent.json` (Anthropic Sonnet).
 
 A folder made by hand or copied from another agent works the same way.
 
@@ -267,7 +267,7 @@ sequenceDiagram
     Runner->>DB: 8. Mark done / retry / failed
 ```
 
-1. **Arrive.** A plugin calls `ctx.notify(name, payload)`. The context adds the plugin ID and `metadata._notification = name` and hands it to the runner. The runner [picks the thread](#routing) and saves a `queued` row.
+1. **Arrive.** A plugin calls `ctx.notify(name, payload)`. The context adds the plugin ID and `metadata._notification = name` and hands it to the runner. The runner asks the agent's [router](#routing) which thread(s) the input goes to and saves one `queued` row per thread.
 
    If that thread is already running and the input doesn't say `doNotSteer`, it is fed into the running turn instead (step 6).
 2. **Choose.** A free worker asks the database for the next thread. The database:
@@ -275,7 +275,7 @@ sequenceDiagram
    - skips threads that only have silent rows;
    - otherwise takes the highest priority, and the oldest row on a tie.
 
-   It then claims that thread's rows in one transaction and marks them `in_flight`.
+   It then claims that thread's rows in one transaction and marks them `in_flight`. A [workflow thread](#workflow-threads) (`workflow:<name>`) instead claims one row and runs the workflow's script; steps 3–8 don't apply.
 
    If some rows are **retries of inputs Pi already saw**, only those are claimed first, and the prompt is a short "please continue" nudge. The other queued rows are fed in together right after Pi accepts the prompt. `doNotSteer` rows wait for the next batch.
 3. **Start Pi.** The model is the thread's own setting if it has one and it can still be used, otherwise the agent default ([model check](#model-check)). The runner builds the system prompt and starts Pi on the thread's session file ([details](#execution-and-example)).
@@ -294,10 +294,9 @@ The answer is in Pi's session file. **Nothing is sent back to Telegram or email 
 | Field | Default | What it does | Example |
 |---|---|---|---|
 | `text` | required | The message the model reads. | `Summarize the report.` |
-| `channelId` | required | The source conversation. Used to pick the thread. | Telegram chat `42` |
-| `pluginId` | set by the context | Which plugin sent it. Used to pick the thread. | `telegram` |
-| `threadIdOverride` | — | Use exactly this thread. | `weekly-report` |
-| `metadata` | `{}` | Extra facts shown to the model. Keys are rendered in PascalCase, and a few reserved labels can't be overridden. `Retry: true` is added whenever this row has failed before. | `{ "attachment": "plugins/telegram/inbox/report.pdf" }` |
+| `channelId` | required | The source conversation. The router can use it. | Telegram chat `42` |
+| `pluginId` | set by the context | Which plugin sent it. The router can use it. | `telegram` |
+| `metadata` | `{}` | Extra facts for the router and the model. `metadata.threadId` asks for a thread (the router honours it unless it decides otherwise). Keys are rendered in PascalCase, and a few reserved labels can't be overridden. `Retry: true` is added whenever this row has failed before. | `{ "attachment": "plugins/telegram/inbox/report.pdf" }` |
 | `priority` | `0` | Higher goes first when choosing the next thread. Never interrupts a running batch. | `10` beats `0` |
 | `isSilent` | `false` | Doesn't wake an idle thread by itself. It waits and goes along with the next normal input. It *can* still be fed into a running turn. | "FYI: the customer replied" |
 | `doNotSteer` | `false` | Never fed into a running turn; waits for the next batch. | Scheduled jobs |
@@ -306,17 +305,31 @@ Set both flags for background information that should neither wake the agent nor
 
 ### Routing
 
-The thread is `threadIdOverride` if given. Otherwise it depends on the agent's `threadIdStrategy`:
+The agent's router is the only thing that picks threads; core has no routing rules of its own. The router is [`workspace/router.ts`](../../packages/harness/src/agents/base-agent/workspace/router.ts) in the agent folder ([code](../../packages/harness/src/core/router.ts)), and the agent edits it to route events from any plugin. Its default export gets `{notification, pluginId, channelId, text, metadata, isSilent}` (`metadata` without `_notification`) and the list of workflows (`name`, `description`), and returns:
 
-| Strategy | Thread for a Telegram message in chat 42 |
+| Return | Result |
 |---|---|
-| `single` | `default` (one conversation for everything) |
-| `plugin` | `telegram` (one per source) |
-| `plugin_channel` | `telegram:42` (one per chat) |
+| `"x"` | Thread `x`. |
+| `["x", "y"]` | Both (duplicates collapse). Each row keeps the input's priority and flags and steers into a running turn on its thread as usual. |
+| `"workflow:<name>"` | That [workflow thread](#workflow-threads). |
+| `undefined` | `metadata.threadId` if set, else `main`. |
+| `[]` | Dropped (logged). |
+
+Plugins that address a thread put it in `metadata.threadId`: agent-messaging (the target thread), the scheduler (the schedule's thread) and the console send endpoint (its `threadId`). Telegram and GWS set none, so their input goes to `main` until the router says otherwise; they carry the chat id or Gmail thread id as `channelId` and GWS adds `Subject` to the metadata. The starter router returns `metadata.threadId` or `main`, the same as having no router.
+
+The router runs inside the server process and must be synchronous, so the rows exist before `notify` returns. It is loaded at agent start, and a 2-second poll reloads it whenever `router.ts` or anything under `workflows/` changes, so the agent's edits apply without a restart. A reload that fails keeps the previous router; a router that fails at start is logged and the agent runs with the fallback (`metadata.threadId`, else `main`). A router that throws, or returns only invalid ids, also gets the fallback, so input is never lost to a router bug, but it can land on `main` with other conversations. A thread id is invalid if it is empty, longer than 256 characters, starts with `.`, contains `/`, `\` or NUL, or names a workflow that isn't loaded; the same check applies to `metadata.threadId` (invalid → `main`).
 
 Follow-ups are matched by thread only. If two sources end up on the same thread, one can be fed into the other's running turn.
 
-**Thread ID = folder name.** The thread ID is used unchanged as a folder name: `sessions/<threadId>/<sessionId>.jsonl`, for example `sessions/telegram:42/3f2a….jsonl`. On a thread's first batch the runner creates a random session ID and saves it in the `threads` table; later batches look it up there. So the folder is implied by the thread ID, and the `threads` row picks which `.jsonl` in that folder Pi continues (older files may sit alongside it). The ID isn't checked for path safety when the input is written ([known issue 18](#known-issues-and-suggested-improvements)).
+#### Workflow threads
+
+A workflow is a folder `workspace/workflows/<name>/` with a `workflow.json` (`description` and `script`, both required) and an executable script; a folder missing either is skipped when routing loads. Its thread id is `workflow:<name>`. Its rows are queued like any thread's, but a worker runs the script instead of Pi, **one row per run** and one run at a time per workflow (a run holds a worker slot). The script starts in the agent folder with the row as JSON on stdin (`id`, `notification`, `pluginId`, `channelId`, `threadId`, `text`, `metadata`, `isSilent`, `attempts`) and a Pi child's environment (`.venv`, agent and plugin secrets, `PI_AGENT_ID`, `HARNESS_BASE_URL`, `COGNISPHERE_WEBHOOK_SECRET`) with `PI_THREAD_ID=workflow:<name>`.
+
+Exit 0 marks the row `done`. **Workflows never retry** (`maxAttempts` doesn't apply): a non-zero exit, a script that can't start, a run past 10 minutes (the script's process group is killed), a stop mid-run, or a crash (the start-up sweep) marks the row `failed`. An operator can requeue it from the console; the script then sees `attempts` > 0. For an ordinary failure (non-zero exit, can't start) core only logs it and records the row's error: reporting is the script's job. When core **kills** the script (timeout, stop, or a crash found by the start-up sweep), the script's own handler can't run, so core queues a `workflow_killed` notice on `main` (plugin `workflow`, channel `<name>`; text: workflow, event id, why it was killed, the original message; metadata `workflow`, `failedEventId`). It goes straight to `main`, not through the router, so no rule can send it back into the workflow; one from a stop is queued and handled on the next start. An abort cancels the row and isn't reported. A script should catch its errors and send them to the agent with `scripts/agent-msg/send`, usually to `main`, so the agent can babysit the workflow (see the [workflows README](../../packages/harness/src/agents/base-agent/workspace/workflows/README.md)). Abort kills the script and cancels the row. A row whose workflow has since been removed fails with `unknown workflow`, it never starts Pi. Output goes to the log. A run ends when the script's stdout and stderr close, so a child left running in the background holds the worker slot until it exits or the timeout. Workflow threads have no Pi session, so they appear in the events list but not in the console's thread list.
+
+A script invokes the agent with `scripts/agent-msg/send`; the agent's reply to `workflow:<name>` comes back as a new `agent_message` row on the workflow thread and runs the script again.
+
+**Thread ID = folder name.** The thread ID is used unchanged as a folder name: `sessions/<threadId>/<sessionId>.jsonl`, for example `sessions/telegram:42/3f2a….jsonl`. On a thread's first batch the runner creates a random session ID and saves it in the `threads` table; later batches look it up there. So the folder is implied by the thread ID, and the `threads` row picks which `.jsonl` in that folder Pi continues (older files may sit alongside it). Routing rejects unsafe IDs before the row is written (see above).
 
 ### Queue and recovery
 
@@ -416,7 +429,6 @@ The fields themselves are described in [agents](agents.md#configuration-and-cred
 |---|---|---|---|
 | `model.provider`, `model.id` | required | The default model. Known providers are checked (credentials or a connected sign-in, and the model must be enabled). Unknown providers are passed to Pi as-is. | Next swap, next Pi process |
 | `model.thinkingLevel` | `medium` | `off`, `minimal`, `low`, `medium`, `high` or `xhigh`. | Next Pi process (a thread's own setting wins) |
-| `threadIdStrategy.type` | required | `single`, `plugin` or `plugin_channel` ([routing](#routing)). | Next swap. Rows already queued keep their thread. |
 | `maxConcurrentSlots` | 1 (minimum 1) | How many batches can run at once, always on different threads. **There is no file lock** between them. | Next swap |
 | `maxAttempts` | 3 | Failed attempts before an input becomes `failed`. | Next swap. Existing counts aren't reset. |
 | `configSchema` and `config` | — | Non-secret environment variables. **Both or neither**: either one alone fails, even an empty `config: {}`. Values must be strings, and empty strings are dropped. | Next swap |
@@ -431,7 +443,6 @@ Only some fields are validated; `agent.json` doesn't have a full schema. The pla
   "name": "support",
   "description": "Summarizes customer reports.",
   "model": { "provider": "anthropic", "id": "claude-sonnet-4-6", "thinkingLevel": "medium" },
-  "threadIdStrategy": { "type": "plugin_channel" },
   "maxConcurrentSlots": 1,
   "maxAttempts": 3
 }
@@ -588,7 +599,7 @@ Found in a code audit on 2026-09-28. **Severity** is how much it can hurt: *High
 | 15 | Risk | Medium | GWS sign-in has no PKCE, takes `redirectUri` and `returnTo` from the caller, and prunes expired states only when a new sign-in starts. | Weaker than current OAuth guidance; an attacker with operator access could send a user to another site after sign-in. | Allow-list callback origins and return paths, add PKCE, prune on each request ([reusable plugin OAuth](#reusable-plugin-oauth-proposed)). |
 | 16 | Fixed | — | ~~There is no automated test suite for the queue, retry and lifecycle logic.~~ | — | Fixed: `pnpm test` runs the runner and queue against a scripted fake Pi, plus opt-in real-Pi tests ([phase 1](../roadmap/phase-01-test-harness.md)). |
 | 17 | Risk | Medium | The default `maxConcurrentSlots` is 1, so one busy conversation blocks every other conversation of that agent. | With many users on one agent, messages queue behind a long turn. | Document this clearly for product apps; use several agents, or wait for per-agent capacity in the planned runtime. |
-| 18 | Risk | Medium | Thread IDs become folder names (`sessions/<threadId>/`) but are only checked (`isSafeId` in `api/agents.ts`) on read routes. The `threadId` on `POST /admin/:id/send`, a plugin's `threadIdOverride`, and a `channelId` joined into `<plugin>:<channel>` aren't checked. | A `/` creates nested folders whose thread the API can never read (the read check rejects it). A `../` puts Pi's session file outside `sessions/`. Only an operator or plugin code can set these, so it isn't public. `:` and `[` are fine on macOS and Linux but not on Windows. | Check the thread ID in `AgentRunner.notify()` using the same rule as `isSafeId`, and reject it (or clean it up) before the row is saved. |
+| 18 | Risk | Low | Thread IDs become folder names (`sessions/<threadId>/`). Routing now rejects an unsafe ID (the `isSafeId` rule: no `/`, `\`, NUL or leading `.`, at most 256 characters) before the row is saved, whether it came from the router or `metadata.threadId`. | `:` and `[` are fine on macOS and Linux but not on Windows. | Nothing further unless Windows hosts matter. |
 
 ## Simplification review (proposed)
 
@@ -759,7 +770,7 @@ Yes, with the server stopped. Everything lives under `<COGNISPHERE_ROOT_DIR>/<CO
 
 #### How do I control which conversation a message joins?
 
-`POST /admin/<agentId>/send` takes `text`, an optional `channelId` (default `operator`) and an optional `threadId`. A `threadId` is used exactly. Without one, the agent's `threadIdStrategy` picks the thread from the plugin (`admin`) and the channel ([routing](#routing)). A message for a thread that is already running is fed into that turn, whatever its source. Priority, silent and do-not-steer flags can't be set through this endpoint; only a plugin can set them ([input fields](#input-fields-notifypayload)).
+`POST /admin/<agentId>/send` takes `text`, an optional `channelId` (default `operator`) and an optional `threadId`. The `threadId` is passed as `metadata.threadId`; the agent's router honours it unless it decides otherwise, and without one the router picks (by default `main`) ([routing](#routing)). A message for a thread that is already running is fed into that turn, whatever its source. Priority, silent and do-not-steer flags can't be set through this endpoint; only a plugin can set them ([input fields](#input-fields-notifypayload)).
 
 ### Developers
 

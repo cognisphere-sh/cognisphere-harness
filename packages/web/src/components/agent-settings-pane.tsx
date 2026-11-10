@@ -71,16 +71,6 @@ const AGENT_CONFIG_SCHEMA: JsonSchema = {
         },
       },
     },
-    threadIdStrategy: {
-      type: "object",
-      description: "How threads are derived from incoming notifications.",
-      properties: {
-        type: {
-          type: "string",
-          enum: ["single", "plugin", "plugin_channel"],
-        },
-      },
-    },
     maxConcurrentSlots: {
       type: "integer",
       minimum: 1,

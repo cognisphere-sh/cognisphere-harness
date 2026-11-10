@@ -60,7 +60,7 @@ export function scaffoldAgent(
     }
   }
 
-  // Starter config — edit model/strategy before first run. The agent stays
+  // Starter config — edit the model before first run. The agent stays
   // "failed" until its model provider is configured (secrets + models.json).
   writeJson(join(target, "agent.json"), {
     name,
@@ -68,7 +68,6 @@ export function scaffoldAgent(
       ? "Developer agent: owns and modifies this deployment's platform code — agent prompts/scripts, forked plugins, the user-facing frontend app, deploy scripts — and keeps docs/harness + docs/app current. Send code, app, docs and software-install requests here."
       : `TODO: one-line description of ${name}'s role (shown to other agents in the harness roster).`,
     model: { provider: "anthropic", id: "claude-sonnet-4-6" },
-    threadIdStrategy: { type: "single" },
     ...(opts.dev ? { devAgent: true } : {}),
   });
   return target;

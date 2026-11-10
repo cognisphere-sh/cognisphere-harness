@@ -63,7 +63,7 @@ A plugin may ship a skill in its `seed/` tree under
 start and loaded like any other skill. Those directories are **plugin-owned** —
 overwritten on each start, so never hand-edit them; change the plugin's seed
 instead. Shipped this way: `artifacts` → `publish-artifact`, `gws` →
-`read-email` + `search-email` + `route-email`, `telegram` → `route-chats`. A plugin's system
+`read-email` + `search-email`. A plugin's system
 prompt fragment is kept short (identity, event shape, always-on rules) and
 delegates every step-by-step procedure to one of these skills.
 

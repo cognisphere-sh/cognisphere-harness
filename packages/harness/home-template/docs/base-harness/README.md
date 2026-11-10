@@ -61,7 +61,6 @@ plus an optional `X-App-User` header (see `app/README.md`).
 
 - `agent.json` — `name`, `description?` (one-line role blurb shown to other
   agents in the harness roster), `model: {provider, id, thinkingLevel?}`,
-  `threadIdStrategy` (`single` | `plugin` | `plugin_channel`),
   `maxConcurrentSlots?`, `devAgent?` (marks the developer agent), optional
   `secretsSchema`/`configSchema`/`config`.
 - `system_prompts/*.md` — concatenated in lexical order into the system
@@ -83,6 +82,26 @@ plus an optional `X-App-User` header (see `app/README.md`).
   upgrade or restart.
 - `workspace/` — the agent's durable notes: `index.md`, `daily_notes/`, and
   `threads/<ThreadId>/` (`notes.md`, `files/`, `tasks/<task-slug>/notes.md`).
+- `workspace/router.ts` — **the only routing authority**: every event from
+  every plugin passes through it before it is queued. Its default export gets
+  the message (`notification`, `pluginId`, `channelId`, `text`, `metadata`,
+  `isSilent`) plus the workflow list, and returns a thread id, an array of
+  them, `workflow:<name>`, `undefined` (`metadata.threadId`, else `main`) or
+  `[]` (drop). Synchronous; edits apply within a few seconds (a broken edit
+  keeps the previous router). Agent-messaging, the scheduler and the console
+  set `metadata.threadId`; Telegram and Gmail don't, so they go to `main`
+  until a rule routes them (e.g. `return "telegram:" + msg.channelId`).
+- `workspace/workflows/<name>/` — a workflow: `workflow.json`
+  (`{"description", "script"}`, both required) plus an executable script.
+  Its thread is `workflow:<name>`: input is queued like any thread's and the
+  script runs once per message from the agent folder (message JSON on stdin,
+  `PI_THREAD_ID=workflow:<name>`). Exit 0 = done; anything else, a 10-minute
+  timeout or an interruption = failed, **never retried**. The harness reports
+  only runs it killed (timeout, stop, crash) to `main` (`workflow_killed`). It invokes the agent with `scripts/agent-msg/send`; the
+  agent's reply to `workflow:<name>` runs it again. Best practice: wrap the
+  script in try/catch and send errors to the agent's `main` thread the same
+  way, so the agent can babysit it. See `workflows/README.md` in any
+  agent.
 - `knowledge/` — cross-thread reference docs (`index.md`, `files/`) plus
   `memory.md`, the agent's long-lived memory (grep-able sections separated by
   `-----$-----$-----$-----`).
@@ -99,9 +118,8 @@ plus an optional `X-App-User` header (see `app/README.md`).
   here: the harness runs the `pi` bundled with its own package, at the version
   it was tested with.
 
-A **thread** is one conversation. `threadIdStrategy` controls how inbound
-messages map to threads (one global thread, one per plugin, or one per
-plugin+channel).
+A **thread** is one conversation. The agent's router (`workspace/router.ts`)
+decides which thread each inbound message joins; by default `main`.
 
 ## Plugins
 
@@ -132,9 +150,9 @@ the open `/webhook/*` surface. Artifact HTML is always served with a CSP
 sandbox, so it can't reach the app's cookies or storage.
 
 The **telegram** plugin long-polls a bot; set
-`secrets.json → <agent>.telegram.TELEGRAM_BOT_TOKEN`. Sending `/reset` to the
-bot wipes that conversation's context (the thread's queue rows and session
-files) — the next message starts fresh.
+`secrets.json → <agent>.telegram.TELEGRAM_BOT_TOKEN`. It picks no thread:
+messages go to `main` unless the agent's router routes them (e.g. one thread
+per chat). To reset a conversation, delete its thread from the console.
 
 ## Secrets and models
 

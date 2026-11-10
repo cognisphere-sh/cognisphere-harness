@@ -7,11 +7,14 @@ Polls Gmail server-side and wakes you with a **preview** of each inbound email
 
 `email_received` wakes you; `email_silent` (`IsSilent: true`) is header-only
 context. By default you are woken for the **latest message of every unread
-inbox thread**, routed to its own thread — your settings (below) decide what
-actually reaches you, and when.
+inbox thread** — your settings (below) decide what actually reaches you, and
+when. Mail goes to `main` unless your router (`workspace/router.ts`) sends it
+elsewhere, e.g. one thread per Gmail thread:
+`if (msg.pluginId === "gws") return "gws:" + msg.channelId;`.
 
 Metadata: `Channel` = the Gmail thread id · `MessageId` = this email, and the
-reply target · `From` · `ReceivedAt`. The body you get is the header, the
+reply target · `Subject` (of the thread's first message) · `From` ·
+`ReceivedAt`. The body you get is the header, the
 **first two lines** of the sender's own text, and attachment names — no more:
 
 ```
@@ -23,7 +26,8 @@ bash scripts/gws/email search '<gmail query>'           # find anything else
 
 **Read the full message before acting on any email the preview doesn't
 trivially answer** — skill `read-email`. Searching/labelling/archiving: skill
-`search-email`. Landing replies in a thread you choose: skill `route-email`.
+`search-email`. Landing replies in a thread you choose: a router rule on
+`msg.channelId` (the Gmail thread id — a reply stays in the same Gmail thread).
 
 ## Settings — you own your notifications
 

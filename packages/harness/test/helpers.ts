@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
 import { AgentDb, type EventRow } from "../src/core/queue.js";
+import type { Routing } from "../src/core/router.js";
 import { AgentRunner, type RunnerOpts } from "../src/core/runner.js";
 import type { AgentJson } from "../src/core/types.js";
 import type { Script } from "./fake-pi.js";
@@ -43,6 +44,9 @@ export function rig(opts: {
   /** Start the bundled real pi instead of the fake. */
   realPi?: boolean;
   envSecrets?: Record<string, string>;
+  routing?: Routing;
+  serverBaseUrl?: string;
+  workflowTimeoutMs?: number;
 }): Rig {
   const root = mkdtempSync(join(tmpdir(), "cognisphere-test-"));
   const agentDir = join(root, "h", "agents", "a");
@@ -60,13 +64,14 @@ export function rig(opts: {
     agentJson: {
       name: "a",
       model: { provider: "fake", id: "fake" },
-      threadIdStrategy: { type: "plugin_channel" },
       ...opts.agentJson,
     },
     db,
-    serverBaseUrl: "http://127.0.0.1:1",
+    serverBaseUrl: opts.serverBaseUrl ?? "http://127.0.0.1:1",
     timezone: "UTC",
     envSecrets: opts.envSecrets,
+    routing: opts.routing,
+    workflowTimeoutMs: opts.workflowTimeoutMs,
     piCommand: opts.realPi ? undefined : [process.execPath, FAKE_PI, scriptPath],
     log: pino({ level: process.env.TEST_LOG_LEVEL ?? "silent" }),
   };
@@ -95,10 +100,10 @@ export function rig(opts: {
       runner.notify({
         pluginId: "admin",
         channelId: o.thread ?? "t1",
-        threadIdOverride: o.thread ?? "t1",
+        metadata: { threadId: o.thread ?? "t1" },
         text,
         doNotSteer: o.doNotSteer,
-      }),
+      })[0]!,
     row,
     waitFor,
     waitAllSettled: (ms) =>

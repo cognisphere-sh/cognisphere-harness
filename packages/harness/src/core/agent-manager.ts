@@ -10,6 +10,7 @@ import type { PluginRegistry } from "./plugin-registry.js";
 import { CORE_PLUGIN_IDS } from "./plugin-registry.js";
 import { AgentDb } from "./queue.js";
 import { AgentRunner } from "./runner.js";
+import { loadRouting, seedRouting, watchRouting } from "./router.js";
 import { findProviderInCatalog } from "./models-catalog.js";
 import { modelUnavailableReason } from "./model-access.js";
 import { ModelsStore } from "./models-store.js";
@@ -59,6 +60,8 @@ export interface AgentInstance {
    *  a fresh runner with the new config. Cleared synchronously when the
    *  swap fires. */
   staleReason: string | null;
+  /** Stops the router/workflows reload watcher; set while running. */
+  stopRoutingWatch: (() => void) | null;
 }
 
 export type LifecycleErrorCode = "not_found" | "conflict";
@@ -207,7 +210,7 @@ export class AgentManager {
    * Tear down one thread: refuse while a batch is in-flight (it would race
    * the runner writing the session jsonl), delete the thread's queue rows +
    * session binding, remove its `sessions/<threadId>/` dir. Shared by the
-   * HTTP DELETE route and the plugin-context `resetThread`.
+   * HTTP DELETE route.
    */
   deleteThread(
     id: string,
@@ -350,6 +353,7 @@ export class AgentManager {
       changedAt: Date.now(),
       plugins: new Map(),
       staleReason: null,
+      stopRoutingWatch: null,
     };
     this.agents.set(id, inst);
     try {
@@ -478,6 +482,12 @@ export class AgentManager {
     //      delays later agents.
     await runBootstrap(dir, this.log);
 
+    // 2.6. Load the agent's router and workflows. Agents created before
+    //      routing existed get the starter router (write-if-absent).
+    const routingLog = childLogger(`agent:${inst.id}`);
+    seedRouting(dir, routingLog);
+    const routing = await loadRouting(dir, routingLog);
+
     // 3. Construct a fresh runner with the resolved env snapshot.
     inst.runner = new AgentRunner({
       rootDir: this.cfg.rootDir,
@@ -488,6 +498,7 @@ export class AgentManager {
       serverBaseUrl: this.cfg.serverBaseUrl,
       timezone: this.cfg.timezone,
       envSecrets,
+      routing,
       resolveProviderEnv: (providerId) =>
         resolveProviderEnv(this.models, providerId, dir, this.log),
       modelUnavailableReason: (providerId, modelId) =>
@@ -497,6 +508,9 @@ export class AgentManager {
     // When a stale-reload is pending and the last active batch finishes,
     // swap to a fresh runner. The listener captures `inst` (stable) and
     // checks `inst.runner` at fire time so a swap-in-progress no-ops.
+    // The agent edits its own router; apply edits without a restart.
+    const runner = inst.runner;
+    inst.stopRoutingWatch = watchRouting(dir, routing, (r) => runner.setRouting(r), routingLog);
     inst.runner.on("batch-completed", () => {
       if (inst.staleReason && inst.runner?.activeCount === 0) {
         void this.performStaleSwap(inst);
@@ -566,6 +580,8 @@ export class AgentManager {
       entry.changedAt = Date.now();
     }
 
+    inst.stopRoutingWatch?.();
+    inst.stopRoutingWatch = null;
     if (inst.runner) {
       try {
         await inst.runner.stop();
@@ -675,14 +691,6 @@ export class AgentManager {
         } catch (err) {
           log.error({ err }, "notify failed");
         }
-      },
-      resetThread: (channelId, threadIdOverride) => {
-        const runner = inst.runner;
-        if (!runner) throw new Error("agent not running");
-        const threadId =
-          threadIdOverride ?? runner.threadIdFor(pluginId, channelId);
-        this.deleteThread(inst.id, threadId);
-        log.info({ threadId }, "thread reset by plugin");
       },
     };
 

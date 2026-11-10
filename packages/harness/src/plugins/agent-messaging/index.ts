@@ -22,8 +22,9 @@ import type {
  * intra-agent case — the sender just POSTs to its own agent's webhook with a
  * different thread id.
  *
- * Delivery: `ctx.notify(..., threadIdOverride = target thread)` lands the
- * message on that exact thread. By default it STEERS (the receiving agent
+ * Delivery: `ctx.notify(..., metadata.threadId = target thread)` asks for that
+ * thread; the receiving agent's router passes it through unless it says
+ * otherwise. By default it STEERS (the receiving agent
  * acts on it); `silent` logs it for awareness without prompting action.
  *
  * ponytail: routing is just (target agent, target thread) — one event kind,
@@ -130,9 +131,9 @@ export default class AgentMessagingPlugin implements Plugin {
         ctx.notify("agent_message", {
           text: message,
           channelId: "agent",
-          threadIdOverride: thread,
           ...(silent ? { isSilent: true, doNotSteer: true } : {}),
           metadata: {
+            threadId: thread,
             from,
             fromThread,
             ...(subject ? { subject } : {}),

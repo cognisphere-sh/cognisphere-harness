@@ -1,9 +1,9 @@
 ---
 name: create-plugin
-description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Covers the duck-typed Plugin contract, the manifest (config/secrets schemas), the seed tree (prompt fragment, CLI scripts, plugin-owned skills), event/metadata conventions, enabling per agent, and the common load/start failures. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin" or "write a plugin for the harness" — and whenever a capability an agent needs lives outside its own filesystem: polling or receiving from an external service, exposing an HTTP/webhook endpoint, running something on a schedule, or handing agents a CLI backed by harness-side state. (v1.3.0)
+description: Author a new CogniSphere plugin in a harness's plugins/ directory — scaffold the index.ts + seed, enable it on an agent, and verify it loads and starts. Covers the duck-typed Plugin contract, the manifest (config/secrets schemas), the seed tree (prompt fragment, CLI scripts, plugin-owned skills), event/metadata conventions, enabling per agent, and the common load/start failures. Use when asked to "create a plugin", "author a new plugin", "add a custom plugin" or "write a plugin for the harness" — and whenever a capability an agent needs lives outside its own filesystem: polling or receiving from an external service, exposing an HTTP/webhook endpoint, running something on a schedule, or handing agents a CLI backed by harness-side state. (v1.4.0)
 metadata:
   author: cognisphere
-  version: "1.3.0"
+  version: "1.4.0"
   argument-hint: <plugin-id>
 ---
 
@@ -48,8 +48,13 @@ harness types, so the plugin has no build step and no dependencies.
 `notify(name, payload)`, `httpBaseUrl`, `log`.
 
 `notify` payload needs at least `{ text, channelId }`; optional `metadata`,
-`threadIdOverride`, `isSilent`, `doNotSteer`, `priority`. It enqueues an event
-and wakes the agent (or steers a live run).
+`isSilent`, `doNotSteer`, `priority`. A plugin doesn't pick the thread: the
+agent's router (`workspace/router.ts`) does, from the plugin id, channel,
+text and metadata. Put whatever a routing rule would need (chat id, subject,
+sender) in `channelId`/`metadata`. Set `metadata.threadId` only when the event
+targets a specific thread (as agent-messaging and the scheduler do); the
+router honours it by default. Without either, the event goes to `main`.
+`notify` enqueues the event and wakes the agent (or steers a live run).
 
 ### Event & metadata conventions
 
@@ -113,8 +118,7 @@ loaded like any other). Version it and give it a `CHANGELOG.md` exactly as
 `create-skill` describes; the scope dir `skills/<id>/` marks it plugin-owned,
 so agents must never edit it — change the seed instead. The bundled `artifacts`
 plugin is the worked example (`publish-artifact`); `gws` (`read-email`,
-`route-email`) and `telegram` (`route-chats`) are the same split applied to a
-larger surface.
+`search-email`) is the same split applied to a larger surface.
 
 **A prompt fragment over ~50 lines is the signal to split.** It costs every
 turn of every thread, whether or not the plugin is in play; a skill costs one

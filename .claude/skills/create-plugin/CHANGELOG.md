@@ -1,5 +1,12 @@
 # create-plugin — changelog
 
+## 1.4.0
+
+- Routing moved to the agent's router (`workspace/router.ts`): the `notify`
+  payload has no `threadIdOverride`, and plugins no longer ship routing rules.
+  §1 says what to publish instead (`channelId`/`metadata` for the router,
+  `metadata.threadId` only for thread-targeted events).
+
 ## 1.3.0
 
 - Prompt-fragment budget: **over ~50 lines is the signal to split** — a

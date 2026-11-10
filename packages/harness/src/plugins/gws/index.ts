@@ -21,7 +21,6 @@ import {
 const execFileP = promisify(execFile);
 const UNREAD_LABEL = "UNREAD";
 const LEDGER_FILE = "ingested-threads.jsonl";
-const ROUTES_FILE = "routes.json";
 const SETTINGS_FILE = "settings.json";
 
 interface GwsConfig {
@@ -51,27 +50,6 @@ interface GmailThread {
   messages?: GmailMessage[];
 }
 
-/** A rule in `state/routes.json`, written by `scripts/gws/routes`. `from` and
- *  `subject` are case-insensitive, unanchored regexes — a plain string is
- *  therefore a substring match. `gmailThreadId` is an anchored,
- *  case-insensitive regex against the raw Gmail thread id, so a plain id is
- *  an exact match. At least one of the three must be present. */
-interface RouteRule {
-  name?: string;
-  threadId: string;
-  from?: string;
-  subject?: string;
-  gmailThreadId?: string;
-}
-
-interface CompiledRoute {
-  name: string;
-  threadId: string;
-  from?: RegExp;
-  subject?: RegExp;
-  gmailThreadId?: RegExp;
-}
-
 /**
  * Polls Gmail through the `gws` CLI. Unread filtering lives in the poll
  * query itself (default `is:unread in:inbox`), not in code. For each
@@ -87,15 +65,12 @@ interface CompiledRoute {
  * (Backlog mode — `firstOfThreadOnly` — instead emits every message in a
  * matching thread, waking only on the first.)
  *
- * Threading: the harness thread id is `<Subject> [<gmailThreadId>]` — taken
- * from the first message of the Gmail thread so a later `Re: …` rewrite
- * still routes to the same queue thread. Routing rules in
- * `state/routes.json` (managed by `scripts/gws/routes`) override that: the
- * first rule whose `from`/`subject`/`gmailThreadId` patterns match wins, so
- * an agent can park replies to a mail it sent in a thread of its choosing —
- * matching on the Gmail thread id is the exact form, since a reply stays in
- * the same Gmail thread as the message that provoked it. The agent
- * calls `gws` directly for send / reply-all; no helper CLI is shipped.
+ * Threading: the plugin picks no thread. Each notification carries the Gmail
+ * thread id as `channelId` and the thread's `Subject` (frozen at its first
+ * message, so a later `Re: …` rewrite doesn't change it) in metadata; the
+ * agent's router (`workspace/router.ts`) decides the thread, and without a
+ * rule mail goes to `main`. The agent calls `gws` directly for send /
+ * reply-all; no helper CLI is shipped.
  *
  * Settings: the agent owns its own notification behavior. Everything in
  * `configSchema` except `firstOfThreadOnly` can be overridden per-key by
@@ -177,7 +152,6 @@ export default class GwsPlugin implements Plugin {
   private passive = false;
   private allowedSenderPatterns: RegExp[] = [];
   private agentEmail = "";
-  private routes: CompiledRoute[] = [];
 
   async start(ctx: PluginInstanceContext): Promise<void> {
     this.ctx = ctx;
@@ -259,11 +233,6 @@ export default class GwsPlugin implements Plugin {
   private async announceSettings(): Promise<void> {
     const ctx = this.ctx;
     if (!ctx || this.stopped) return;
-    try {
-      await this.loadRoutes();
-    } catch {
-      // routes are informational here; the poll loop reports real errors
-    }
     const effective = {
       pollIntervalSec: this.pollIntervalSec,
       gmailQuery: this.gmailQuery,
@@ -273,7 +242,6 @@ export default class GwsPlugin implements Plugin {
     const text = [
       `Gmail is up for ${this.agentEmail}. Effective notification settings:`,
       JSON.stringify(effective, null, 2),
-      `Routing rules: ${this.routes.length} (plugins/gws/state/routes.json).`,
       "You own these settings — change them with `bash scripts/gws/settings show|set|reset` (changes apply within one poll). `set --poll-interval-sec -1` goes passive: no email notifications, the mailbox is left untouched, and you read it only when you choose to search.",
     ].join("\n");
     ctx.notify("gws_settings", { text, channelId: "main" });
@@ -368,77 +336,9 @@ export default class GwsPlugin implements Plugin {
     }
   }
 
-  /** Re-read `state/routes.json` (rewritten under us by `scripts/gws/routes`)
-   *  and compile each rule's patterns. Bad rules are dropped with a warning
-   *  rather than failing the poll. */
-  private async loadRoutes(): Promise<void> {
-    const ctx = this.ctx!;
-    let raw: string;
-    try {
-      raw = await readFile(join(ctx.stateDir, ROUTES_FILE), "utf8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        this.routes = [];
-        return;
-      }
-      throw err;
-    }
-    const parsed = JSON.parse(raw) as { routes?: RouteRule[] };
-    const compiled: CompiledRoute[] = [];
-    for (const r of parsed.routes ?? []) {
-      // A rule with no pattern at all would capture every inbound thread.
-      if (!r.threadId || (!r.from && !r.subject && !r.gmailThreadId)) {
-        ctx.log.warn(
-          { rule: r },
-          "skipping route: needs threadId + from/subject/gmailThreadId",
-        );
-        continue;
-      }
-      try {
-        compiled.push({
-          name: r.name ?? r.threadId,
-          threadId: sanitizeForPath(r.threadId),
-          from: r.from ? new RegExp(r.from, "i") : undefined,
-          subject: r.subject ? new RegExp(r.subject, "i") : undefined,
-          gmailThreadId: r.gmailThreadId
-            ? new RegExp(`^(?:${r.gmailThreadId})$`, "i")
-            : undefined,
-        });
-      } catch (err) {
-        ctx.log.warn({ err, rule: r }, "skipping route with invalid regex");
-      }
-    }
-    this.routes = compiled;
-  }
-
-  /** First matching rule wins; all patterns present on a rule must match. */
-  private routeFor(
-    subject: string,
-    from: string,
-    gmailThreadId: string,
-  ): string | null {
-    for (const r of this.routes) {
-      if (r.from && !r.from.test(from)) continue;
-      if (r.subject && !r.subject.test(subject)) continue;
-      if (r.gmailThreadId && !r.gmailThreadId.test(gmailThreadId)) continue;
-      this.ctx?.log.info(
-        { route: r.name, threadId: r.threadId, from, subject, gmailThreadId },
-        "gws route matched",
-      );
-      return r.threadId;
-    }
-    return null;
-  }
-
   private async pollOnce(): Promise<void> {
     const ctx = this.ctx;
     if (!ctx) return;
-
-    try {
-      await this.loadRoutes();
-    } catch (err) {
-      ctx.log.error({ err }, "routes.json unreadable; keeping previous rules");
-    }
 
     // Page through every result of the query — Gmail caps a single list
     // response at maxResults, so a backlog query covering many days will
@@ -555,17 +455,11 @@ export default class GwsPlugin implements Plugin {
     );
 
     // Subject is frozen at the first message so a later `Re: …` rewrite
-    // doesn't fork the harness thread id.
+    // doesn't change what the router sees.
     const firstHeaders = collectHeaders(ordered[0]!.payload);
     const subject = firstHeaders.get("subject") ?? "(no subject)";
-    // A routing rule (state/routes.json) matching the thread's subject, the
-    // latest message's sender, or the Gmail thread id re-points the whole
-    // thread at its own thread id.
     const lastFrom =
       collectHeaders(ordered[ordered.length - 1]!.payload).get("from") ?? "";
-    const threadIdOverride =
-      this.routeFor(subject, lastFrom, threadId) ??
-      `${sanitizeForPath(subject)}[${threadId}]`;
 
     // Backlog mode: deliver every message in the thread, most-recent first
     // so the chronologically-first message (the only one that wakes the
@@ -657,6 +551,7 @@ export default class GwsPlugin implements Plugin {
         text,
         metadata: {
           MessageId: m.id,
+          Subject: subject,
           From: from,
           ReceivedAt: timestamp,
         },
@@ -670,7 +565,6 @@ export default class GwsPlugin implements Plugin {
       ctx.notify(p.invoked ? "email_received" : "email_silent", {
         text: p.text,
         channelId: threadId,
-        threadIdOverride,
         isSilent: !p.invoked,
         metadata: p.metadata,
       });
@@ -744,10 +638,4 @@ function parseSenderPatterns(raw: string): RegExp[] {
         .replace(/\*/g, ".*");
       return new RegExp(`^${escaped}$`);
     });
-}
-
-/** Strip characters that would break a directory name; `<Subject>` is used
- *  as the prefix of the harness thread id, which becomes a sessions/ dir. */
-function sanitizeForPath(s: string): string {
-  return s.replace(/[/\\\0]+/g, "_").slice(0, 120).trim() || "(no subject)";
 }

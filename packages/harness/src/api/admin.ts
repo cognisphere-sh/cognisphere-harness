@@ -37,7 +37,7 @@ export function adminRouter(am: AgentManager): Hono {
     admin.deliver({
       text: body.text,
       channelId: body.channelId,
-      threadIdOverride: body.threadId,
+      threadId: body.threadId,
     });
     return c.json({ ok: true });
   });

@@ -86,6 +86,8 @@ flowchart TB
     .vertex-sa.json                   only while running with Vertex; removed on stop
     knowledge/                        notes and memory the agent maintains
     workspace/                        work products
+      router.ts                       routes every input (agent-owned code)
+      workflows/<name>/               workflow.json + script
     plugins/<plugin>/
       config.json
       state/                          cursors, routes, schedules, output
@@ -114,7 +116,6 @@ The console and API only *read* history files. Pi is the only thing that writes 
   "name": "support",
   "description": "Summarizes support tickets and prepares replies.",
   "model": { "provider": "anthropic", "id": "claude-sonnet-4-6", "thinkingLevel": "medium" },
-  "threadIdStrategy": { "type": "plugin_channel" },
   "maxConcurrentSlots": 1,
   "maxAttempts": 3,
   "configSchema": {
@@ -131,7 +132,6 @@ The console and API only *read* history files. Pi is the only thing that writes 
 | `devAgent` | Marks the developer agent (set by the CLI). |
 | `model.provider`, `model.id` | The default model. It must be set up and enabled on the Models page. |
 | `model.thinkingLevel` | `off`, `minimal`, `low`, `medium`, `high` or `xhigh`. Default `medium`. A thread can override the model from its next batch. |
-| `threadIdStrategy.type` | How inputs are grouped into conversations: `single` (one), `plugin` (one per source), `plugin_channel` (one per source chat). |
 | `maxConcurrentSlots` | How many conversations can run at once. Default 1. They share files with no lock. |
 | `maxAttempts` | How many failed attempts before an input is marked failed. Default 3. |
 | `configSchema` and `config` | Non-secret settings given to Pi as environment variables (`REPLY_STYLE` above). **Set both or neither.** Values must be strings. |
@@ -176,9 +176,17 @@ Pi's own automatic discovery of prompts, context files, skills and extensions is
 
 The bootstrap script runs directly on the host every time the agent starts. It doesn't install Pi: core runs the `pi` bundled with the harness package. Agents seeded before that still have a bootstrap step that installs a global `pi`; it is harmless and unused, and can be deleted. `.venv/bin` goes first on `PATH` when it exists. Helper tools such as `agent-browser`, `ddgs`, `markitdown` and `session-reader` are just tools the agent can use.
 
+## Routing and workflows
+
+The agent's router, `workspace/router.ts`, is the only thing that decides which conversation an input joins. Every event from every plugin passes through it before it is queued, and it returns one or more thread ids, a workflow thread (`workflow:<name>`), or nothing. Nothing means the input's `metadata.threadId` (set by agent-messaging, the scheduler and the console), else `main`. A workflow is a static script in `workspace/workflows/<name>/` with a required `description`. Its input is queued like a thread's, the script runs once per input, and it reaches the agent through agent-messaging. A failed run marks the input failed with no retry. A script should catch its errors and send them to the agent (usually on `main`) so the agent can babysit the workflow; when core kills a script (timeout, stop, crash), core posts a `workflow_killed` notice to `main` itself. The agent edits the router to route events (for example one thread per Telegram chat) and the edits apply within seconds.
+
+New agents get the [starter router](../../packages/harness/src/agents/base-agent/workspace/router.ts) and [workflows README](../../packages/harness/src/agents/base-agent/workspace/workflows/README.md) from the base template. Existing agents get them on their next start if the files are missing; the files are never overwritten. The starter router behaves like having none: `metadata.threadId`, else `main`. The contract and failure behavior are in [core](core.md#routing).
+
+The router is code the agent can edit, and it runs in the harness server process with the server's permissions. Like the rest of this layout, it is not a security boundary.
+
 ## Example: one agent, two conversations
 
-Support uses `plugin_channel`:
+Support's router has the rule `if (msg.pluginId === "telegram") return "telegram:" + msg.channelId;`:
 
 - a Telegram message from chat 42 goes to thread `telegram:42`;
 - a console message sent with `threadId: review` goes to thread `review`.
@@ -232,7 +240,7 @@ Write it in `system_prompts/1-agent.md`: who the agent is, its tone, and what it
 
 #### Why does my agent mix up conversations from different chats?
 
-New agents use `threadIdStrategy: single`, so every source and every chat share one thread. Set `plugin_channel` in `agent.json` to give each chat its own thread. Threads keep separate histories but share the same files ([example](#example-one-agent-two-conversations)).
+Without a router rule, every input that doesn't name a thread goes to `main`, so every chat shares one thread. Add a rule to `workspace/router.ts`, such as `if (msg.pluginId === "telegram") return "telegram:" + msg.channelId;`, to give each chat its own thread. Threads keep separate histories but share the same files ([example](#example-one-agent-two-conversations)).
 
 #### Can I use a different model for one conversation?
 

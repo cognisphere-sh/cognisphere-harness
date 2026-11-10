@@ -1,11 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Logger } from "./logger.js";
 
-export type ThreadIdStrategy =
-  | { type: "single" }
-  | { type: "plugin" }
-  | { type: "plugin_channel" };
-
 export interface AgentJson {
   name: string;
   model: {
@@ -13,7 +8,6 @@ export interface AgentJson {
     id: string;
     thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   };
-  threadIdStrategy: ThreadIdStrategy;
   maxConcurrentSlots?: number;
   maxAttempts?: number;
   /** One-line description of this agent's role. Seeds the agent-directory
@@ -71,8 +65,9 @@ export const AGENT_TOOLS = [
 export interface NotifyPayload {
   text: string;
   channelId: string;
+  /** Extra facts for the router and the model. `metadata.threadId` asks for
+   *  a thread; the agent's router (`workspace/router.ts`) decides. */
   metadata?: Record<string, unknown>;
-  threadIdOverride?: string;
   doNotSteer?: boolean;
   isSilent?: boolean;
   priority?: number;
@@ -115,13 +110,6 @@ export interface PluginInstanceContext {
    *  declaring their own `timezone` config field. */
   timezone: string;
   notify(name: string, payload: NotifyPayload): void;
-  /** Reset the conversation context of the thread this plugin/channel routes
-   *  to: deletes the thread's queue rows, session binding, and session files,
-   *  so the next message starts a fresh pi session. Throws if the agent isn't
-   *  running or a batch is currently in-flight on the thread. Pass
-   *  `threadIdOverride` when the plugin sent the channel's messages to a
-   *  thread of its own choosing (the same value it passed to `notify`). */
-  resetThread(channelId: string, threadIdOverride?: string): void;
   httpBaseUrl?: string;
   log: Logger;
 }
