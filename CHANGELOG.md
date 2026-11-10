@@ -18,6 +18,42 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.0]
+
+### Breaking changes
+
+- **Telegram: questions, buttons and forum topics.** The seeded
+  `telegram-cli` gains `ask` (single/multi-choice questions answered in
+  place), `--buttons` on sends and `edit-message`, `edit-buttons`,
+  `send-album`, `send-poll` / `stop-poll`, `--force-reply`, `--topic-id`,
+  `chat-action`, `pin-message` / `unpin-message`, the forum-topic commands,
+  `set-commands`, `ask --tag` (echoed as `QuestionTag`) and `answer-tap` (a
+  workflow answers a `"wait": true` button's tap with its own toast; new
+  config `tapWaitMs`, default 5000); `--file` and `--option` may repeat.
+  The plugin prompt documents them and the new events
+  (`question_answered`, `button_pressed`, `topic_event`) and metadata (`TopicId`, `TopicName`, `ChatType`,
+  `ChatTitle`, `ReplyToBot`, `MentionsBot`). Both are reseeded on every agent
+  start, so no edit is needed. In topics, `ReplyToMessageId` no longer points
+  at the topic's creation message. A router rule that sends every Telegram
+  event to one place now also catches button taps and topic events.
+  [affects: agents/*/scripts/telegram/telegram-cli, agents/*/system_prompts/plugin-telegram.md]
+
+- **Workflows run in their own lane.** Workflow scripts no longer take a Pi
+  slot (`maxConcurrentSlots`) or wait for one: up to 4 workflows run at once,
+  alongside Pi turns, in the same agent folder. A workflow that relied on the
+  agent being idle while it ran (shared files) must coordinate itself. The
+  starter workflows README says so (new agents only).
+  [affects: agents/*/workspace/workflows/]
+
+- **Starter router comment** gains topic and button examples. Only new
+  agents get it; existing routers need no change.
+  [affects: agents/*/workspace/router.ts]
+
+### Changed
+
+- `docs/base-harness/README.md` describes the Telegram questions, buttons and
+  topics.
+
 ## [0.15.0]
 
 ### Breaking changes
