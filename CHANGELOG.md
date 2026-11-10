@@ -18,6 +18,99 @@ the harness directory, and applies it after user approval. See
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0]
+
+### Breaking changes
+
+- **The agent's router is the only routing authority.** `agent.json`'s
+  `threadIdStrategy`, plugins' `threadIdOverride` and the Telegram/GWS
+  `routes.json` rules are gone. Every event goes through
+  `workspace/router.ts`, which returns thread id(s); without a rule an event
+  goes to its `metadata.threadId` (agent-messaging, scheduler, console) or to
+  `main`. To keep each existing agent's conversations on the threads they
+  use today, write its `workspace/router.ts` **before restarting the server**
+  (a first start seeds the starter router; replace it if it is still the
+  unmodified starter). The router must reproduce, in this order:
+  1. `msg.metadata.threadId` if it is a non-empty string → return it.
+  2. Telegram (`msg.pluginId === "telegram"`): each rule of
+     `agents/<a>/plugins/telegram/state/routes.json` (`{threadId, chat}`, first
+     match wins; `chat` is matched as `new RegExp("^(?:" + chat + ")$", "i")`
+     against `msg.channelId`) → return `clean(rule.threadId, "default")`.
+     Unmatched messages fall through to step 4.
+  3. GWS email (`msg.pluginId === "gws"` and `msg.notification` is
+     `email_received` or `email_silent`): each rule of
+     `agents/<a>/plugins/gws/state/routes.json` (`{threadId, from?, subject?,
+     gmailThreadId?}`, first match wins, every present pattern must match;
+     `from` and `subject` are `new RegExp(p, "i")` against `msg.metadata.From`
+     and `msg.metadata.Subject`, `gmailThreadId` is
+     `new RegExp("^(?:" + p + ")$", "i")` against `msg.channelId`) → return
+     `clean(rule.threadId, "(no subject)")`. Otherwise return the old default
+     `` `${clean(String(msg.metadata.Subject), "(no subject)")}[${msg.channelId}]` ``.
+     (`from` used to match the Gmail thread's latest sender; it now matches
+     each message's own `From`, which differs only in backlog mode.)
+  Both use the plugins' old sanitizer:
+  `const clean = (s, empty) => s.replace(/[/\\\0]+/g, "_").slice(0, 120).trim() || empty;`.
+  4. The agent's old `threadIdStrategy`: `single` → `"default"`, `plugin` →
+     `msg.pluginId`, `plugin_channel` → `` `${msg.pluginId}:${msg.channelId}` ``.
+  Then delete `threadIdStrategy` from `agent.json`, the two `routes.json`
+  files, and the stale seeded copies `scripts/telegram/routes`,
+  `skills/telegram/route-chats/`, `scripts/gws/routes` and
+  `skills/gws/route-email/` (seeds are copied on start but never removed).
+  An old thread id that starts with `.` or is longer than 256 characters is
+  now rejected (the event goes to `main`); rename such a thread in the
+  router. Until an agent's router is migrated, every Telegram chat and email
+  shares `main`.
+  [affects: agents/*/workspace/router.ts, agents/*/workspace/workflows/, agents/*/agent.json, agents/*/plugins/telegram/state/routes.json, agents/*/plugins/gws/state/routes.json, agents/*/scripts/telegram/routes, agents/*/skills/telegram/route-chats/, agents/*/scripts/gws/routes, agents/*/skills/gws/route-email/]
+
+- **Plugin contract: no `threadIdOverride`, no `ctx.resetThread`.** A
+  deployment plugin that still passes `threadIdOverride` is silently ignored
+  (its events go to `main`); pass the thread as `metadata.threadId` instead,
+  or leave routing to the agent's router. A call to `ctx.resetThread` now
+  throws; remove it (delete the thread from the console or the
+  `DELETE /api/agents/<agent>/sessions/<threadId>` route).
+  [affects: plugins/*/index.ts]
+
+- **Telegram, GWS and scheduler plugin prompts** now point at the router
+  instead of `routes.json` / `/reset`. Plugin-owned prompts are reseeded on
+  every agent start, so no edit is needed; listed so the change is visible.
+  [affects: agents/*/system_prompts/plugin-telegram.md, agents/*/system_prompts/plugin-gws.md, agents/*/system_prompts/plugin-scheduler.md]
+
+- **Base prompt gains a Routing paragraph** (the router and workflows).
+  [affects: agents/*/system_prompts/0-base_prompt.md]
+
+### Added
+
+- **Workflows.** A folder `workspace/workflows/<name>/` (`workflow.json` with
+  a required `description` and `script`, plus the executable script) is the
+  thread `workflow:<name>`: the router sends events there, they are queued
+  like any thread's, and a worker runs the script once per event (message
+  JSON on stdin; exit 0 = done; any failure, a 10-minute timeout or an
+  interruption marks the event failed with **no retry**). A script invokes
+  the agent with `scripts/agent-msg/send`, and the agent's reply to
+  `workflow:<name>` runs it again. Scripts should catch their errors and send
+  them to the agent's `main` thread so it can babysit the workflow; the
+  harness itself reports only runs it killed (timeout, stop, crash) with a
+  `workflow_killed` notice on `main`. Router and workflow edits apply within a few seconds,
+  without a restart. New and existing agents get the starter router and
+  `workspace/workflows/README.md` (written only if missing).
+
+### Changed
+
+- Telegram no longer handles `/reset`; reset a conversation by deleting its
+  thread in the console.
+- GWS notifications add `Subject` (the Gmail thread's first subject) to their
+  metadata.
+- Thread ids are checked before a row is saved (no `/`, `\`, NUL or leading
+  `.`, at most 256 characters). An invalid id from the router is logged and
+  the event goes to its `metadata.threadId` or `main`; an invalid
+  `metadata.threadId` is replaced by `main`.
+- The `create-plugin` skill (1.4.0) describes the router contract
+  (`.claude/skills/`, refreshed on upgrade).
+- `docs/base-harness/` (README, skills) documents the router and workflows
+  and drops `threadIdStrategy`, `routes.json` and `/reset` (refreshed on
+  upgrade).
+- The console's agent settings no longer show `threadIdStrategy`.
+
 ## [0.14.0]
 
 ### Changed
