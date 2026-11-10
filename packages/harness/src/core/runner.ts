@@ -197,6 +197,11 @@ interface ActiveBatch {
   timedOut?: boolean;
 }
 
+/** Workflow scripts that may run at once (each workflow still runs one
+ *  message at a time). Separate from `maxConcurrentSlots`, which bounds Pi
+ *  turns. */
+const WORKFLOW_WORKERS = 4;
+
 /** A workflow script still running after this long is killed and the row
  *  fails; a hung script would otherwise hold a worker. */
 const WORKFLOW_TIMEOUT_MS = 10 * 60_000;
@@ -308,9 +313,14 @@ export class AgentRunner extends EventEmitter {
     }
     this.status = "running";
     for (let i = 0; i < this.maxSlots; i++) {
-      this.workers.push(this.workerLoop(i));
+      this.workers.push(this.workerLoop(i, "pi"));
     }
-    this.opts.log.info({ workers: this.maxSlots }, "runner started");
+    // Workflows get their own lane: a script must start at once (e.g. to
+    // answer a Telegram button tap), not wait behind a Pi turn.
+    for (let i = 0; i < WORKFLOW_WORKERS; i++) {
+      this.workers.push(this.workerLoop(this.maxSlots + i, "workflow"));
+    }
+    this.opts.log.info({ workers: this.maxSlots, workflowWorkers: WORKFLOW_WORKERS }, "runner started");
     this.signalAll();
   }
 
@@ -430,15 +440,18 @@ export class AgentRunner extends EventEmitter {
 
   // ── internals ─────────────────────────────────────────────
 
-  private async workerLoop(idx: number): Promise<void> {
-    const log = this.opts.log.child({ worker: idx });
+  /** One worker. A `pi` worker runs turns on ordinary threads; a `workflow`
+   *  worker runs workflow scripts, one message at a time per workflow. */
+  private async workerLoop(idx: number, lane: "pi" | "workflow"): Promise<void> {
+    const log = this.opts.log.child({ worker: idx, lane });
+    const inLane = (t: string) => (workflowName(t) !== undefined) === (lane === "workflow");
     while (this.status === "running") {
       if (this.dequeuePaused) {
         await this.waitForWork();
         continue;
       }
       const exclude = new Set(this.active.keys());
-      const threadId = this.opts.db.peekHighestPriorityThread(exclude);
+      const threadId = this.opts.db.peekHighestPriorityThread(exclude, inLane);
       if (!threadId) {
         await this.waitForWork();
         continue;

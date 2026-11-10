@@ -14,7 +14,10 @@ The folder name is the workflow's name. `description` and `script` are
 required; a folder missing either, or whose script isn't executable, is skipped.
 
 Messages to a workflow are queued like any thread's, and the script runs once
-per message, one at a time, from the agent folder:
+per message, one at a time, from the agent folder. Workflows have their own
+workers, so a script starts at once even while the agent is busy in a turn
+(fast enough to answer a Telegram button tap); it may run while the agent
+edits files, so don't share files with the agent without care.
 
 - **stdin:** the message as JSON: `id`, `notification`, `pluginId`,
   `channelId`, `threadId`, `text`, `metadata`, `isSilent`, `attempts`.

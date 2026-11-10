@@ -227,6 +227,26 @@ test("a workflow thread is queued and its script runs per row; no Pi", async () 
   }
 });
 
+test("a workflow starts while a Pi turn holds the only slot", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cognisphere-wf-"));
+  const { wf, out } = recorder(dir, "taps");
+  const r = rig({
+    script: { runs: [[{ ack: "started" }, "hang"]] },
+    routing: routing((m) => (m.pluginId === "telegram" ? "workflow:taps" : undefined), wf),
+  });
+  try {
+    r.send("long turn");
+    await r.waitFor(() => r.log().some((l) => l.frame.type === "prompt"), "the Pi turn");
+    const [id] = notify(r, { text: "tap" });
+    await r.waitFor(() => r.row(id!).status === "done", "the workflow row");
+    assert.equal(runs(out).length, 1);
+    assert.equal(r.runner.activeCount, 1, "the Pi turn is still running");
+  } finally {
+    await r.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a workflow runs one row at a time, in order", async () => {
   const dir = mkdtempSync(join(tmpdir(), "cognisphere-wf-"));
   const seq = join(dir, "seq");

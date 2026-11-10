@@ -193,9 +193,13 @@ export class AgentDb {
 
   /**
    * Pick a thread that has at least one queued non-silent row (so all-silent
-   * threads stay parked). Skip threads supplied in `excludeThreads`.
+   * threads stay parked). Skip threads supplied in `excludeThreads`, and
+   * those `accept` (if given) rejects.
    */
-  peekHighestPriorityThread(excludeThreads: Set<string>): string | null {
+  peekHighestPriorityThread(
+    excludeThreads: Set<string>,
+    accept?: (threadId: string) => boolean,
+  ): string | null {
     const rows = this.db
       .prepare<unknown[], { thread_id: string }>(
         `SELECT thread_id, MAX(priority) AS p, MIN(id) AS first_id
@@ -206,7 +210,7 @@ export class AgentDb {
       )
       .all();
     for (const r of rows) {
-      if (!excludeThreads.has(r.thread_id)) return r.thread_id;
+      if (!excludeThreads.has(r.thread_id) && (accept?.(r.thread_id) ?? true)) return r.thread_id;
     }
     return null;
   }

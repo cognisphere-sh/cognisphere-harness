@@ -41,6 +41,10 @@ export default function route(
   void workflows;
   // Rules go here, for example:
   //   if (msg.pluginId === "telegram") return `telegram:${msg.channelId}`;   // one thread per chat
+  //   if (msg.pluginId === "telegram" && msg.metadata.TopicId)                // one per forum topic
+  //     return `telegram:${msg.channelId}:${msg.metadata.TopicId}`;
+  //   if (msg.notification === "button_pressed" && String(msg.metadata.CallbackData).startsWith("pick:"))
+  //     return "workflow:photo-desk";                                         // buttons a script handles
   //   if (msg.pluginId === "gws" && /invoice/i.test(String(msg.metadata.Subject))) return "workflow:invoices";
   const threadId = msg.metadata.threadId;
   return typeof threadId === "string" && threadId ? threadId : "main";

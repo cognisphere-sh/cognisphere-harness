@@ -3,17 +3,19 @@
  * telegram-cli — thin wrapper around the Telegram Bot API.
  * Reads TELEGRAM_BOT_TOKEN from env (injected by the harness via secrets.json).
  *
- * Subcommands:
- *   send-message   --chat-id <ID> --text "..." [--reply-to <msgId>] [--parse-mode Markdown|HTML]
- *   send-file      --chat-id <ID> --file <path> --type <photo|document|voice|video|audio>
- *                                 [--caption "..."] [--reply-to <msgId>]
- *   edit-message   --chat-id <ID> --message-id <ID> --text "..." [--parse-mode ...]
- *   delete-message --chat-id <ID> --message-id <ID>
- *   send-reaction  --chat-id <ID> --message-id <ID> --emoji "👍"
+ * Run with --help for the commands.
+ *
+ * `ask` builds questions the telegram plugin answers in-process: each
+ * button's callback_data is `ask:s:<i>` (single choice), `ask:m:<i>` (toggle)
+ * or `ask:d` (done), optionally `@<userId>` then `#<tag>`. A button with
+ * `"wait": true` gets data `wait:<data>`: the plugin holds its tap for
+ * `answer-tap`. Keep both in sync with src/plugins/telegram/index.ts.
  */
 import { argv, exit } from "node:process";
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
+
+const API_URL = process.env.TELEGRAM_API_URL ?? "https://api.telegram.org";
 
 // Decode literal escape sequences (\n, \t, \r) that arrive as backslash+letter
 // when callers pass them inside shell double-quotes. Without this, Telegram
@@ -54,7 +56,7 @@ function mdToHtml(md) {
     return `${stashIt(`<pre>${esc(text)}</pre>`)}\n`;
   });
   s = esc(s);
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/\[([^\]]+)\]\(((?:https?|tg):\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
   s = s.replace(/\*\*([^*\n](?:[^\n]*?[^*\n])?)\*\*/g, "<b>$1</b>");
   s = s.replace(/__([^_\n](?:[^\n]*?[^_\n])?)__/g, "<b>$1</b>");
   s = s.replace(/(^|[\s(])\*([^\s*][^*\n]*?)\*(?=[\s.,!?:;)]|$)/gm, "$1<i>$2</i>");
@@ -65,31 +67,48 @@ function mdToHtml(md) {
   return s.replace(/\x00(\d+)\x00/g, (_, i) => stash[Number(i)]);
 }
 
+// Flags that take no value, and flags that may be given more than once.
+const BOOLEAN = new Set(["multi", "force-reply", "no-preview", "silent", "anonymous", "alert"]);
+const REPEATED = new Set(["option", "file"]);
+
 function parseFlags(args) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a.startsWith("--")) {
-      const key = a.slice(2);
-      flags[key] = args[i + 1] ?? "";
-      i++;
+    if (!a.startsWith("--")) continue;
+    const key = a.slice(2);
+    if (BOOLEAN.has(key)) {
+      flags[key] = true;
+      continue;
     }
+    const v = args[i + 1] ?? "";
+    i++;
+    if (REPEATED.has(key)) (flags[key] ??= []).push(v);
+    else flags[key] = v;
   }
   return flags;
 }
 
+function fail(msg, code = 2) {
+  console.error(msg);
+  exit(code);
+}
+
+function need(flags, ...keys) {
+  for (const k of keys) {
+    if (flags[k] === undefined || flags[k] === "") fail(`--${k} is required`);
+  }
+}
+
 function getToken() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) {
-    console.error("TELEGRAM_BOT_TOKEN not set");
-    exit(2);
-  }
+  if (!token) fail("TELEGRAM_BOT_TOKEN not set");
   return token;
 }
 
 async function tg(method, body, { soft = false } = {}) {
   const token = getToken();
-  const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+  const res = await fetch(`${API_URL}/bot${token}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -97,19 +116,18 @@ async function tg(method, body, { soft = false } = {}) {
   const json = await res.json();
   if (!res.ok || !json.ok) {
     if (soft) return null;
-    console.error(json?.description ?? `HTTP ${res.status}`);
-    exit(1);
+    fail(json?.description ?? `HTTP ${res.status}`, 1);
   }
   return json.result;
 }
 
 // Send with markdown→HTML formatting; if Telegram rejects the HTML (parse
 // error), resend the original text unformatted rather than failing.
-async function tgFormatted(method, body) {
-  if (body.text !== undefined) {
+async function tgFormatted(method, body, field = "text") {
+  if (body[field] !== undefined) {
     const out = await tg(
       method,
-      { ...body, text: mdToHtml(body.text), parse_mode: "HTML" },
+      { ...body, [field]: mdToHtml(body[field]), parse_mode: "HTML" },
       { soft: true },
     );
     if (out !== null) return out;
@@ -119,18 +137,86 @@ async function tgFormatted(method, body) {
 
 async function tgMultipart(method, form, { soft = false } = {}) {
   const token = getToken();
-  const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+  const res = await fetch(`${API_URL}/bot${token}/${method}`, {
     method: "POST",
     body: form,
   });
   const json = await res.json();
   if (!res.ok || !json.ok) {
     if (soft) return null;
-    console.error(json?.description ?? `HTTP ${res.status}`);
-    exit(1);
+    fail(json?.description ?? `HTTP ${res.status}`, 1);
   }
   return json.result;
 }
+
+/** Inline buttons from JSON: rows of `{"text", "data"}` (a tap the agent
+ *  receives as `button_pressed`) or `{"text", "url"}`. A flat list is one
+ *  button per row. `[]` means no buttons. */
+function parseButtons(json) {
+  let rows;
+  try {
+    rows = JSON.parse(json);
+  } catch {
+    fail("--buttons must be JSON, e.g. '[[{\"text\":\"Yes\",\"data\":\"yes\"}]]'");
+  }
+  if (!Array.isArray(rows)) fail("--buttons must be a JSON array");
+  rows = rows.map((r) => (Array.isArray(r) ? r : [r]));
+  return rows.map((row) =>
+    row.map((b) => {
+      if (!b || typeof b.text !== "string" || !b.text) fail("every button needs a \"text\"");
+      if (b.url) return { text: b.text, url: b.url };
+      const data = b.data ?? b.callback_data;
+      if (typeof data !== "string" || !data) fail(`button "${b.text}" needs "data" or "url"`);
+      if (/^(ask|wait):/.test(data)) fail(`button "${b.text}": data starting with "ask:" or "wait:" is reserved`);
+      const full = b.wait ? `wait:${data}` : data;
+      const max = b.wait ? 59 : 64;
+      if (Buffer.byteLength(full) > 64) fail(`button "${b.text}": data is over ${max} bytes`);
+      return { text: b.text, callback_data: full };
+    }),
+  );
+}
+
+/** Fields every send shares: topic, reply, buttons / force-reply, silence. */
+function common(flags) {
+  const body = {};
+  if (flags["topic-id"]) body.message_thread_id = Number(flags["topic-id"]);
+  if (flags["reply-to"]) {
+    body.reply_parameters = {
+      message_id: Number(flags["reply-to"]),
+      allow_sending_without_reply: true,
+    };
+  }
+  if (flags.buttons !== undefined) {
+    body.reply_markup = { inline_keyboard: parseButtons(flags.buttons) };
+  } else if (flags["force-reply"]) {
+    body.reply_markup = {
+      force_reply: true,
+      // Selective targets the replied-to sender; without --reply-to it would
+      // target nobody.
+      ...(flags["reply-to"] ? { selective: true } : {}),
+      ...(flags.placeholder ? { input_field_placeholder: flags.placeholder.slice(0, 64) } : {}),
+    };
+  }
+  if (flags.silent) body.disable_notification = true;
+  return body;
+}
+
+/** A text send/edit, markdown-converted unless --parse-mode is given. */
+async function sendText(method, body, flags) {
+  if (flags["no-preview"]) body.link_preview_options = { is_disabled: true };
+  if (flags["parse-mode"]) return tg(method, { ...body, parse_mode: flags["parse-mode"] });
+  return tgFormatted(method, body);
+}
+
+const chunks = (a, n) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+
+const ALBUM_TYPE = (p) => {
+  const ext = extname(p).toLowerCase();
+  if ([".jpg", ".jpeg", ".png", ".webp"].includes(ext)) return "photo";
+  if ([".mp4", ".mov", ".webm"].includes(ext)) return "video";
+  if ([".mp3", ".m4a", ".ogg", ".flac", ".wav"].includes(ext)) return "audio";
+  return "document";
+};
 
 const HELP = `telegram-cli — thin wrapper around the Telegram Bot API.
 Reads TELEGRAM_BOT_TOKEN from env (injected by the harness via secrets.json).
@@ -138,26 +224,67 @@ Reads TELEGRAM_BOT_TOKEN from env (injected by the harness via secrets.json).
 USAGE
   scripts/telegram/telegram-cli <command> --flag value ...
 
-COMMANDS
-  send-message   --chat-id <ID> --text "..." [--reply-to <msgId>]
-                 [--parse-mode Markdown|HTML]
+SEND (all take [--topic-id <TopicId>] [--reply-to <msgId>] [--silent])
+  send-message   --chat-id <ID> --text "..." [--buttons JSON | --force-reply [--placeholder "..."]]
+                 [--no-preview] [--parse-mode Markdown|HTML]
   send-file      --chat-id <ID> --file <path> --type <photo|document|voice|video|audio>
-                 [--caption "..."] [--reply-to <msgId>]
-  edit-message   --chat-id <ID> --message-id <ID> --text "..." [--parse-mode ...]
+                 [--caption "..."] [--buttons JSON]
+  send-album     --chat-id <ID> --file <path> --file <path> ... [--caption "..."]
+                 (2-10 photos/videos per album; more are sent as several albums)
+  ask            --chat-id <ID> --text "question" --option "A" --option "B" ...
+                 [--multi [--done-label "Done"]] [--only-user <SenderId>] [--tag <key>] [--columns N]
+  send-poll      --chat-id <ID> --question "..." --option "A" --option "B" ... [--multi] [--anonymous]
+  chat-action    --chat-id <ID> [--action typing|upload_photo|upload_document|record_voice]
+
+CHANGE
+  edit-message   --chat-id <ID> --message-id <ID> --text "..." [--buttons JSON] [--parse-mode ...]
+  edit-buttons   --chat-id <ID> --message-id <ID> --buttons JSON      ('[]' removes them)
   delete-message --chat-id <ID> --message-id <ID>
   send-reaction  --chat-id <ID> --message-id <ID> --emoji "👍"
+  pin-message    --chat-id <ID> --message-id <ID> [--silent]
+  unpin-message  --chat-id <ID> --message-id <ID>
+  stop-poll      --chat-id <ID> --message-id <ID>                   (prints the results)
+  answer-tap     --id <CallbackQueryId> [--text "toast"] [--alert]  (a "wait" button's tap;
+                 prints "late" and exits 0 if the tap was already answered)
+
+FORUM TOPICS (the bot must be an admin with "Manage topics")
+  create-topic   --chat-id <ID> --name "..." [--icon-color <int>]    (prints {"topic_id":N})
+  edit-topic     --chat-id <ID> --topic-id <ID> --name "..."
+  close-topic | reopen-topic | delete-topic  --chat-id <ID> --topic-id <ID>
+
+BOT
+  set-commands   --commands '[{"command":"queue","description":"Show the queue"}]' [--chat-id <ID>]
+
+--buttons is JSON rows: '[[{"text":"Approve","data":"ok:12"},{"text":"Docs","url":"https://…"}]]'.
+A tap on a "data" button arrives as a button_pressed event (data is 1-64 bytes; "ask:" and
+"wait:" are reserved). Add "wait": true to a button a workflow handles: its event carries
+CallbackQueryId, and the tap spins until answer-tap (or the plugin's tapWaitMs, default 5 s).
+ask --tag comes back as QuestionTag on question_answered, so the router can route the answer.
+Pass --buttons again when editing the text of a message that has buttons.
+An ask question is answered in place: the tapper's choice arrives as question_answered.
 
 Literal \\n, \\t, \\r inside --text/--caption are decoded to real characters.
 Without --parse-mode, standard markdown in --text/--caption (**bold**, \`code\`,
 links, headers) is auto-converted to Telegram HTML; if Telegram rejects the
-formatting the message is resent as plain text. Pass --parse-mode to send
-raw Telegram Markdown/HTML yourself.
-On success prints {"message_id":N} for sends, "ok" for edit/delete/reaction.
+formatting the message is resent as plain text.
+Sends print {"message_id":N} (send-album: {"message_ids":[...]}); changes print "ok".
 `;
 
 async function main() {
   const [, , cmd, ...rest] = argv;
   const flags = parseFlags(rest);
+  const chat = () => {
+    need(flags, "chat-id");
+    return flags["chat-id"];
+  };
+  const msgRef = () => {
+    need(flags, "chat-id", "message-id");
+    return { chat_id: flags["chat-id"], message_id: Number(flags["message-id"]) };
+  };
+  const topicRef = () => {
+    need(flags, "chat-id", "topic-id");
+    return { chat_id: flags["chat-id"], message_thread_id: Number(flags["topic-id"]) };
+  };
 
   if (!cmd || cmd === "help" || cmd === "-h" || cmd === "--help") {
     console.log(HELP);
@@ -166,30 +293,22 @@ async function main() {
 
   switch (cmd) {
     case "send-message": {
-      const body = { chat_id: flags["chat-id"], text: decodeEscapes(flags.text) };
-      if (flags["reply-to"]) {
-        body.reply_parameters = { message_id: Number(flags["reply-to"]) };
-      }
-      let out;
-      if (flags["parse-mode"]) {
-        body.parse_mode = flags["parse-mode"];
-        out = await tg("sendMessage", body);
-      } else {
-        out = await tgFormatted("sendMessage", body);
-      }
+      need(flags, "text");
+      const out = await sendText(
+        "sendMessage",
+        { chat_id: chat(), text: decodeEscapes(flags.text), ...common(flags) },
+        flags,
+      );
       console.log(JSON.stringify({ message_id: out.message_id }));
       return;
     }
 
     case "send-file": {
-      const filePath = flags.file;
+      const chatId = chat();
+      const filePath = flags.file?.[0];
       const type = flags.type ?? "document";
-      const chatId = flags["chat-id"];
-      if (!filePath || !chatId) {
-        console.error(
-          "Usage: send-file --chat-id <ID> --file <path> --type <photo|document|voice|video|audio>",
-        );
-        exit(2);
+      if (!filePath) {
+        fail("Usage: send-file --chat-id <ID> --file <path> --type <photo|document|voice|video|audio>");
       }
       const typeMap = {
         photo: { method: "sendPhoto", field: "photo" },
@@ -199,68 +318,234 @@ async function main() {
         audio: { method: "sendAudio", field: "audio" },
       };
       const entry = typeMap[type];
-      if (!entry) {
-        console.error(`Unknown type: ${type}. Use photo|document|voice|video|audio`);
-        exit(2);
-      }
-      const fileData = await readFile(filePath);
-      const blob = new Blob([fileData]);
+      if (!entry) fail(`Unknown type: ${type}. Use photo|document|voice|video|audio`);
+      const blob = new Blob([await readFile(filePath)]);
       const caption = flags.caption ? decodeEscapes(flags.caption) : undefined;
+      const extra = common(flags);
       const buildForm = (cap, parseMode) => {
         const form = new FormData();
         form.set("chat_id", chatId);
         form.set(entry.field, blob, basename(filePath));
         if (cap !== undefined) form.set("caption", cap);
         if (parseMode) form.set("parse_mode", parseMode);
-        if (flags["reply-to"]) {
-          form.set(
-            "reply_parameters",
-            JSON.stringify({ message_id: Number(flags["reply-to"]) }),
-          );
+        for (const [k, v] of Object.entries(extra)) {
+          form.set(k, typeof v === "object" ? JSON.stringify(v) : String(v));
         }
         return form;
       };
       let out = null;
       if (caption !== undefined) {
-        out = await tgMultipart(entry.method, buildForm(mdToHtml(caption), "HTML"), {
-          soft: true,
-        });
+        out = await tgMultipart(entry.method, buildForm(mdToHtml(caption), "HTML"), { soft: true });
       }
       if (out === null) out = await tgMultipart(entry.method, buildForm(caption));
       console.log(JSON.stringify({ message_id: out.message_id }));
       return;
     }
 
-    case "edit-message": {
-      const body = {
-        chat_id: flags["chat-id"],
-        message_id: Number(flags["message-id"]),
-        text: decodeEscapes(flags.text),
-      };
-      if (flags["parse-mode"]) {
-        body.parse_mode = flags["parse-mode"];
-        await tg("editMessageText", body);
-      } else {
-        await tgFormatted("editMessageText", body);
+    case "send-album": {
+      const chatId = chat();
+      const files = flags.file ?? [];
+      if (files.length < 2) fail("send-album needs 2+ --file (use send-file for one)");
+      const caption = flags.caption ? decodeEscapes(flags.caption) : undefined;
+      const extra = common(flags);
+      delete extra.reply_markup; // albums can't carry buttons
+      const ids = [];
+      // Albums hold 2-10 items: split evenly so none is left with one.
+      const per = Math.ceil(files.length / Math.ceil(files.length / 10));
+      for (const [n, group] of chunks(files, per).entries()) {
+        const buildAll = async (cap, parseMode) => {
+          const form = new FormData();
+          form.set("chat_id", chatId);
+          for (const [k, v] of Object.entries(extra)) {
+            form.set(k, typeof v === "object" ? JSON.stringify(v) : String(v));
+          }
+          const media = [];
+          for (const [j, p] of group.entries()) {
+            form.set(`f${j}`, new Blob([await readFile(p)]), basename(p));
+            media.push({
+              type: ALBUM_TYPE(p),
+              media: `attach://f${j}`,
+              ...(n === 0 && j === 0 && cap !== undefined
+                ? { caption: cap, ...(parseMode ? { parse_mode: parseMode } : {}) }
+                : {}),
+            });
+          }
+          form.set("media", JSON.stringify(media));
+          return form;
+        };
+        let sent = null;
+        if (n === 0 && caption !== undefined) {
+          sent = await tgMultipart("sendMediaGroup", await buildAll(mdToHtml(caption), "HTML"), { soft: true });
+        }
+        if (sent === null) sent = await tgMultipart("sendMediaGroup", await buildAll(n === 0 ? caption : undefined));
+        ids.push(...sent.map((m) => m.message_id));
       }
-      console.log("ok");
+      console.log(JSON.stringify({ message_ids: ids }));
       return;
     }
 
-    case "delete-message": {
-      await tg("deleteMessage", {
-        chat_id: flags["chat-id"],
-        message_id: Number(flags["message-id"]),
+    case "ask": {
+      need(flags, "text");
+      const options = flags.option ?? [];
+      if (options.length < 2 && !flags.multi) fail("ask needs at least two --option");
+      if (options.length < 1) fail("ask needs --option");
+      const only = flags["only-user"];
+      if (only !== undefined && !/^\d+$/.test(only)) fail("--only-user must be a SenderId (a number)");
+      const tag = flags.tag;
+      if (tag !== undefined && !/^[\w.:-]{1,32}$/.test(tag)) {
+        fail("--tag must be 1-32 letters, digits, _ . : or -");
+      }
+      const who = `${only ? `@${only}` : ""}${tag ? `#${tag}` : ""}`;
+      const kind = flags.multi ? "m" : "s";
+      const buttons = options.map((o, i) => ({
+        text: o.replace(/^✅ /, ""),
+        callback_data: `ask:${kind}:${i}${who}`,
+      }));
+      const rows = chunks(buttons, Math.max(1, Number(flags.columns) || 1));
+      if (flags.multi) rows.push([{ text: flags["done-label"] || "Done", callback_data: `ask:d${who}` }]);
+      const body = { chat_id: chat(), text: decodeEscapes(flags.text), ...common({ ...flags, buttons: undefined }) };
+      body.reply_markup = { inline_keyboard: rows };
+      const out = await sendText("sendMessage", body, flags);
+      console.log(JSON.stringify({ message_id: out.message_id }));
+      return;
+    }
+
+    case "send-poll": {
+      need(flags, "question");
+      const options = flags.option ?? [];
+      if (options.length < 2) fail("send-poll needs at least two --option");
+      const out = await tg("sendPoll", {
+        chat_id: chat(),
+        question: decodeEscapes(flags.question),
+        options: options.map((text) => ({ text })),
+        is_anonymous: flags.anonymous === true,
+        allows_multiple_answers: flags.multi === true,
+        ...common({ ...flags, buttons: undefined, "force-reply": undefined }),
+      });
+      console.log(JSON.stringify({ message_id: out.message_id }));
+      return;
+    }
+
+    case "stop-poll": {
+      const poll = await tg("stopPoll", msgRef());
+      console.log(
+        JSON.stringify({
+          question: poll.question,
+          total_voter_count: poll.total_voter_count,
+          options: poll.options.map((o) => ({ text: o.text, voter_count: o.voter_count })),
+        }),
+      );
+      return;
+    }
+
+    case "answer-tap": {
+      need(flags, "id");
+      // Too late (the plugin already answered) isn't a failure of the work:
+      // print "late" and exit 0 so a workflow's error handling doesn't fire.
+      const ok = await tg(
+        "answerCallbackQuery",
+        {
+          callback_query_id: flags.id,
+          ...(flags.text ? { text: decodeEscapes(flags.text).slice(0, 200), show_alert: flags.alert === true } : {}),
+        },
+        { soft: true },
+      );
+      console.log(ok === null ? "late" : "ok");
+      return;
+    }
+
+    case "chat-action": {
+      await tg("sendChatAction", {
+        chat_id: chat(),
+        action: flags.action || "typing",
+        ...(flags["topic-id"] ? { message_thread_id: Number(flags["topic-id"]) } : {}),
       });
       console.log("ok");
       return;
     }
 
+    case "edit-message": {
+      need(flags, "text");
+      const body = { ...msgRef(), text: decodeEscapes(flags.text) };
+      if (flags.buttons !== undefined) body.reply_markup = { inline_keyboard: parseButtons(flags.buttons) };
+      await sendText("editMessageText", body, flags);
+      console.log("ok");
+      return;
+    }
+
+    case "edit-buttons": {
+      need(flags, "buttons");
+      await tg("editMessageReplyMarkup", {
+        ...msgRef(),
+        reply_markup: { inline_keyboard: parseButtons(flags.buttons) },
+      });
+      console.log("ok");
+      return;
+    }
+
+    case "delete-message": {
+      await tg("deleteMessage", msgRef());
+      console.log("ok");
+      return;
+    }
+
     case "send-reaction": {
-      await tg("setMessageReaction", {
-        chat_id: flags["chat-id"],
-        message_id: Number(flags["message-id"]),
-        reaction: [{ type: "emoji", emoji: flags.emoji }],
+      need(flags, "emoji");
+      await tg("setMessageReaction", { ...msgRef(), reaction: [{ type: "emoji", emoji: flags.emoji }] });
+      console.log("ok");
+      return;
+    }
+
+    case "pin-message": {
+      await tg("pinChatMessage", { ...msgRef(), disable_notification: flags.silent === true });
+      console.log("ok");
+      return;
+    }
+
+    case "unpin-message": {
+      await tg("unpinChatMessage", msgRef());
+      console.log("ok");
+      return;
+    }
+
+    case "create-topic": {
+      need(flags, "name");
+      const t = await tg("createForumTopic", {
+        chat_id: chat(),
+        name: flags.name,
+        ...(flags["icon-color"] ? { icon_color: Number(flags["icon-color"]) } : {}),
+      });
+      console.log(JSON.stringify({ topic_id: t.message_thread_id, name: t.name }));
+      return;
+    }
+
+    case "edit-topic": {
+      need(flags, "name");
+      await tg("editForumTopic", { ...topicRef(), name: flags.name });
+      console.log("ok");
+      return;
+    }
+
+    case "close-topic":
+    case "reopen-topic":
+    case "delete-topic": {
+      const method = { "close-topic": "closeForumTopic", "reopen-topic": "reopenForumTopic", "delete-topic": "deleteForumTopic" }[cmd];
+      await tg(method, topicRef());
+      console.log("ok");
+      return;
+    }
+
+    case "set-commands": {
+      need(flags, "commands");
+      let commands;
+      try {
+        commands = JSON.parse(flags.commands);
+      } catch {
+        fail("--commands must be JSON");
+      }
+      await tg("setMyCommands", {
+        commands,
+        ...(flags["chat-id"] ? { scope: { type: "chat", chat_id: flags["chat-id"] } } : {}),
       });
       console.log("ok");
       return;
@@ -268,9 +553,7 @@ async function main() {
 
     default:
       console.error(`Unknown command: ${cmd}`);
-      console.error(
-        "Commands: send-message, send-file, edit-message, delete-message, send-reaction",
-      );
+      console.error("Run with --help for the commands.");
       exit(2);
   }
 }

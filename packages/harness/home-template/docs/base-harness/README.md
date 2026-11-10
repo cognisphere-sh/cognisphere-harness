@@ -152,7 +152,18 @@ sandbox, so it can't reach the app's cookies or storage.
 The **telegram** plugin long-polls a bot; set
 `secrets.json → <agent>.telegram.TELEGRAM_BOT_TOKEN`. It picks no thread:
 messages go to `main` unless the agent's router routes them (e.g. one thread
-per chat). To reset a conversation, delete its thread from the console.
+per chat, or per forum topic with `msg.metadata.TopicId`). To reset a
+conversation, delete its thread from the console. Besides text and files, the
+agent can ask tap-to-answer questions (`telegram-cli ask`, single or multiple
+choice), put inline buttons on messages, run polls, and create and reply in
+forum topics (the bot must be a group admin with "Manage topics"). Answers and
+button taps arrive as `question_answered` / `button_pressed` events in the same
+chat and topic, so the router can send them to a thread or a workflow
+(`ask --tag` labels a question for that). A workflow can answer a tap with
+its own pop-up (`"wait": true` buttons and `telegram-cli answer-tap`);
+workflows run in their own lane, so they start even while the agent is busy. In groups, the bot only sees every message (and so every topic) if it is
+an admin or its privacy mode is off in @BotFather; otherwise it sees only
+commands, @-mentions and replies to its own messages.
 
 ## Secrets and models
 
